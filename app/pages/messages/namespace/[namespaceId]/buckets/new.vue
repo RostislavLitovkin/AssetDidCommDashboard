@@ -1,0 +1,128 @@
+<script setup lang="ts">
+import { DidCommRepository, type ExtrinsicUpdate } from "../../../../../services/papi/didCommRepository"
+
+const route = useRoute()
+const { $papiClient } = useNuxtApp()
+const session = useSessionStore()
+const operations = useOperationsStore()
+const didCommRepository = new DidCommRepository(
+  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string }
+)
+
+const namespaceId = computed(() => {
+  const rawId = route.params.namespaceId
+  const value = Array.isArray(rawId) ? (rawId[0] ?? "") : (rawId ?? "")
+
+  try {
+    return decodeURIComponent(String(value))
+  } catch {
+    return String(value)
+  }
+})
+
+const bucketName = ref("")
+const submitting = ref(false)
+const submitError = ref("")
+const submittedTxHash = ref("")
+const submittedMethod = ref("")
+const namespaceRoutePath = computed(() => `/messages/namespace/${encodeURIComponent(namespaceId.value)}`)
+
+function logExtrinsicUpdate(update: ExtrinsicUpdate): void {
+  const details = [update.message]
+  if (update.txHash) {
+    details.push(`tx: ${update.txHash}`)
+  }
+  if (update.blockHash) {
+    details.push(`block: ${update.blockHash}`)
+  }
+
+  operations.add("did_write", `bucket:${update.stage}`, update.stage === "error" ? "error" : "info", details.join(" · "))
+}
+
+async function submitCreateBucket(): Promise<void> {
+  submitError.value = ""
+  submittedTxHash.value = ""
+  submittedMethod.value = ""
+
+  if (!namespaceId.value.trim()) {
+    submitError.value = "Namespace id is required"
+    return
+  }
+
+  if (!bucketName.value.trim()) {
+    submitError.value = "Bucket name is required"
+    return
+  }
+
+  if (!session.accountAddress) {
+    submitError.value = "Connect wallet before submitting buckets.createBucket extrinsic"
+    return
+  }
+
+  submitting.value = true
+
+  try {
+    const result = await didCommRepository.createBucket(
+      namespaceId.value,
+      bucketName.value,
+      session.accountAddress,
+      logExtrinsicUpdate
+    )
+    submittedTxHash.value = result.txHash
+    submittedMethod.value = result.method
+    operations.add("did_write", bucketName.value.trim(), "success", `Bucket extrinsic submitted: ${result.txHash}`)
+    bucketName.value = ""
+  } catch (error) {
+    submitError.value = error instanceof Error ? error.message : "Unable to submit bucket extrinsic"
+    operations.add("did_write", "bucket", "error", submitError.value)
+  } finally {
+    submitting.value = false
+  }
+}
+</script>
+
+<template>
+  <div class="stack">
+    <header class="card">
+      <h2 style="margin: 0">Add Bucket</h2>
+      <p class="muted" style="margin: 8px 0 0">
+        Submit a create-bucket extrinsic to the Xcavate blockchain.
+      </p>
+    </header>
+
+    <section class="card stack" aria-live="polite">
+      <label class="stack" style="gap: 6px">
+        <span>Namespace</span>
+        <input class="input" type="text" :value="namespaceId" disabled />
+      </label>
+
+      <label class="stack" style="gap: 6px">
+        <span>Bucket Name</span>
+        <input
+          v-model="bucketName"
+          class="input"
+          type="text"
+          name="bucket-name"
+          placeholder="e.g. primary-bucket"
+          :disabled="submitting"
+        />
+      </label>
+
+      <div class="row" style="justify-content: flex-end; gap: 8px">
+        <NuxtLink class="btn" :to="namespaceRoutePath">Cancel</NuxtLink>
+        <button class="btn" type="button" :disabled="submitting" @click="submitCreateBucket">
+          {{ submitting ? "Submitting..." : "Submit Extrinsic" }}
+        </button>
+      </div>
+
+      <p v-if="!session.accountAddress" class="muted" style="margin: 0">
+        Connect wallet on the dashboard first to sign and submit this extrinsic.
+      </p>
+
+      <p v-if="submitError" style="margin: 0; color: var(--status-error)">{{ submitError }}</p>
+      <p v-if="submittedTxHash" style="margin: 0; color: var(--status-success)">
+        Submitted via {{ submittedMethod }} with hash {{ submittedTxHash }}
+      </p>
+    </section>
+  </div>
+</template>

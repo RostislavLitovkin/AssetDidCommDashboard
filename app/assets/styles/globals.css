@@ -1,0 +1,204 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, Arial, sans-serif;
+  background: var(--surface-bg);
+  color: var(--text-primary);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+  transition: color 160ms ease;
+}
+
+a:hover,
+a:focus-visible {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+u,
+ins {
+  text-decoration: none;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+:where(a[href], button, [role="button"], input[type="button"], input[type="submit"], input[type="reset"], summary):focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.container {
+  width: min(1100px, 92vw);
+  margin: 0 auto;
+}
+
+.card {
+  background: var(--surface-card);
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.btn {
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: var(--color-white);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.btn:hover:not(:disabled),
+.btn:focus-visible:not(:disabled) {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 20%, transparent);
+}
+
+.btn:disabled,
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+button:not(.btn):hover:not(:disabled),
+button:not(.btn):focus-visible:not(:disabled),
+input[type="button"]:hover:not(:disabled),
+input[type="button"]:focus-visible:not(:disabled),
+input[type="submit"]:hover:not(:disabled),
+input[type="submit"]:focus-visible:not(:disabled),
+input[type="reset"]:hover:not(:disabled),
+input[type="reset"]:focus-visible:not(:disabled),
+summary:hover,
+summary:focus-visible {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.sidebar-btn {
+  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, transform 180ms ease;
+}
+
+.sidebar-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-white);
+  transform: translateX(2px);
+}
+
+.sidebar-btn:hover .muted {
+  color: var(--color-white);
+}
+
+.btn-primary {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-white);
+}
+
+.btn-primary:hover:not(:disabled),
+.btn-primary:focus-visible:not(:disabled) {
+  color: var(--color-white);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 24%, transparent);
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.muted {
+  color: var(--text-secondary);
+}
+
+.input {
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 8px;
+  width: 100%;
+}
+
+.input:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 20%, transparent);
+}
+
+.notification-center {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  z-index: 30;
+  width: min(420px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.notification-item {
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+}
+
+.notification-header {
+  min-width: 0;
+}
+
+.notification-title,
+.notification-message,
+.notification-meta {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.notification-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.notification-close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--color-white);
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease;
+}
+
+.notification-close-btn:hover {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.notification-close-btn:focus-visible {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 20%, transparent);
+}
