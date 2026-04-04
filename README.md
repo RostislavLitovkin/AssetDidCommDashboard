@@ -14,6 +14,10 @@ Admin dashboard for Asset DIDComm workflows on Xcavate Substrate.
 - `npm install`
 - `npm run dev`
 
+## Environment
+- Set `NUXT_PUBLIC_XCAVATE_WS_ENDPOINT` in `.env` for local development.
+- In GitHub Actions, set repository secret `NUXT_PUBLIC_XCAVATE_WS_ENDPOINT` so workflows can generate `.env` during CI and deploy.
+
 ## Quality Gates
 - `npm run lint`
 - `npm run typecheck`
