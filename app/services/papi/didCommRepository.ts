@@ -224,12 +224,38 @@ export class DidCommRepository {
       })
   }
 
+  async fetchBucket(bucketId: string): Promise<BucketRecord | undefined> {
+    const trimmedBucketId = bucketId.trim()
+    if (!trimmedBucketId) {
+      throw new Error("Bucket id is required to query buckets.buckets storage")
+    }
+
+    const endpoint = this.client.getEndpoint?.()
+    if (!endpoint) {
+      throw new Error("Unable to resolve chain endpoint for buckets.buckets storage query")
+    }
+
+    const response = await this.readBucketsStorage(endpoint)
+    if (!Array.isArray(response)) {
+      return undefined
+    }
+
+    const targetBucketId = normalizeComparableId(trimmedBucketId)
+    return response
+      .map((entry, index) => this.normalizeBucket(entry, index))
+      .find((bucket) => normalizeComparableId(bucket.id) === targetBucketId)
+  }
+
   private normalizeBucket(entry: unknown, index: number): BucketRecord {
     if (entry && typeof entry === "object") {
       const objectEntry = entry as Record<string, unknown>
       const idCandidate = objectEntry.id ?? objectEntry.bucketId ?? objectEntry.key ?? objectEntry.name
       const namespaceCandidate = objectEntry.namespaceId ?? objectEntry.namespace
-      const nameCandidate = objectEntry.name ?? objectEntry.label ?? idCandidate
+      const metadataNameCandidate =
+        objectEntry.metadata && typeof objectEntry.metadata === "object" && !Array.isArray(objectEntry.metadata)
+          ? (objectEntry.metadata as Record<string, unknown>).name
+          : undefined
+      const nameCandidate = metadataNameCandidate ?? objectEntry.name ?? objectEntry.label ?? objectEntry.value ?? idCandidate
       const decodedName = decodeUtf8HexStringIfPresent(nameCandidate)
 
       return {

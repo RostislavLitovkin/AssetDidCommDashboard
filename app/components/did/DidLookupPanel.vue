@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { DidRecord } from "~/app/types/did"
+import LoadingBar from "../common/LoadingBar.vue"
 
 const props = defineProps<{
   loading: boolean

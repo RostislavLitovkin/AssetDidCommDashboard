@@ -48,7 +48,8 @@ describe("DidCommRepository", () => {
       expect(endpoint).toBe("wss://example-chain")
       return [
         { id: "bucket-1", namespaceId: "ns-1", name: "0x4275636b6574204f6e65" },
-        { id: "bucket-2", namespaceId: "ns-2", name: "Bucket Two" }
+        { id: "bucket-2", namespaceId: "ns-2", name: "Bucket Two" },
+        { id: "bucket-3", namespaceId: "ns-1", metadata: { name: "0x4275636b6574205468726565" } }
       ]
     }
 
@@ -63,8 +64,9 @@ describe("DidCommRepository", () => {
 
     const buckets = await repository.fetchBuckets("ns-1")
 
-    expect(buckets).toHaveLength(1)
+    expect(buckets).toHaveLength(2)
     expect(buckets[0]).toMatchObject({ id: "bucket-1", namespaceId: "ns-1", name: "Bucket One" })
+    expect(buckets[1]).toMatchObject({ id: "bucket-3", namespaceId: "ns-1", name: "Bucket Three" })
   })
 
   it("loads and filters messages for a bucket from buckets.messages storage", async () => {

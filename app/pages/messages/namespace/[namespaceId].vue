@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { DidCommRepository, type BucketRecord } from "../../../services/papi/didCommRepository"
+import LoadingBar from "../../../components/common/LoadingBar.vue"
 import { computed, onMounted, ref } from "vue"
 import { useNuxtApp, useRoute } from "nuxt/app"
 

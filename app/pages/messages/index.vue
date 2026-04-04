@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { DidCommRepository, type BucketNamespace } from "../../services/papi/didCommRepository"
+import LoadingBar from "../../components/common/LoadingBar.vue"
 import { onMounted, ref } from "vue"
 import { useNuxtApp } from "nuxt/app"
 import { useKeys } from "../../composables/useKeys"
@@ -93,7 +94,5 @@ onMounted(async () => {
       @import="importKey"
       @export="exportCurrentKey"
     />
-
-    <DidOperationTimeline :entries="operations.entries" />
   </div>
 </template>

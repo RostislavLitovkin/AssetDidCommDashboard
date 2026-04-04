@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { DidCommRepository, type BucketMessage, type ExtrinsicUpdate } from "../../../services/papi/didCommRepository"
+import { DidCommRepository, type BucketMessage, type BucketRecord, type ExtrinsicUpdate } from "../../../services/papi/didCommRepository"
+import LoadingBar from "../../../components/common/LoadingBar.vue"
 import { computed, nextTick, onMounted, ref, watch } from "vue"
 import { useNuxtApp, useRoute } from "nuxt/app"
 import { useOperationsStore } from "../../../stores/operations"
@@ -32,6 +33,11 @@ interface ChatMessage {
   deliveryState?: DeliveryState
 }
 
+interface MetadataEntry {
+  key: string
+  value: string
+}
+
 const bucketId = computed(() => {
   const rawId = route.params.id
   const value = Array.isArray(rawId) ? (rawId[0] ?? "") : (rawId ?? "")
@@ -46,11 +52,17 @@ const bucketId = computed(() => {
 const messages = ref<BucketMessage[]>([])
 const messagesLoading = ref(false)
 const messagesError = ref("")
+const bucket = ref<BucketRecord | null>(null)
+const bucketLoading = ref(false)
+const bucketError = ref("")
 const sendText = ref("")
 const sendError = ref("")
 const sending = ref(false)
 const pendingMessages = ref<PendingChatMessage[]>([])
 const chatViewport = ref<HTMLElement | null>(null)
+const bucketDisplayName = computed(() => bucket.value?.name || bucketId.value)
+
+const bucketMetadata = computed<MetadataEntry[]>(() => extractBucketMetadataEntries(bucket.value))
 
 const chatMessages = computed<ChatMessage[]>(() => {
   const chainMessages = messages.value.map((message) => toChatMessage(message))
@@ -76,6 +88,27 @@ async function loadMessages() {
     messagesError.value = error instanceof Error ? error.message : "Unable to load messages"
   } finally {
     messagesLoading.value = false
+  }
+}
+
+async function loadBucket() {
+  bucketError.value = ""
+  bucketLoading.value = true
+
+  try {
+    const record = await didCommRepository.fetchBucket(bucketId.value)
+    if (!record) {
+      bucket.value = null
+      bucketError.value = "Unable to find bucket metadata"
+      return
+    }
+
+    bucket.value = record
+  } catch (error) {
+    bucket.value = null
+    bucketError.value = error instanceof Error ? error.message : "Unable to load bucket metadata"
+  } finally {
+    bucketLoading.value = false
   }
 }
 
@@ -153,6 +186,93 @@ function toDate(value: unknown): Date | undefined {
   return undefined
 }
 
+function formatMetadataValue(value: unknown): string {
+  if (typeof value === "string") {
+    return textValue(value) ?? value
+  }
+
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value)
+  }
+
+  if (value === null) {
+    return "null"
+  }
+
+  if (value === undefined) {
+    return "undefined"
+  }
+
+  return JSON.stringify(value)
+}
+
+function appendMetadataEntries(entries: MetadataEntry[], key: string, value: unknown): void {
+  if (value === undefined) {
+    return
+  }
+
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    entries.push({ key, value: formatMetadataValue(value) })
+    return
+  }
+
+  if (Array.isArray(value)) {
+    if (!value.length) {
+      entries.push({ key, value: "[]" })
+      return
+    }
+
+    value.forEach((item, index) => {
+      appendMetadataEntries(entries, `${key}[${index}]`, item)
+    })
+    return
+  }
+
+  const nestedRecord = toRecord(value)
+  if (!nestedRecord) {
+    entries.push({ key, value: formatMetadataValue(value) })
+    return
+  }
+
+  const nestedEntries = Object.entries(nestedRecord)
+  if (!nestedEntries.length) {
+    entries.push({ key, value: "{}" })
+    return
+  }
+
+  nestedEntries.forEach(([nestedKey, nestedValue]) => {
+    appendMetadataEntries(entries, `${key}.${nestedKey}`, nestedValue)
+  })
+}
+
+function extractBucketMetadataEntries(bucketRecord: BucketRecord | null): MetadataEntry[] {
+  if (!bucketRecord) {
+    return []
+  }
+
+  const rawRecord = toRecord(bucketRecord.raw)
+  const source: Record<string, unknown> = rawRecord ? { ...rawRecord } : {}
+
+  if (!("id" in source) && bucketRecord.id) {
+    source.id = bucketRecord.id
+  }
+
+  if (!("name" in source) && bucketRecord.name) {
+    source.name = bucketRecord.name
+  }
+
+  if (!("namespaceId" in source) && bucketRecord.namespaceId) {
+    source.namespaceId = bucketRecord.namespaceId
+  }
+
+  const entries: MetadataEntry[] = []
+  Object.entries(source).forEach(([key, value]) => {
+    appendMetadataEntries(entries, key, value)
+  })
+
+  return entries
+}
+
 function toChatMessage(message: BucketMessage): ChatMessage {
   const rawRecord = toRecord(message.raw)
   const body =
@@ -176,6 +296,10 @@ function toChatMessage(message: BucketMessage): ChatMessage {
     outgoing,
     senderLabel: outgoing ? "You" : sender ?? "Unknown"
   }
+}
+
+async function loadBucketPage() {
+  await Promise.all([loadBucket(), loadMessages()])
 }
 
 function formatTimestamp(value: Date): string {
@@ -271,7 +395,7 @@ watch(
 )
 
 onMounted(async () => {
-  await loadMessages()
+  await loadBucketPage()
   await scrollToBottom()
 })
 </script>
@@ -279,17 +403,40 @@ onMounted(async () => {
 <template>
   <div class="stack message-page">
     <header class="card">
-      <h2 style="margin: 0">Bucket {{ bucketId }}</h2>
+      <h2 style="margin: 0">Bucket {{ bucketDisplayName }}</h2>
       <p class="muted" style="margin: 8px 0 0">WhatsApp-style thread view for messages in this bucket.</p>
     </header>
+
+    <section class="card stack" aria-live="polite">
+      <div class="row" style="justify-content: space-between; align-items: center">
+        <h3 style="margin: 0">Bucket Metadata</h3>
+        <button class="btn" type="button" :disabled="bucketLoading || messagesLoading" @click="loadBucketPage">
+          {{ bucketLoading || messagesLoading ? "Loading..." : "Reload" }}
+        </button>
+      </div>
+
+      <LoadingBar v-if="bucketLoading" label="Loading bucket metadata..." />
+      <p v-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
+
+      <dl v-if="!bucketLoading && !bucketError && bucketMetadata.length" class="bucket-metadata">
+        <div v-for="entry in bucketMetadata" :key="`bucket-${entry.key}`" class="bucket-metadata-item">
+          <dt>{{ entry.key }}</dt>
+          <dd>{{ entry.value }}</dd>
+        </div>
+      </dl>
+
+      <p v-if="!bucketLoading && !bucketError && !bucketMetadata.length" class="muted" style="margin: 0">
+        No metadata found for this bucket.
+      </p>
+    </section>
 
     <section class="card stack chat-shell" aria-live="polite">
       <div class="row" style="justify-content: space-between; align-items: center">
         <h3 style="margin: 0">Conversation</h3>
         <div class="row" style="gap: 8px">
           <NuxtLink class="btn" to="/messages">Back</NuxtLink>
-          <button class="btn" type="button" :disabled="messagesLoading" @click="loadMessages">
-            {{ messagesLoading ? "Loading..." : "Reload" }}
+          <button class="btn" type="button" :disabled="messagesLoading || bucketLoading" @click="loadBucketPage">
+            {{ messagesLoading || bucketLoading ? "Loading..." : "Reload" }}
           </button>
         </div>
       </div>
@@ -414,6 +561,38 @@ onMounted(async () => {
   color: var(--text-secondary);
 }
 
+.bucket-metadata {
+  margin: 10px 0 0;
+  padding: 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.55);
+  display: grid;
+  gap: 6px;
+}
+
+.bucket-metadata-item {
+  display: grid;
+  grid-template-columns: minmax(110px, 200px) 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.bucket-metadata-item dt {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.bucket-metadata-item dd {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .chat-composer {
   display: flex;
   gap: 10px;
@@ -443,6 +622,11 @@ onMounted(async () => {
   .chat-composer {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .bucket-metadata-item {
+    grid-template-columns: 1fr;
+    gap: 2px;
   }
 }
 </style>
