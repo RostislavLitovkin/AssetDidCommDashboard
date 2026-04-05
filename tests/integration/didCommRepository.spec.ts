@@ -254,4 +254,73 @@ describe("DidCommRepository", () => {
       "Wallet must be connected to submit buckets.addMessage extrinsic"
     )
   })
+
+  it("submits buckets.addAdmin extrinsic", async () => {
+    const repository = new DidCommRepository(
+      {
+        rpc: async () => [] as unknown[],
+        getEndpoint: () => "wss://example-chain"
+      },
+      async () => "0xignored",
+      async () => "0xignored-bucket",
+      async () => [],
+      async () => [],
+      async () => [],
+      async () => "0xignored-message",
+      async (endpoint, namespaceId, bucketId, memberAddress, ownerAddress) => {
+        expect(endpoint).toBe("wss://example-chain")
+        expect(namespaceId).toBe("7")
+        expect(bucketId).toBe("bucket-7")
+        expect(memberAddress).toBe("5F3sa2TJ...member")
+        expect(ownerAddress).toBe("5F3sa2TJ...owner")
+        return "0xadmin123"
+      }
+    )
+
+    const result = await repository.addBucketAdmin("7", "bucket-7", "5F3sa2TJ...member", "5F3sa2TJ...owner")
+
+    expect(result.method).toBe("buckets.addAdmin")
+    expect(result.txHash).toBe("0xadmin123")
+  })
+
+  it("submits buckets.addContributor extrinsic", async () => {
+    const repository = new DidCommRepository(
+      {
+        rpc: async () => [] as unknown[],
+        getEndpoint: () => "wss://example-chain"
+      },
+      async () => "0xignored",
+      async () => "0xignored-bucket",
+      async () => [],
+      async () => [],
+      async () => [],
+      async () => "0xignored-message",
+      async () => "0xignored-admin",
+      async (endpoint, namespaceId, bucketId, memberAddress, ownerAddress) => {
+        expect(endpoint).toBe("wss://example-chain")
+        expect(namespaceId).toBe("7")
+        expect(bucketId).toBe("bucket-7")
+        expect(memberAddress).toBe("5F3sa2TJ...member")
+        expect(ownerAddress).toBe("5F3sa2TJ...owner")
+        return "0xcontrib456"
+      }
+    )
+
+    const result = await repository.addBucketContributor("7", "bucket-7", "5F3sa2TJ...member", "5F3sa2TJ...owner")
+
+    expect(result.method).toBe("buckets.addContributor")
+    expect(result.txHash).toBe("0xcontrib456")
+  })
+
+  it("rejects add-admin when namespace id is empty", async () => {
+    const repository = new DidCommRepository(
+      { rpc: async () => "0xignored", getEndpoint: () => "wss://example-chain" },
+      async () => "0xignored",
+      async () => "0xignored-bucket"
+    )
+
+    await expect(repository.addBucketAdmin("   ", "bucket-7", "5F3sa2TJ...member", "5F3sa2TJ...owner")).rejects.toThrow(
+      "Namespace id is required"
+    )
+  })
 })

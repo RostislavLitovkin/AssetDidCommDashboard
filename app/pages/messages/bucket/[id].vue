@@ -55,11 +55,14 @@ const messagesError = ref("")
 const bucket = ref<BucketRecord | null>(null)
 const bucketLoading = ref(false)
 const bucketError = ref("")
+const membersError = ref("")
 const sendText = ref("")
 const sendError = ref("")
 const sending = ref(false)
 const pendingMessages = ref<PendingChatMessage[]>([])
 const chatViewport = ref<HTMLElement | null>(null)
+const bucketAdmins = ref<string[]>([])
+const bucketContributors = ref<string[]>([])
 const bucketDisplayName = computed(() => bucket.value?.name || bucketId.value)
 
 const bucketMetadata = computed<MetadataEntry[]>(() => extractBucketMetadataEntries(bucket.value))
@@ -109,6 +112,24 @@ async function loadBucket() {
     bucketError.value = error instanceof Error ? error.message : "Unable to load bucket metadata"
   } finally {
     bucketLoading.value = false
+  }
+}
+
+async function loadBucketMembers() {
+  membersError.value = ""
+
+  try {
+    const [admins, contributors] = await Promise.all([
+      didCommRepository.fetchBucketAdmins(bucketId.value),
+      didCommRepository.fetchBucketContributors(bucketId.value)
+    ])
+
+    bucketAdmins.value = admins
+    bucketContributors.value = contributors
+  } catch (error) {
+    bucketAdmins.value = []
+    bucketContributors.value = []
+    membersError.value = error instanceof Error ? error.message : "Unable to load bucket member lists"
   }
 }
 
@@ -299,7 +320,7 @@ function toChatMessage(message: BucketMessage): ChatMessage {
 }
 
 async function loadBucketPage() {
-  await Promise.all([loadBucket(), loadMessages()])
+  await Promise.all([loadBucket(), loadBucketMembers(), loadMessages()])
 }
 
 function formatTimestamp(value: Date): string {
@@ -410,9 +431,17 @@ onMounted(async () => {
     <section class="card stack" aria-live="polite">
       <div class="row" style="justify-content: space-between; align-items: center">
         <h3 style="margin: 0">Bucket Metadata</h3>
-        <button class="btn" type="button" :disabled="bucketLoading || messagesLoading" @click="loadBucketPage">
-          {{ bucketLoading || messagesLoading ? "Loading..." : "Reload" }}
-        </button>
+        <div class="row" style="gap: 8px">
+          <NuxtLink
+            class="btn"
+            :to="`/messages/bucket/members/${encodeURIComponent(bucketId)}?namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`"
+          >
+            Manage Members
+          </NuxtLink>
+          <button class="btn" type="button" :disabled="bucketLoading || messagesLoading" @click="loadBucketPage">
+            {{ bucketLoading || messagesLoading ? "Loading..." : "Reload" }}
+          </button>
+        </div>
       </div>
 
       <LoadingBar v-if="bucketLoading" label="Loading bucket metadata..." />
@@ -428,6 +457,44 @@ onMounted(async () => {
       <p v-if="!bucketLoading && !bucketError && !bucketMetadata.length" class="muted" style="margin: 0">
         No metadata found for this bucket.
       </p>
+    </section>
+
+    <section class="card stack" aria-live="polite">
+      <div class="row" style="justify-content: space-between; align-items: center">
+        <h3 style="margin: 0">Admins</h3>
+        <NuxtLink
+          class="btn"
+          :to="`/messages/bucket/members/${encodeURIComponent(bucketId)}?role=admin&namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`"
+        >
+          Add Admin
+        </NuxtLink>
+      </div>
+      <LoadingBar v-if="bucketLoading" label="Loading admins..." />
+      <p v-else-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
+      <ul v-else-if="bucketAdmins.length" class="bucket-members-list">
+        <li v-for="adminAddress in bucketAdmins" :key="`admin-${adminAddress}`">{{ adminAddress }}</li>
+      </ul>
+      <p v-else class="muted" style="margin: 0">No admins found for this bucket.</p>
+    </section>
+
+    <section class="card stack" aria-live="polite">
+      <div class="row" style="justify-content: space-between; align-items: center">
+        <h3 style="margin: 0">Contributors</h3>
+        <NuxtLink
+          class="btn"
+          :to="`/messages/bucket/members/${encodeURIComponent(bucketId)}?role=contributor&namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`"
+        >
+          Add Contributor
+        </NuxtLink>
+      </div>
+      <LoadingBar v-if="bucketLoading" label="Loading contributors..." />
+      <p v-else-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
+      <ul v-else-if="bucketContributors.length" class="bucket-members-list">
+        <li v-for="contributorAddress in bucketContributors" :key="`contributor-${contributorAddress}`">
+          {{ contributorAddress }}
+        </li>
+      </ul>
+      <p v-else class="muted" style="margin: 0">No contributors found for this bucket.</p>
     </section>
 
     <section class="card stack chat-shell" aria-live="polite">
@@ -593,6 +660,13 @@ onMounted(async () => {
   word-break: break-word;
 }
 
+.bucket-members-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+}
+
 .chat-composer {
   display: flex;
   gap: 10px;
@@ -628,5 +702,6 @@ onMounted(async () => {
     grid-template-columns: 1fr;
     gap: 2px;
   }
+
 }
 </style>

@@ -54,7 +54,7 @@ onMounted(async () => {
       <div class="row" style="justify-content: space-between; align-items: center">
         <h3 style="margin: 0">Buckets</h3>
         <div class="row" style="gap: 8px">
-          <NuxtLink class="btn" :to="`/messages/namespace/${encodeURIComponent(namespaceId)}/buckets/new`">Add Bucket</NuxtLink>
+          <NuxtLink class="btn" :to="`/messages/bucket/create/${encodeURIComponent(namespaceId)}`">Add Bucket</NuxtLink>
           <NuxtLink class="btn" to="/messages">Back</NuxtLink>
           <button class="btn" type="button" :disabled="bucketsLoading" @click="loadBuckets">
             {{ bucketsLoading ? "Loading..." : "Reload" }}

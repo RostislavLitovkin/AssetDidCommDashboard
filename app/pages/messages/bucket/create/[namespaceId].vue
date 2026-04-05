@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { DidCommRepository, type ExtrinsicUpdate } from "../../../../../services/papi/didCommRepository"
+import { DidCommRepository, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
 
 const route = useRoute()
 const { $papiClient } = useNuxtApp()
@@ -25,7 +25,6 @@ const submitting = ref(false)
 const submitError = ref("")
 const submittedTxHash = ref("")
 const submittedMethod = ref("")
-const namespaceRoutePath = computed(() => `/messages/namespace/${encodeURIComponent(namespaceId.value)}`)
 
 function logExtrinsicUpdate(update: ExtrinsicUpdate): void {
   const details = [update.message]

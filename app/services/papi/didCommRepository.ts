@@ -39,6 +39,15 @@ type MessageExtrinsicSubmitter = (
   onUpdate?: ExtrinsicUpdateHandler
 ) => Promise<string>
 
+type BucketMemberExtrinsicSubmitter = (
+  endpoint: string,
+  namespaceId: string,
+  bucketId: string,
+  memberAddress: string,
+  ownerAddress: string,
+  onUpdate?: ExtrinsicUpdateHandler
+) => Promise<string>
+
 type NamespaceStorageReader = (endpoint: string) => Promise<unknown>
 type BucketsStorageReader = (endpoint: string) => Promise<unknown>
 type MessagesStorageReader = (endpoint: string) => Promise<unknown>
@@ -87,6 +96,11 @@ export interface CreateMessageResult {
   method: string
 }
 
+export interface AddBucketMemberResult {
+  txHash: string
+  method: string
+}
+
 export class DidCommRepository {
   private client: PapiRpcClient
   private submitExtrinsic: ExtrinsicSubmitter
@@ -95,6 +109,8 @@ export class DidCommRepository {
   private readNamespaceStorage: NamespaceStorageReader
   private readBucketsStorage: BucketsStorageReader
   private readMessagesStorage: MessagesStorageReader
+  private submitAddAdminExtrinsic: BucketMemberExtrinsicSubmitter
+  private submitAddContributorExtrinsic: BucketMemberExtrinsicSubmitter
 
   constructor(
     client: PapiRpcClient = new PapiClient(),
@@ -103,7 +119,9 @@ export class DidCommRepository {
     readNamespaceStorage: NamespaceStorageReader = queryBucketsNamespacesStorage,
     readBucketsStorage: BucketsStorageReader = queryBucketsStorage,
     readMessagesStorage: MessagesStorageReader = queryBucketsMessagesStorage,
-    submitMessageExtrinsic: MessageExtrinsicSubmitter = submitBucketsAddMessageExtrinsic
+    submitMessageExtrinsic: MessageExtrinsicSubmitter = submitBucketsAddMessageExtrinsic,
+    submitAddAdminExtrinsic: BucketMemberExtrinsicSubmitter = submitBucketsAddAdminExtrinsic,
+    submitAddContributorExtrinsic: BucketMemberExtrinsicSubmitter = submitBucketsAddContributorExtrinsic
   ) {
     this.client = client
     this.submitExtrinsic = submitExtrinsic
@@ -112,6 +130,8 @@ export class DidCommRepository {
     this.readNamespaceStorage = readNamespaceStorage
     this.readBucketsStorage = readBucketsStorage
     this.readMessagesStorage = readMessagesStorage
+    this.submitAddAdminExtrinsic = submitAddAdminExtrinsic
+    this.submitAddContributorExtrinsic = submitAddContributorExtrinsic
   }
 
   async fetchNamespaces(): Promise<BucketNamespace[]> {
@@ -152,6 +172,34 @@ export class DidCommRepository {
 
     const response = await this.readMessagesStorage(endpoint)
     return this.normalizeMessages(response, trimmedBucketId)
+  }
+
+  async fetchBucketAdmins(bucketId: string): Promise<string[]> {
+    const trimmedBucketId = bucketId.trim()
+    if (!trimmedBucketId) {
+      throw new Error("Bucket id is required to query buckets.admins storage")
+    }
+
+    const endpoint = this.client.getEndpoint?.()
+    if (!endpoint) {
+      throw new Error("Unable to resolve chain endpoint for buckets.admins storage query")
+    }
+
+    return await queryBucketMemberAddressesStorage(endpoint, ["admins"], trimmedBucketId)
+  }
+
+  async fetchBucketContributors(bucketId: string): Promise<string[]> {
+    const trimmedBucketId = bucketId.trim()
+    if (!trimmedBucketId) {
+      throw new Error("Bucket id is required to query buckets.contributors storage")
+    }
+
+    const endpoint = this.client.getEndpoint?.()
+    if (!endpoint) {
+      throw new Error("Unable to resolve chain endpoint for buckets.contributors storage query")
+    }
+
+    return await queryBucketMemberAddressesStorage(endpoint, ["contributors"], trimmedBucketId)
   }
 
   private normalizeNamespaces(response: unknown): BucketNamespace[] {
@@ -416,6 +464,96 @@ export class DidCommRepository {
       method: "buckets.addMessage"
     }
   }
+
+  async addBucketAdmin(
+    namespaceId: string,
+    bucketId: string,
+    memberAddress: string,
+    ownerAddress?: string,
+    onUpdate?: ExtrinsicUpdateHandler
+  ): Promise<AddBucketMemberResult> {
+    const trimmedNamespaceId = namespaceId.trim()
+    if (!trimmedNamespaceId) {
+      throw new Error("Namespace id is required")
+    }
+
+    const trimmedBucketId = bucketId.trim()
+    if (!trimmedBucketId) {
+      throw new Error("Bucket id is required")
+    }
+
+    const trimmedMemberAddress = memberAddress.trim()
+    if (!trimmedMemberAddress) {
+      throw new Error("Member address is required")
+    }
+
+    if (!ownerAddress) {
+      throw new Error("Wallet must be connected to submit buckets.addAdmin extrinsic")
+    }
+
+    const endpoint = this.client.getEndpoint?.()
+    if (!endpoint) {
+      throw new Error("Unable to resolve chain endpoint for extrinsic submission")
+    }
+
+    const txHash = await this.submitAddAdminExtrinsic(
+      endpoint,
+      trimmedNamespaceId,
+      trimmedBucketId,
+      trimmedMemberAddress,
+      ownerAddress,
+      onUpdate
+    )
+    return {
+      txHash,
+      method: "buckets.addAdmin"
+    }
+  }
+
+  async addBucketContributor(
+    namespaceId: string,
+    bucketId: string,
+    memberAddress: string,
+    ownerAddress?: string,
+    onUpdate?: ExtrinsicUpdateHandler
+  ): Promise<AddBucketMemberResult> {
+    const trimmedNamespaceId = namespaceId.trim()
+    if (!trimmedNamespaceId) {
+      throw new Error("Namespace id is required")
+    }
+
+    const trimmedBucketId = bucketId.trim()
+    if (!trimmedBucketId) {
+      throw new Error("Bucket id is required")
+    }
+
+    const trimmedMemberAddress = memberAddress.trim()
+    if (!trimmedMemberAddress) {
+      throw new Error("Member address is required")
+    }
+
+    if (!ownerAddress) {
+      throw new Error("Wallet must be connected to submit buckets.addContributor extrinsic")
+    }
+
+    const endpoint = this.client.getEndpoint?.()
+    if (!endpoint) {
+      throw new Error("Unable to resolve chain endpoint for extrinsic submission")
+    }
+
+    const txHash = await this.submitAddContributorExtrinsic(
+      endpoint,
+      trimmedNamespaceId,
+      trimmedBucketId,
+      trimmedMemberAddress,
+      ownerAddress,
+      onUpdate
+    )
+    return {
+      txHash,
+      method: "buckets.addContributor"
+    }
+  }
 }
 
 async function submitBucketsCreateNamespaceExtrinsic(
@@ -600,6 +738,124 @@ async function submitBucketsAddMessageExtrinsic(
   }
 }
 
+async function submitBucketsAddAdminExtrinsic(
+  endpoint: string,
+  namespaceId: string,
+  bucketId: string,
+  memberAddress: string,
+  ownerAddress: string,
+  onUpdate?: ExtrinsicUpdateHandler
+): Promise<string> {
+  return await submitBucketsAddMemberExtrinsic(
+    endpoint,
+    namespaceId,
+    bucketId,
+    memberAddress,
+    ownerAddress,
+    ["addAdmin", "addBucketAdmin"],
+    "buckets.addAdmin",
+    onUpdate
+  )
+}
+
+async function submitBucketsAddContributorExtrinsic(
+  endpoint: string,
+  namespaceId: string,
+  bucketId: string,
+  memberAddress: string,
+  ownerAddress: string,
+  onUpdate?: ExtrinsicUpdateHandler
+): Promise<string> {
+  return await submitBucketsAddMemberExtrinsic(
+    endpoint,
+    namespaceId,
+    bucketId,
+    memberAddress,
+    ownerAddress,
+    ["addContributor", "addBucketContributor"],
+    "buckets.addContributor",
+    onUpdate
+  )
+}
+
+async function submitBucketsAddMemberExtrinsic(
+  endpoint: string,
+  namespaceId: string,
+  bucketId: string,
+  memberAddress: string,
+  ownerAddress: string,
+  candidateMethodNames: string[],
+  fallbackMethodLabel: string,
+  onUpdate?: ExtrinsicUpdateHandler
+): Promise<string> {
+  const [{ ApiPromise, WsProvider }, { web3FromAddress }] = await Promise.all([
+    import("@polkadot/api"),
+    import("@polkadot/extension-dapp")
+  ])
+
+  const provider = new WsProvider(endpoint)
+  const api = await ApiPromise.create({ provider })
+
+  try {
+    const buckets = (api.tx as Record<string, unknown>).buckets as Record<string, unknown> | undefined
+    const addMember = resolveBucketsTxMethod(buckets, candidateMethodNames)
+
+    if (!addMember) {
+      throw new Error(`${fallbackMethodLabel} extrinsic is not available on this chain`)
+    }
+
+    const injector = await web3FromAddress(ownerAddress)
+    const tx = addMember(namespaceId, bucketId, memberAddress) as SubmittableTx
+
+    const attemptTips = ["0", "1000000", "2000000"]
+    let lastError: Error | null = null
+
+    for (let attempt = 0; attempt < attemptTips.length; attempt += 1) {
+      const tip = attemptTips[attempt]!
+
+      try {
+        if (attempt > 0) {
+          onUpdate?.({
+            stage: "submitted",
+            message: `Retrying extrinsic with higher priority fee (tip=${tip})`
+          })
+        }
+
+        return await submitWithTip(tx, ownerAddress, injector.signer, tip, onUpdate, api)
+      } catch (error) {
+        const normalized = error instanceof Error ? error : new Error("Extrinsic submission failed")
+        lastError = normalized
+
+        if (!isLowPriorityTransactionError(normalized) || attempt === attemptTips.length - 1) {
+          throw normalized
+        }
+      }
+    }
+
+    throw lastError ?? new Error("Extrinsic submission failed")
+  } finally {
+    await api.disconnect()
+  }
+}
+
+function resolveBucketsTxMethod(
+  buckets: Record<string, unknown> | undefined,
+  candidateMethodNames: string[]
+): ((namespaceId: unknown, bucketId: unknown, memberAddress: unknown) => unknown) | undefined {
+  if (!buckets) {
+    return undefined
+  }
+
+  for (const methodName of candidateMethodNames) {
+    const candidate = buckets[methodName]
+    if (typeof candidate === "function") {
+      return candidate as (namespaceId: unknown, bucketId: unknown, memberAddress: unknown) => unknown
+    }
+  }
+
+  return undefined
+}
+
 async function queryBucketsNamespacesStorage(endpoint: string): Promise<unknown[]> {
   const [{ ApiPromise, WsProvider }] = await Promise.all([import("@polkadot/api")])
 
@@ -716,6 +972,87 @@ async function queryBucketsMessagesStorage(endpoint: string): Promise<unknown[]>
   } finally {
     await api.disconnect()
   }
+}
+
+async function queryBucketMemberAddressesStorage(
+  endpoint: string,
+  storageCandidates: string[],
+  bucketId: string
+): Promise<string[]> {
+  const [{ ApiPromise, WsProvider }] = await Promise.all([import("@polkadot/api")])
+
+  const provider = new WsProvider(endpoint)
+  const api = await ApiPromise.create({ provider })
+
+  try {
+    const bucketsQuery = (api.query as Record<string, unknown>).buckets as Record<string, unknown> | undefined
+    const memberStorage = resolveBucketsQueryStorage(bucketsQuery, storageCandidates)
+
+    if (!memberStorage?.entries) {
+      throw new Error(`buckets.${storageCandidates[0]} storage is not available on this chain`)
+    }
+
+    const entriesFn = memberStorage.entries
+    if (!entriesFn) {
+      throw new Error(`buckets.${storageCandidates[0]} storage is not available on this chain`)
+    }
+
+    const targetBucketId = normalizeComparableId(bucketId)
+    const entries = await queryBucketMemberEntries(entriesFn, bucketId)
+
+    const addresses = entries
+      .map(([storageKey]) => extractStorageKeyArgs(storageKey))
+      .flatMap((args) => {
+        if (args.length === 0) {
+          return []
+        }
+
+        if (args.length === 1) {
+          return [args[0]!]
+        }
+
+        if (normalizeComparableId(args[0]) === targetBucketId) {
+          return [args[args.length - 1]!]
+        }
+
+        return []
+      })
+      .map((address) => address.trim().replace(/^"|"$/g, ""))
+      .filter((address) => address.length > 0)
+
+    return Array.from(new Set(addresses))
+  } finally {
+    await api.disconnect()
+  }
+}
+
+async function queryBucketMemberEntries(
+  entriesFn: (...args: unknown[]) => Promise<Array<[unknown, unknown]>>,
+  bucketId: string
+): Promise<Array<[unknown, unknown]>> {
+  try {
+    return await entriesFn(bucketId)
+  } catch {
+    return await entriesFn()
+  }
+}
+
+function resolveBucketsQueryStorage(
+  bucketsQuery: Record<string, unknown> | undefined,
+  candidateNames: string[]
+): { entries?: (...args: unknown[]) => Promise<Array<[unknown, unknown]>> } | undefined {
+  if (!bucketsQuery) {
+    return undefined
+  }
+
+  for (const name of candidateNames) {
+    const candidate = bucketsQuery[name]
+    if (candidate && (typeof candidate === "object" || typeof candidate === "function")) {
+      return candidate as { entries?: (...args: unknown[]) => Promise<Array<[unknown, unknown]>> }
+    }
+  }
+
+  return undefined
 }
 
 function extractNamespaceId(storageKey: unknown, index: number): string {

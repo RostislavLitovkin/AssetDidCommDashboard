@@ -18,10 +18,8 @@ async function selectWallet(address: string) {
 </script>
 
 <template>
-  <main style="display: flex; min-height: 100vh; background: var(--surface-bg)">
-    <aside
-      style="width: 260px; border-right: 1px solid var(--border-default); background: var(--surface-card); display: flex; flex-direction: column; padding: 20px 14px"
-    >
+  <main class="app-shell-root">
+    <aside class="app-shell-sidebar">
       <NuxtLink to="/" style="padding: 8px 8px 20px; text-decoration: none; color: inherit; display: block">
         <h2 style="margin: 0; font-size: 18px">Asset DIDComm</h2>
         <p class="muted" style="margin: 6px 0 0; font-size: 13px">Admin Dashboard</p>
@@ -69,7 +67,7 @@ async function selectWallet(address: string) {
       </div>
     </aside>
 
-    <section style="flex: 1; padding: 24px">
+    <section class="app-shell-content">
       <div class="container">
         <slot />
       </div>
@@ -113,3 +111,31 @@ async function selectWallet(address: string) {
     </div>
   </main>
 </template>
+
+<style scoped>
+.app-shell-root {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--surface-bg);
+}
+
+.app-shell-sidebar {
+  width: 260px;
+  height: 100vh;
+  border-right: 1px solid var(--border-default);
+  background: var(--surface-card);
+  display: flex;
+  flex-direction: column;
+  padding: 20px 14px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.app-shell-content {
+  flex: 1;
+  min-width: 0;
+  padding: 24px;
+  overflow: auto;
+}
+</style>
