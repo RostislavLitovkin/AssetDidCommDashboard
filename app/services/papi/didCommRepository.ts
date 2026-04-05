@@ -870,7 +870,7 @@ async function submitBucketsAddContributorExtrinsic(
     bucketId,
     memberAddress,
     ownerAddress,
-    ["addContributor", "addBucketContributor"],
+    ["addContributor"],
     "buckets.addContributor",
     onUpdate
   )
@@ -910,7 +910,7 @@ async function submitBucketsRemoveContributorExtrinsic(
     bucketId,
     memberAddress,
     ownerAddress,
-    ["removeContributor", "removeBucketContributor"],
+    ["removeContributor"],
     "buckets.removeContributor",
     onUpdate
   )
@@ -991,7 +991,22 @@ function resolveBucketsTxMethod(
     }
   }
 
+  const normalizedCandidates = new Set(candidateMethodNames.map((name) => normalizeMethodName(name)))
+  for (const [methodName, candidate] of Object.entries(buckets)) {
+    if (typeof candidate !== "function") {
+      continue
+    }
+
+    if (normalizedCandidates.has(normalizeMethodName(methodName))) {
+      return candidate as (namespaceId: unknown, bucketId: unknown, memberAddress: unknown) => unknown
+    }
+  }
+
   return undefined
+}
+
+function normalizeMethodName(value: string): string {
+  return value.replace(/[_-]/g, "").toLowerCase()
 }
 
 async function queryBucketsNamespacesStorage(endpoint: string): Promise<unknown[]> {
@@ -1458,23 +1473,162 @@ function extractHash(input: unknown): string | undefined {
 }
 
 function formatDispatchError(dispatchError: Record<string, unknown>, api: { registry?: { findMetaError?: unknown } }): string {
-  const isModule = Boolean(dispatchError.isModule)
-  if (!isModule) {
-    return String(dispatchError.toString?.() ?? "Extrinsic failed")
+  const findMetaError = api.registry?.findMetaError
+  const moduleError = extractModuleDispatchError(dispatchError)
+  const decoded = decodeModuleMetadataError(moduleError, findMetaError)
+  if (decoded) {
+    return `${decoded.section}.${decoded.name}: ${decoded.docs.join(" ")}`
   }
 
-  const asModule = dispatchError.asModule as Record<string, unknown> | undefined
-  const findMetaError = api.registry?.findMetaError
-  if (!asModule || typeof findMetaError !== "function") {
-    return String(dispatchError.toString?.() ?? "Extrinsic failed")
+  const fallback = dispatchError.toString?.()
+  if (typeof fallback === "string" && fallback.trim()) {
+    const parsed = tryParseJsonRecord(fallback)
+    if (parsed) {
+      const parsedModule = extractModuleDispatchError(parsed)
+      const parsedDecoded = decodeModuleMetadataError(parsedModule, findMetaError)
+      if (parsedDecoded) {
+        return `${parsedDecoded.section}.${parsedDecoded.name}: ${parsedDecoded.docs.join(" ")}`
+      }
+    }
+
+    return fallback
   }
+
+  return "Extrinsic failed"
+}
+
+function extractModuleDispatchError(dispatchError: Record<string, unknown>): unknown {
+  if (dispatchError.isModule && "asModule" in dispatchError) {
+    return dispatchError.asModule
+  }
+
+  if ("module" in dispatchError && dispatchError.module) {
+    return dispatchError.module
+  }
+
+  if ("Module" in dispatchError && dispatchError.Module) {
+    return dispatchError.Module
+  }
+
+  const toJSON = dispatchError.toJSON
+  if (typeof toJSON === "function") {
+    try {
+      const encoded = (toJSON as () => unknown)()
+      if (encoded && typeof encoded === "object") {
+        const value = encoded as Record<string, unknown>
+        if ("module" in value && value.module) {
+          return value.module
+        }
+        if ("Module" in value && value.Module) {
+          return value.Module
+        }
+      }
+    } catch {
+      return undefined
+    }
+  }
+
+  return undefined
+}
+
+function decodeModuleMetadataError(
+  moduleError: unknown,
+  findMetaError: unknown
+): { section: string; name: string; docs: string[] } | undefined {
+  if (!moduleError || typeof findMetaError !== "function") {
+    return undefined
+  }
+
+  const decoder = findMetaError as (value: unknown) => { section: string; name: string; docs: string[] }
 
   try {
-    const decoded = (findMetaError as (value: unknown) => { section: string; name: string; docs: string[] })(asModule)
-    return `${decoded.section}.${decoded.name}: ${decoded.docs.join(" ")}`
+    return decoder(moduleError)
   } catch {
-    return String(dispatchError.toString?.() ?? "Extrinsic failed")
+    const normalized = normalizeModuleErrorValue(moduleError)
+    if (!normalized) {
+      return undefined
+    }
+
+    try {
+      return decoder(normalized)
+    } catch {
+      return undefined
+    }
   }
+}
+
+function normalizeModuleErrorValue(value: unknown): { index: number; error: Uint8Array } | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined
+  }
+
+  const candidate = value as Record<string, unknown>
+  const index = normalizeModuleIndex(candidate.index)
+  const error = normalizeModuleErrorBytes(candidate.error)
+  if (index === undefined || !error) {
+    return undefined
+  }
+
+  return { index, error }
+}
+
+function normalizeModuleIndex(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) {
+    return value
+  }
+
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value)
+    if (Number.isInteger(parsed) && parsed >= 0) {
+      return parsed
+    }
+  }
+
+  return undefined
+}
+
+function normalizeModuleErrorBytes(value: unknown): Uint8Array | undefined {
+  if (value && typeof value === "object" && "toU8a" in value) {
+    const toU8a = (value as { toU8a?: unknown }).toU8a
+    if (typeof toU8a === "function") {
+      return (toU8a as () => Uint8Array)()
+    }
+  }
+
+  if (typeof value === "string" && /^0x[0-9a-fA-F]+$/.test(value)) {
+    const hex = value.slice(2)
+    if (hex.length % 2 !== 0) {
+      return undefined
+    }
+
+    const bytes = new Uint8Array(hex.length / 2)
+    for (let i = 0; i < hex.length; i += 2) {
+      bytes[i / 2] = Number.parseInt(hex.slice(i, i + 2), 16)
+    }
+    return bytes
+  }
+
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 255) {
+    return new Uint8Array([value, 0, 0, 0])
+  }
+
+  if (Array.isArray(value) && value.every((item) => typeof item === "number" && item >= 0 && item <= 255)) {
+    return Uint8Array.from(value)
+  }
+
+  return undefined
+}
+
+function tryParseJsonRecord(value: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(value)
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {
+  }
+
+  return undefined
 }
 
 function utf8ToHexBytes(input: string): `0x${string}` {

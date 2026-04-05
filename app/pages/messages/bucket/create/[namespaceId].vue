@@ -1,5 +1,9 @@
 <script setup lang="ts">
 import { DidCommRepository, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
+import { computed, ref } from "vue"
+import { useNuxtApp, useRoute } from "nuxt/app"
+import { useOperationsStore } from "../../../../stores/operations"
+import { useSessionStore } from "../../../../stores/session"
 
 const route = useRoute()
 const { $papiClient } = useNuxtApp()
@@ -20,6 +24,8 @@ const namespaceId = computed(() => {
   }
 })
 
+const namespaceRoutePath = computed(() => `/messages/namespace/${encodeURIComponent(namespaceId.value)}`)
+
 const bucketName = ref("")
 const submitting = ref(false)
 const submitError = ref("")
@@ -35,7 +41,7 @@ function logExtrinsicUpdate(update: ExtrinsicUpdate): void {
     details.push(`block: ${update.blockHash}`)
   }
 
-  operations.add("did_write", `bucket:${update.stage}`, update.stage === "error" ? "error" : "info", details.join(" · "))
+  operations.add("bucket_write", `bucket:${update.stage}`, update.stage === "error" ? "error" : "info", details.join(" · "))
 }
 
 async function submitCreateBucket(): Promise<void> {
@@ -69,11 +75,11 @@ async function submitCreateBucket(): Promise<void> {
     )
     submittedTxHash.value = result.txHash
     submittedMethod.value = result.method
-    operations.add("did_write", bucketName.value.trim(), "success", `Bucket extrinsic submitted: ${result.txHash}`)
+    operations.add("bucket_write", bucketName.value.trim(), "success", `Bucket extrinsic submitted: ${result.txHash}`)
     bucketName.value = ""
   } catch (error) {
     submitError.value = error instanceof Error ? error.message : "Unable to submit bucket extrinsic"
-    operations.add("did_write", "bucket", "error", submitError.value)
+    operations.add("bucket_write", "bucket", "error", submitError.value)
   } finally {
     submitting.value = false
   }

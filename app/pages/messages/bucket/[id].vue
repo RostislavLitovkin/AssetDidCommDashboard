@@ -1,16 +1,21 @@
 <script setup lang="ts">
 import { DidCommRepository, type BucketMessage, type BucketRecord, type ExtrinsicUpdate } from "../../../services/papi/didCommRepository"
 import LoadingBar from "../../../components/common/LoadingBar.vue"
+import { useAddress } from "../../../composables/useAddress"
 import { Trash2 } from "lucide-vue-next"
+import { hexToU8a } from "@polkadot/util"
+import { base64url } from "jose"
 import { computed, nextTick, onMounted, ref, watch } from "vue"
-import { useNuxtApp, useRoute } from "nuxt/app"
+import { useNuxtApp, useRoute, useRuntimeConfig } from "nuxt/app"
 import { useOperationsStore } from "../../../stores/operations"
 import { useSessionStore } from "../../../stores/session"
 
 const route = useRoute()
 const { $papiClient } = useNuxtApp()
+const runtimeConfig = useRuntimeConfig()
 const session = useSessionStore()
 const operations = useOperationsStore()
+const { formatAddress, addressesEqual } = useAddress()
 const didCommRepository = new DidCommRepository(
   $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string }
 )
@@ -66,6 +71,8 @@ const bucketAdmins = ref<string[]>([])
 const bucketContributors = ref<string[]>([])
 const removingAdminAddress = ref("")
 const removingContributorAddress = ref("")
+const loadingContributorKeys = ref(false)
+const contributorX25519Keys = ref<Record<string, string>>({})
 const bucketDisplayName = computed(() => bucket.value?.name || bucketId.value)
 
 const bucketMetadata = computed<MetadataEntry[]>(() => extractBucketMetadataEntries(bucket.value))
@@ -129,10 +136,140 @@ async function loadBucketMembers() {
 
     bucketAdmins.value = admins
     bucketContributors.value = contributors
+    await loadContributorX25519Keys(contributors)
   } catch (error) {
     bucketAdmins.value = []
     bucketContributors.value = []
+    contributorX25519Keys.value = {}
     membersError.value = error instanceof Error ? error.message : "Unable to load bucket member lists"
+  }
+}
+
+function isHex32(value: string): boolean {
+  return /^0x[0-9a-fA-F]{64}$/.test(value)
+}
+
+function normalizeX25519Value(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined
+  }
+
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return undefined
+  }
+
+  // Some chains return x25519 as hex; convert to JWK x (base64url)
+  if (isHex32(trimmed)) {
+    return base64url.encode(hexToU8a(trimmed))
+  }
+
+  // If already base64url (as in did.publicKeys.publicEncryptionKey.x25519), keep as-is
+  return trimmed
+}
+
+function extractX25519FromPublicKeyEntry(entry: unknown): string | undefined {
+  const keyRecord = toRecord(toRecord(entry)?.key)
+  const publicEncryptionKey = toRecord(keyRecord?.publicEncryptionKey)
+  return normalizeX25519Value(publicEncryptionKey?.x25519)
+}
+
+function extractContributorX25519(payload: unknown): string | undefined {
+  const record = toRecord(payload)
+  if (!record) {
+    return undefined
+  }
+
+  const publicKeys = toRecord(record.publicKeys)
+  const keyAgreementKeys = Array.isArray(record.keyAgreementKeys)
+    ? record.keyAgreementKeys.filter((value): value is string => typeof value === "string")
+    : []
+
+  // Canonical path for this runtime:
+  // keyAgreementKeys[] -> publicKeys[keyId].key.publicEncryptionKey.x25519
+  if (publicKeys && keyAgreementKeys.length) {
+    for (const keyId of keyAgreementKeys) {
+      const normalizedId = keyId.trim().toLowerCase()
+      const matchedEntry = Object.entries(publicKeys).find(([mapKey]) => mapKey.trim().toLowerCase() === normalizedId)?.[1]
+      const x25519 = extractX25519FromPublicKeyEntry(matchedEntry)
+      if (x25519) {
+        return x25519
+      }
+    }
+  }
+
+  // Fallback: any encryption key in publicKeys map
+  if (publicKeys) {
+    for (const entry of Object.values(publicKeys)) {
+      const x25519 = extractX25519FromPublicKeyEntry(entry)
+      if (x25519) {
+        return x25519
+      }
+    }
+  }
+
+  return undefined
+}
+
+async function queryDidPayloadByAddress(address: string): Promise<unknown> {
+  const endpoint = session.networkEndpoint || runtimeConfig.public.xcavateWsEndpoint || "wss://xcavate-paseo.api.onfinality.io/public-ws"
+  const { ApiPromise, WsProvider } = await import("@polkadot/api")
+
+  const provider = new WsProvider(endpoint)
+  const api = await ApiPromise.create({ provider })
+
+  try {
+    const queryDid = api.query?.did?.did
+    if (typeof queryDid !== "function") {
+      return undefined
+    }
+
+    const result = await queryDid(address)
+
+    try {
+      if (typeof result.toJSON === "function") {
+        return result.toJSON()
+      }
+    } catch {
+    }
+
+    try {
+      if (typeof result.toHuman === "function") {
+        return result.toHuman()
+      }
+    } catch {
+    }
+
+    return typeof result.toString === "function" ? result.toString() : undefined
+  } finally {
+    await api.disconnect().catch(() => undefined)
+    provider.disconnect()
+  }
+}
+
+async function loadContributorX25519Keys(addresses: string[]): Promise<void> {
+  contributorX25519Keys.value = {}
+
+  if (!addresses.length) {
+    return
+  }
+
+  loadingContributorKeys.value = true
+  const keysByAddress: Record<string, string> = {}
+
+  try {
+    for (const address of addresses) {
+      const payload = await queryDidPayloadByAddress(address)
+      keysByAddress[address] = extractContributorX25519(payload) ?? "Not found"
+    }
+
+    contributorX25519Keys.value = keysByAddress
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to load contributor DID key agreements"
+    membersError.value = message
+    operations.add("did_read", bucketId.value, "error", message)
+  } finally {
+    loadingContributorKeys.value = false
   }
 }
 
@@ -175,11 +312,11 @@ async function removeAdmin(address: string): Promise<void> {
       logExtrinsicUpdate
     )
 
-    operations.add("did_write", bucketId.value, "success", `Admin removed: ${result.txHash}`)
+    operations.add("bucket_write", bucketId.value, "success", `Admin removed: ${result.txHash}`)
     await loadBucketMembers()
   } catch (error) {
     membersError.value = error instanceof Error ? error.message : "Unable to remove admin"
-    operations.add("did_write", `bucket:${bucketId.value}`, "error", membersError.value)
+    operations.add("bucket_write", `bucket:${bucketId.value}`, "error", membersError.value)
   } finally {
     removingAdminAddress.value = ""
   }
@@ -210,11 +347,11 @@ async function removeContributor(address: string): Promise<void> {
       logExtrinsicUpdate
     )
 
-    operations.add("did_write", bucketId.value, "success", `Contributor removed: ${result.txHash}`)
+    operations.add("bucket_write", bucketId.value, "success", `Contributor removed: ${result.txHash}`)
     await loadBucketMembers()
   } catch (error) {
     membersError.value = error instanceof Error ? error.message : "Unable to remove contributor"
-    operations.add("did_write", `bucket:${bucketId.value}`, "error", membersError.value)
+    operations.add("bucket_write", `bucket:${bucketId.value}`, "error", membersError.value)
   } finally {
     removingContributorAddress.value = ""
   }
@@ -393,16 +530,14 @@ function toChatMessage(message: BucketMessage): ChatMessage {
     toDate(rawRecord?.submittedAt) ??
     new Date(0)
 
-  const activeAddress = session.accountAddress.trim().toLowerCase()
-  const senderAddress = sender?.trim().toLowerCase() ?? ""
-  const outgoing = Boolean(activeAddress && senderAddress && activeAddress === senderAddress)
+  const outgoing = Boolean(session.accountAddress && sender && addressesEqual(session.accountAddress, sender))
 
   return {
     id: message.id,
     body,
     createdAt,
     outgoing,
-    senderLabel: outgoing ? "You" : sender ?? "Unknown"
+    senderLabel: outgoing ? "You" : sender ? formatAddress(sender) : "Unknown"
   }
 }
 
@@ -430,7 +565,7 @@ function logExtrinsicUpdate(update: ExtrinsicUpdate): void {
     details.push(`block: ${update.blockHash}`)
   }
 
-  operations.add("did_write", `message:${update.stage}`, update.stage === "error" ? "error" : "info", details.join(" · "))
+  operations.add("bucket_write", `message:${update.stage}`, update.stage === "error" ? "error" : "info", details.join(" · "))
 }
 
 async function sendMessage() {
@@ -466,7 +601,7 @@ async function sendMessage() {
       pending.deliveryState = "sent"
     }
 
-    operations.add("did_write", bucketId.value, "success", `Message submitted: ${result.txHash}`)
+    operations.add("bucket_write", bucketId.value, "success", `Message submitted: ${result.txHash}`)
     await loadMessages()
     pendingMessages.value = pendingMessages.value.filter((entry) => entry.deliveryState === "failed")
   } catch (error) {
@@ -477,7 +612,7 @@ async function sendMessage() {
       pending.deliveryState = "failed"
     }
 
-    operations.add("did_write", bucketId.value, "error", message)
+    operations.add("bucket_write", bucketId.value, "error", message)
     if (!sendText.value) {
       sendText.value = payload
     }
@@ -561,7 +696,7 @@ onMounted(async () => {
       <p v-else-if="membersError" style="margin: 0; color: var(--status-error)">{{ membersError }}</p>
       <ul v-else-if="bucketAdmins.length" class="bucket-members-list">
         <li v-for="adminAddress in bucketAdmins" :key="`admin-${adminAddress}`" class="bucket-member-item">
-          <span>{{ adminAddress }}</span>
+          <span>{{ formatAddress(adminAddress) }}</span>
           <button
             class="btn member-remove-btn"
             type="button"
@@ -591,7 +726,12 @@ onMounted(async () => {
       <p v-else-if="membersError" style="margin: 0; color: var(--status-error)">{{ membersError }}</p>
       <ul v-else-if="bucketContributors.length" class="bucket-members-list">
         <li v-for="contributorAddress in bucketContributors" :key="`contributor-${contributorAddress}`" class="bucket-member-item">
-          <span>{{ contributorAddress }}</span>
+          <div class="contributor-details">
+            <span>{{ formatAddress(contributorAddress) }}</span>
+            <span class="muted contributor-key">
+              X25519: {{ contributorX25519Keys[contributorAddress] || (loadingContributorKeys ? "Loading..." : "Not found") }}
+            </span>
+          </div>
           <button
             class="btn member-remove-btn"
             type="button"
@@ -795,6 +935,17 @@ onMounted(async () => {
   border-radius: 8px;
   padding: 8px 10px;
   background: rgba(255, 255, 255, 0.7);
+}
+
+.contributor-details {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.contributor-key {
+  font-size: 12px;
+  word-break: break-all;
 }
 
 .member-remove-btn {

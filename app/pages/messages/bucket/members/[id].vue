@@ -92,7 +92,7 @@ function logExtrinsicUpdate(update: ExtrinsicUpdate): void {
     details.push(`block: ${update.blockHash}`)
   }
 
-  operations.add("did_write", `bucket-member:${update.stage}`, update.stage === "error" ? "error" : "info", details.join(" · "))
+  operations.add("bucket_write", `bucket-member:${update.stage}`, update.stage === "error" ? "error" : "info", details.join(" · "))
 }
 
 async function submitAddMember(): Promise<void> {
@@ -142,11 +142,11 @@ async function submitAddMember(): Promise<void> {
 
     submittedTxHash.value = result.txHash
     submittedMethod.value = result.method
-    operations.add("did_write", bucketId.value, "success", `Member extrinsic submitted: ${result.txHash}`)
+    operations.add("bucket_write", bucketId.value, "success", `Member extrinsic submitted: ${result.txHash}`)
     memberAddress.value = ""
   } catch (error) {
     submitError.value = error instanceof Error ? error.message : "Unable to submit bucket member extrinsic"
-    operations.add("did_write", `bucket:${bucketId.value}`, "error", submitError.value)
+    operations.add("bucket_write", `bucket:${bucketId.value}`, "error", submitError.value)
   } finally {
     submitting.value = false
   }

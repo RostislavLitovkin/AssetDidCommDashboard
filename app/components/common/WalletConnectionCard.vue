@@ -6,6 +6,8 @@ const props = defineProps<{
   accountAddress: string
   providerName: string
 }>()
+const { formatAddress } = useAddress()
+const formattedAccountAddress = computed(() => formatAddress(props.accountAddress || ""))
 
 const emit = defineEmits<{
   connect: []
@@ -23,7 +25,7 @@ const emit = defineEmits<{
     </div>
 
     <p class="muted" style="margin: 0">
-      {{ accountAddress ? `Account: ${accountAddress}` : "No wallet connected" }}
+      {{ accountAddress ? `Account: ${formattedAccountAddress}` : "No wallet connected" }}
     </p>
     <p class="muted" style="margin: 0" v-if="providerName">Provider: {{ providerName }}</p>
 

@@ -1,10 +1,19 @@
 <script setup lang="ts">
-import { ChevronRight, Fingerprint, MessageSquare, Wallet, X } from "lucide-vue-next"
+import { ChevronRight, Fingerprint, MessageSquare, Settings, Wallet, X } from "lucide-vue-next"
 import NotificationCenter from "../common/NotificationCenter.vue"
 
 const wallet = useWallet()
+const { formatAddress } = useAddress()
 const showWalletPopup = ref(false)
 const accounts = ref<Array<{ address: string; name: string; source: string }>>([])
+const isWalletConnected = computed(() => wallet.walletStatus.value === "connected" && Boolean(wallet.accountAddress.value))
+const connectedAddressLabel = computed(() => formatAddress(wallet.accountAddress.value || ""))
+const formattedAccounts = computed(() =>
+  accounts.value.map((account) => ({
+    ...account,
+    formattedAddress: formatAddress(account.address)
+  }))
+)
 
 async function openWalletPopup() {
   showWalletPopup.value = true
@@ -34,22 +43,26 @@ async function selectWallet(address: string) {
           <MessageSquare :size="16" />
           Messages
         </NuxtLink>
+        <NuxtLink class="btn sidebar-btn" to="/settings" style="display: flex; align-items: center; gap: 8px; text-decoration: none">
+          <Settings :size="16" />
+          Settings
+        </NuxtLink>
       </nav>
 
       <div style="margin-top: auto; padding-top: 16px">
-        <p class="muted" style="margin: 0 0 8px; font-size: 12px" v-if="wallet.accountAddress">
+        <p class="muted" style="margin: 0 0 8px; font-size: 12px" v-if="isWalletConnected">
           Connected:
           <span
             :title="wallet.accountAddress"
             style="display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom"
           >
-            {{ wallet.accountAddress }}
+            {{ connectedAddressLabel }}
           </span>
         </p>
         <p class="muted" style="margin: 0 0 8px; font-size: 12px" v-if="wallet.providerName">
           Provider: {{ wallet.providerName }}
         </p>
-        <p class="muted" style="margin: 0 0 8px; font-size: 12px" v-if="!wallet.accountAddress">
+        <p class="muted" style="margin: 0 0 8px; font-size: 12px" v-if="!isWalletConnected">
           No wallet connected
         </p>
         <button
@@ -60,7 +73,7 @@ async function selectWallet(address: string) {
         >
           <span style="display: inline-flex; align-items: center; gap: 8px">
             <Wallet :size="16" />
-            {{ wallet.accountAddress ? "Switch Wallet" : "Connect Wallet" }}
+            {{ isWalletConnected ? "Switch Wallet" : "Connect Wallet" }}
           </span>
           <ChevronRight :size="14" />
         </button>
@@ -91,7 +104,7 @@ async function selectWallet(address: string) {
 
         <div class="stack" style="max-height: 300px; overflow: auto">
           <button
-            v-for="account in accounts"
+            v-for="account in formattedAccounts"
             :key="account.address"
             class="btn"
             type="button"
@@ -100,7 +113,7 @@ async function selectWallet(address: string) {
           >
             <span class="stack" style="gap: 2px">
               <strong>{{ account.name }}</strong>
-              <span class="muted" style="font-size: 12px">{{ account.address }}</span>
+              <span class="muted" style="font-size: 12px">{{ account.formattedAddress }}</span>
             </span>
             <span class="muted" style="font-size: 12px">{{ account.source }}</span>
           </button>

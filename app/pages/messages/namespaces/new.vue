@@ -1,10 +1,16 @@
 <script setup lang="ts">
 import { DidCommRepository, type ExtrinsicUpdate } from "../../../services/papi/didCommRepository"
+import { ref } from "vue"
+import { useNuxtApp } from "nuxt/app"
+import { useOperationsStore } from "../../../stores/operations"
+import { useSessionStore } from "../../../stores/session"
 
 const { $papiClient } = useNuxtApp()
 const session = useSessionStore()
 const operations = useOperationsStore()
-const didCommRepository = new DidCommRepository($papiClient)
+const didCommRepository = new DidCommRepository(
+  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string }
+)
 
 const namespaceName = ref("")
 const submitting = ref(false)
@@ -21,7 +27,7 @@ function logExtrinsicUpdate(update: ExtrinsicUpdate): void {
     details.push(`block: ${update.blockHash}`)
   }
 
-  operations.add("did_write", `namespace:${update.stage}`, update.stage === "error" ? "error" : "info", details.join(" · "))
+  operations.add("bucket_write", `namespace:${update.stage}`, update.stage === "error" ? "error" : "info", details.join(" · "))
 }
 
 async function submitCreateNamespace(): Promise<void> {
@@ -45,11 +51,11 @@ async function submitCreateNamespace(): Promise<void> {
     const result = await didCommRepository.createNamespace(namespaceName.value, session.accountAddress, logExtrinsicUpdate)
     submittedTxHash.value = result.txHash
     submittedMethod.value = result.method
-    operations.add("did_write", namespaceName.value.trim(), "success", `Namespace extrinsic submitted: ${result.txHash}`)
+    operations.add("bucket_write", namespaceName.value.trim(), "success", `Namespace extrinsic submitted: ${result.txHash}`)
     namespaceName.value = ""
   } catch (error) {
     submitError.value = error instanceof Error ? error.message : "Unable to submit namespace extrinsic"
-    operations.add("did_write", "namespace", "error", submitError.value)
+    operations.add("bucket_write", "namespace", "error", submitError.value)
   } finally {
     submitting.value = false
   }

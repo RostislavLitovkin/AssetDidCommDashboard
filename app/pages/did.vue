@@ -5,11 +5,15 @@ import { cryptoWaitReady, decodeAddress, encodeAddress, mnemonicGenerate } from 
 import { base64url } from "jose"
 import { computed } from "vue"
 import { ref } from "vue"
+import { useRuntimeConfig } from "nuxt/app"
+import { useAddress } from "../composables/useAddress"
 import { X25519KeyService } from "../services/crypto/x25519KeyService"
+import { useOperationsStore } from "../stores/operations"
+import { useSessionStore } from "../stores/session"
 import type { KeyMaterial } from "../types/keys"
 
-const ss58Format = 42
 const defaultEndpoint = "wss://xcavate-paseo.api.onfinality.io/public-ws"
+const { ss58Prefix, formatAddress } = useAddress()
 const mnemonic = ref("")
 const ss58Address = ref("")
 const generatingMnemonic = ref(false)
@@ -63,7 +67,7 @@ async function generateMnemonic(): Promise<void> {
   try {
     await cryptoWaitReady()
     const nextMnemonic = mnemonicGenerate()
-    const keyring = new Keyring({ type: "sr25519", ss58Format })
+    const keyring = new Keyring({ type: "sr25519", ss58Format: ss58Prefix.value })
     const account = keyring.addFromUri(nextMnemonic)
 
     mnemonic.value = nextMnemonic
@@ -459,7 +463,7 @@ function mapX25519HexToBase64Url(value: unknown, parentKey = ""): unknown {
 
     if (keyName === "sr25519") {
       try {
-        return encodeAddress(hexToU8a(value), ss58Format)
+        return encodeAddress(hexToU8a(value), ss58Prefix.value)
       } catch {
         return value
       }
@@ -584,7 +588,7 @@ async function submitDidCreateExtrinsic(): Promise<void> {
   }
 
   await cryptoWaitReady()
-  const didKeyring = new Keyring({ type: "sr25519", ss58Format })
+  const didKeyring = new Keyring({ type: "sr25519", ss58Format: ss58Prefix.value })
   const didAccount = didKeyring.addFromUri(mnemonicInput)
   const didAddress = didCreateDidAddress.value.trim() || didAccount.address
   derivedDidAddress.value = didAddress
@@ -878,6 +882,8 @@ function downloadJson(): void {
 }
 
 const mnemonicWords = computed(() => (mnemonic.value ? mnemonic.value.split(" ").filter(Boolean) : []))
+const displayedSs58Address = computed(() => formatAddress(ss58Address.value))
+const displayedDerivedDidAddress = computed(() => formatAddress(derivedDidAddress.value))
 </script>
 
 <template>
@@ -905,11 +911,6 @@ const mnemonicWords = computed(() => (mnemonic.value ? mnemonic.value.split(" ")
         <p class="muted" style="margin: 0 0 6px">Returned JSON</p>
         <pre class="address-value" aria-label="DID search result JSON">{{ didSearchResultJson }}</pre>
       </div>
-
-      <div v-if="didSearchDecodedX25519Json" class="address-card">
-        <p class="muted" style="margin: 0 0 6px">Decoded X25519 Keys (JOSE JWK)</p>
-        <pre class="address-value" aria-label="Decoded X25519 JWK JSON">{{ didSearchDecodedX25519Json }}</pre>
-      </div>
     </section>
 
     <section class="card stack">
@@ -935,7 +936,7 @@ const mnemonicWords = computed(() => (mnemonic.value ? mnemonic.value.split(" ")
 
       <div v-if="ss58Address" class="address-card">
         <p class="muted" style="margin: 0">SS58 Address</p>
-        <p style="margin: 4px 0 0" class="address-value">{{ ss58Address }}</p>
+        <p style="margin: 4px 0 0" class="address-value">{{ displayedSs58Address }}</p>
       </div>
     </section>
 
@@ -1002,7 +1003,7 @@ const mnemonicWords = computed(() => (mnemonic.value ? mnemonic.value.split(" ")
       </label>
 
       <p v-if="didCreateError" class="error-text">{{ didCreateError }}</p>
-      <p v-if="derivedDidAddress" class="muted" style="margin: 0">Derived DID Address: {{ derivedDidAddress }}</p>
+      <p v-if="derivedDidAddress" class="muted" style="margin: 0">Derived DID Address: {{ displayedDerivedDidAddress }}</p>
       <p v-if="didCreateStatus" class="muted" style="margin: 0">{{ didCreateStatus }}</p>
       <p v-if="didCreateTxHash" class="muted" style="margin: 0">Tx Hash: {{ didCreateTxHash }}</p>
     </section>
