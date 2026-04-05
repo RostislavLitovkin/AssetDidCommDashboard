@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { DidCommRepository, type BucketMessage, type BucketRecord, type ExtrinsicUpdate } from "../../../services/papi/didCommRepository"
 import LoadingBar from "../../../components/common/LoadingBar.vue"
+import { Trash2 } from "lucide-vue-next"
 import { computed, nextTick, onMounted, ref, watch } from "vue"
 import { useNuxtApp, useRoute } from "nuxt/app"
 import { useOperationsStore } from "../../../stores/operations"
@@ -63,6 +64,8 @@ const pendingMessages = ref<PendingChatMessage[]>([])
 const chatViewport = ref<HTMLElement | null>(null)
 const bucketAdmins = ref<string[]>([])
 const bucketContributors = ref<string[]>([])
+const removingAdminAddress = ref("")
+const removingContributorAddress = ref("")
 const bucketDisplayName = computed(() => bucket.value?.name || bucketId.value)
 
 const bucketMetadata = computed<MetadataEntry[]>(() => extractBucketMetadataEntries(bucket.value))
@@ -130,6 +133,90 @@ async function loadBucketMembers() {
     bucketAdmins.value = []
     bucketContributors.value = []
     membersError.value = error instanceof Error ? error.message : "Unable to load bucket member lists"
+  }
+}
+
+function resolveNamespaceIdFromBucket(bucketRecord: BucketRecord | null): string {
+  if (!bucketRecord) {
+    return ""
+  }
+
+  if (bucketRecord.namespaceId?.trim()) {
+    return bucketRecord.namespaceId.trim()
+  }
+
+  const rawRecord = toRecord(bucketRecord.raw)
+  const candidate = rawRecord?.namespaceId ?? rawRecord?.namespace
+  return typeof candidate === "string" ? candidate.trim() : ""
+}
+
+async function removeAdmin(address: string): Promise<void> {
+  membersError.value = ""
+
+  if (!session.accountAddress) {
+    membersError.value = "Connect wallet before submitting member removal extrinsics"
+    return
+  }
+
+  const namespaceId = resolveNamespaceIdFromBucket(bucket.value)
+  if (!namespaceId) {
+    membersError.value = "Namespace id is required to remove bucket members"
+    return
+  }
+
+  removingAdminAddress.value = address
+
+  try {
+    const result = await didCommRepository.removeBucketAdmin(
+      namespaceId,
+      bucketId.value,
+      address,
+      session.accountAddress,
+      logExtrinsicUpdate
+    )
+
+    operations.add("did_write", bucketId.value, "success", `Admin removed: ${result.txHash}`)
+    await loadBucketMembers()
+  } catch (error) {
+    membersError.value = error instanceof Error ? error.message : "Unable to remove admin"
+    operations.add("did_write", `bucket:${bucketId.value}`, "error", membersError.value)
+  } finally {
+    removingAdminAddress.value = ""
+  }
+}
+
+async function removeContributor(address: string): Promise<void> {
+  membersError.value = ""
+
+  if (!session.accountAddress) {
+    membersError.value = "Connect wallet before submitting member removal extrinsics"
+    return
+  }
+
+  const namespaceId = resolveNamespaceIdFromBucket(bucket.value)
+  if (!namespaceId) {
+    membersError.value = "Namespace id is required to remove bucket members"
+    return
+  }
+
+  removingContributorAddress.value = address
+
+  try {
+    const result = await didCommRepository.removeBucketContributor(
+      namespaceId,
+      bucketId.value,
+      address,
+      session.accountAddress,
+      logExtrinsicUpdate
+    )
+
+    operations.add("did_write", bucketId.value, "success", `Contributor removed: ${result.txHash}`)
+    await loadBucketMembers()
+  } catch (error) {
+    membersError.value = error instanceof Error ? error.message : "Unable to remove contributor"
+    operations.add("did_write", `bucket:${bucketId.value}`, "error", membersError.value)
+  } finally {
+    removingContributorAddress.value = ""
   }
 }
 
@@ -471,8 +558,20 @@ onMounted(async () => {
       </div>
       <LoadingBar v-if="bucketLoading" label="Loading admins..." />
       <p v-else-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
+      <p v-else-if="membersError" style="margin: 0; color: var(--status-error)">{{ membersError }}</p>
       <ul v-else-if="bucketAdmins.length" class="bucket-members-list">
-        <li v-for="adminAddress in bucketAdmins" :key="`admin-${adminAddress}`">{{ adminAddress }}</li>
+        <li v-for="adminAddress in bucketAdmins" :key="`admin-${adminAddress}`" class="bucket-member-item">
+          <span>{{ adminAddress }}</span>
+          <button
+            class="btn member-remove-btn"
+            type="button"
+            :disabled="Boolean(removingAdminAddress) || Boolean(removingContributorAddress) || !session.accountAddress"
+            @click="removeAdmin(adminAddress)"
+          >
+            <Trash2 :size="14" aria-hidden="true" />
+            <span>{{ removingAdminAddress === adminAddress ? "Removing..." : "Remove" }}</span>
+          </button>
+        </li>
       </ul>
       <p v-else class="muted" style="margin: 0">No admins found for this bucket.</p>
     </section>
@@ -489,12 +588,31 @@ onMounted(async () => {
       </div>
       <LoadingBar v-if="bucketLoading" label="Loading contributors..." />
       <p v-else-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
+      <p v-else-if="membersError" style="margin: 0; color: var(--status-error)">{{ membersError }}</p>
       <ul v-else-if="bucketContributors.length" class="bucket-members-list">
-        <li v-for="contributorAddress in bucketContributors" :key="`contributor-${contributorAddress}`">
-          {{ contributorAddress }}
+        <li v-for="contributorAddress in bucketContributors" :key="`contributor-${contributorAddress}`" class="bucket-member-item">
+          <span>{{ contributorAddress }}</span>
+          <button
+            class="btn member-remove-btn"
+            type="button"
+            :disabled="Boolean(removingAdminAddress) || Boolean(removingContributorAddress) || !session.accountAddress"
+            @click="removeContributor(contributorAddress)"
+          >
+            <Trash2 :size="14" aria-hidden="true" />
+            <span>{{ removingContributorAddress === contributorAddress ? "Removing..." : "Remove" }}</span>
+          </button>
         </li>
       </ul>
-      <p v-else class="muted" style="margin: 0">No contributors found for this bucket.</p>
+      <p v-if="!session.accountAddress" class="muted" style="margin: 0">
+        Connect wallet on the dashboard first to remove bucket members.
+      </p>
+      <p
+        v-if="!bucketLoading && !bucketError && !membersError && !bucketContributors.length"
+        class="muted"
+        style="margin: 0"
+      >
+        No contributors found for this bucket.
+      </p>
     </section>
 
     <section class="card stack chat-shell" aria-live="polite">
@@ -662,9 +780,29 @@ onMounted(async () => {
 
 .bucket-members-list {
   margin: 0;
-  padding-left: 18px;
+  padding-left: 0;
+  list-style: none;
   display: grid;
   gap: 4px;
+}
+
+.bucket-member-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.member-remove-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--status-error);
+  border-color: color-mix(in srgb, var(--status-error) 50%, var(--border-default));
 }
 
 .chat-composer {

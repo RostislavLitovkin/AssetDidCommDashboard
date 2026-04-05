@@ -111,6 +111,8 @@ export class DidCommRepository {
   private readMessagesStorage: MessagesStorageReader
   private submitAddAdminExtrinsic: BucketMemberExtrinsicSubmitter
   private submitAddContributorExtrinsic: BucketMemberExtrinsicSubmitter
+  private submitRemoveAdminExtrinsic: BucketMemberExtrinsicSubmitter
+  private submitRemoveContributorExtrinsic: BucketMemberExtrinsicSubmitter
 
   constructor(
     client: PapiRpcClient = new PapiClient(),
@@ -121,7 +123,9 @@ export class DidCommRepository {
     readMessagesStorage: MessagesStorageReader = queryBucketsMessagesStorage,
     submitMessageExtrinsic: MessageExtrinsicSubmitter = submitBucketsAddMessageExtrinsic,
     submitAddAdminExtrinsic: BucketMemberExtrinsicSubmitter = submitBucketsAddAdminExtrinsic,
-    submitAddContributorExtrinsic: BucketMemberExtrinsicSubmitter = submitBucketsAddContributorExtrinsic
+    submitAddContributorExtrinsic: BucketMemberExtrinsicSubmitter = submitBucketsAddContributorExtrinsic,
+    submitRemoveAdminExtrinsic: BucketMemberExtrinsicSubmitter = submitBucketsRemoveAdminExtrinsic,
+    submitRemoveContributorExtrinsic: BucketMemberExtrinsicSubmitter = submitBucketsRemoveContributorExtrinsic
   ) {
     this.client = client
     this.submitExtrinsic = submitExtrinsic
@@ -132,6 +136,8 @@ export class DidCommRepository {
     this.readMessagesStorage = readMessagesStorage
     this.submitAddAdminExtrinsic = submitAddAdminExtrinsic
     this.submitAddContributorExtrinsic = submitAddContributorExtrinsic
+    this.submitRemoveAdminExtrinsic = submitRemoveAdminExtrinsic
+    this.submitRemoveContributorExtrinsic = submitRemoveContributorExtrinsic
   }
 
   async fetchNamespaces(): Promise<BucketNamespace[]> {
@@ -554,6 +560,98 @@ export class DidCommRepository {
       method: "buckets.addContributor"
     }
   }
+
+  async removeBucketAdmin(
+    namespaceId: string,
+    bucketId: string,
+    memberAddress: string,
+    ownerAddress?: string,
+    onUpdate?: ExtrinsicUpdateHandler
+  ): Promise<AddBucketMemberResult> {
+    const trimmedNamespaceId = namespaceId.trim()
+    if (!trimmedNamespaceId) {
+      throw new Error("Namespace id is required")
+    }
+
+    const trimmedBucketId = bucketId.trim()
+    if (!trimmedBucketId) {
+      throw new Error("Bucket id is required")
+    }
+
+    const trimmedMemberAddress = memberAddress.trim()
+    if (!trimmedMemberAddress) {
+      throw new Error("Member address is required")
+    }
+
+    if (!ownerAddress) {
+      throw new Error("Wallet must be connected to submit buckets.removeAdmin extrinsic")
+    }
+
+    const endpoint = this.client.getEndpoint?.()
+    if (!endpoint) {
+      throw new Error("Unable to resolve chain endpoint for extrinsic submission")
+    }
+
+    const txHash = await this.submitRemoveAdminExtrinsic(
+      endpoint,
+      trimmedNamespaceId,
+      trimmedBucketId,
+      trimmedMemberAddress,
+      ownerAddress,
+      onUpdate
+    )
+
+    return {
+      txHash,
+      method: "buckets.removeAdmin"
+    }
+  }
+
+  async removeBucketContributor(
+    namespaceId: string,
+    bucketId: string,
+    memberAddress: string,
+    ownerAddress?: string,
+    onUpdate?: ExtrinsicUpdateHandler
+  ): Promise<AddBucketMemberResult> {
+    const trimmedNamespaceId = namespaceId.trim()
+    if (!trimmedNamespaceId) {
+      throw new Error("Namespace id is required")
+    }
+
+    const trimmedBucketId = bucketId.trim()
+    if (!trimmedBucketId) {
+      throw new Error("Bucket id is required")
+    }
+
+    const trimmedMemberAddress = memberAddress.trim()
+    if (!trimmedMemberAddress) {
+      throw new Error("Member address is required")
+    }
+
+    if (!ownerAddress) {
+      throw new Error("Wallet must be connected to submit buckets.removeContributor extrinsic")
+    }
+
+    const endpoint = this.client.getEndpoint?.()
+    if (!endpoint) {
+      throw new Error("Unable to resolve chain endpoint for extrinsic submission")
+    }
+
+    const txHash = await this.submitRemoveContributorExtrinsic(
+      endpoint,
+      trimmedNamespaceId,
+      trimmedBucketId,
+      trimmedMemberAddress,
+      ownerAddress,
+      onUpdate
+    )
+
+    return {
+      txHash,
+      method: "buckets.removeContributor"
+    }
+  }
 }
 
 async function submitBucketsCreateNamespaceExtrinsic(
@@ -774,6 +872,46 @@ async function submitBucketsAddContributorExtrinsic(
     ownerAddress,
     ["addContributor", "addBucketContributor"],
     "buckets.addContributor",
+    onUpdate
+  )
+}
+
+async function submitBucketsRemoveAdminExtrinsic(
+  endpoint: string,
+  namespaceId: string,
+  bucketId: string,
+  memberAddress: string,
+  ownerAddress: string,
+  onUpdate?: ExtrinsicUpdateHandler
+): Promise<string> {
+  return await submitBucketsAddMemberExtrinsic(
+    endpoint,
+    namespaceId,
+    bucketId,
+    memberAddress,
+    ownerAddress,
+    ["removeAdmin", "removeBucketAdmin"],
+    "buckets.removeAdmin",
+    onUpdate
+  )
+}
+
+async function submitBucketsRemoveContributorExtrinsic(
+  endpoint: string,
+  namespaceId: string,
+  bucketId: string,
+  memberAddress: string,
+  ownerAddress: string,
+  onUpdate?: ExtrinsicUpdateHandler
+): Promise<string> {
+  return await submitBucketsAddMemberExtrinsic(
+    endpoint,
+    namespaceId,
+    bucketId,
+    memberAddress,
+    ownerAddress,
+    ["removeContributor", "removeBucketContributor"],
+    "buckets.removeContributor",
     onUpdate
   )
 }

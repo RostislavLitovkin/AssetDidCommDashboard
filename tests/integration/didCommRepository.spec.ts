@@ -312,6 +312,67 @@ describe("DidCommRepository", () => {
     expect(result.txHash).toBe("0xcontrib456")
   })
 
+  it("submits buckets.removeAdmin extrinsic", async () => {
+    const repository = new DidCommRepository(
+      {
+        rpc: async () => [] as unknown[],
+        getEndpoint: () => "wss://example-chain"
+      },
+      async () => "0xignored",
+      async () => "0xignored-bucket",
+      async () => [],
+      async () => [],
+      async () => [],
+      async () => "0xignored-message",
+      async () => "0xignored-admin",
+      async () => "0xignored-contributor",
+      async (endpoint, namespaceId, bucketId, memberAddress, ownerAddress) => {
+        expect(endpoint).toBe("wss://example-chain")
+        expect(namespaceId).toBe("7")
+        expect(bucketId).toBe("bucket-7")
+        expect(memberAddress).toBe("5F3sa2TJ...member")
+        expect(ownerAddress).toBe("5F3sa2TJ...owner")
+        return "0xremove-admin"
+      }
+    )
+
+    const result = await repository.removeBucketAdmin("7", "bucket-7", "5F3sa2TJ...member", "5F3sa2TJ...owner")
+
+    expect(result.method).toBe("buckets.removeAdmin")
+    expect(result.txHash).toBe("0xremove-admin")
+  })
+
+  it("submits buckets.removeContributor extrinsic", async () => {
+    const repository = new DidCommRepository(
+      {
+        rpc: async () => [] as unknown[],
+        getEndpoint: () => "wss://example-chain"
+      },
+      async () => "0xignored",
+      async () => "0xignored-bucket",
+      async () => [],
+      async () => [],
+      async () => [],
+      async () => "0xignored-message",
+      async () => "0xignored-admin",
+      async () => "0xignored-contributor",
+      async () => "0xignored-remove-admin",
+      async (endpoint, namespaceId, bucketId, memberAddress, ownerAddress) => {
+        expect(endpoint).toBe("wss://example-chain")
+        expect(namespaceId).toBe("7")
+        expect(bucketId).toBe("bucket-7")
+        expect(memberAddress).toBe("5F3sa2TJ...member")
+        expect(ownerAddress).toBe("5F3sa2TJ...owner")
+        return "0xremove-contributor"
+      }
+    )
+
+    const result = await repository.removeBucketContributor("7", "bucket-7", "5F3sa2TJ...member", "5F3sa2TJ...owner")
+
+    expect(result.method).toBe("buckets.removeContributor")
+    expect(result.txHash).toBe("0xremove-contributor")
+  })
+
   it("rejects add-admin when namespace id is empty", async () => {
     const repository = new DidCommRepository(
       { rpc: async () => "0xignored", getEndpoint: () => "wss://example-chain" },
