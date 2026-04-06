@@ -1,5 +1,5 @@
 import { PapiClient } from "./client"
-import { CrustStorageAdapter, type Signer as CrustSigner } from "../storage/crustStorageAdapter"
+import { PinataStorageAdapter } from "../storage/pinataStorageAdapter"
 
 type PapiRpcClient = {
   rpc(method: string, params?: unknown[]): Promise<unknown>
@@ -38,8 +38,16 @@ type MessageExtrinsicSubmitter = (
   message: string,
   ownerAddress: string,
   onUpdate?: ExtrinsicUpdateHandler,
-  tag?: string
+  tag?: string,
+  pinataConfig?: PinataConfig
 ) => Promise<string>
+
+export interface PinataConfig {
+  jwt?: string
+  apiKey?: string
+  apiSecret?: string
+  publicGateway?: string
+}
 
 type BucketMemberExtrinsicSubmitter = (
   endpoint: string,
@@ -139,6 +147,7 @@ export class DidCommRepository {
   private submitRemoveContributorExtrinsic: BucketMemberExtrinsicSubmitter
   private submitSetBucketPublicKeyExtrinsic: BucketPublicKeyExtrinsicSubmitter
   private submitCreateTagExtrinsic: BucketTagExtrinsicSubmitter
+  private pinataConfig?: PinataConfig
 
   constructor(
     client: PapiRpcClient = new PapiClient(),
@@ -153,7 +162,8 @@ export class DidCommRepository {
     submitRemoveAdminExtrinsic: BucketMemberExtrinsicSubmitter = submitBucketsRemoveAdminExtrinsic,
     submitRemoveContributorExtrinsic: BucketMemberExtrinsicSubmitter = submitBucketsRemoveContributorExtrinsic,
     submitSetBucketPublicKeyExtrinsic: BucketPublicKeyExtrinsicSubmitter = submitBucketsSetPublicKeyExtrinsic,
-    submitCreateTagExtrinsic: BucketTagExtrinsicSubmitter = submitBucketsCreateTagExtrinsic
+    submitCreateTagExtrinsic: BucketTagExtrinsicSubmitter = submitBucketsCreateTagExtrinsic,
+    pinataConfig?: PinataConfig
   ) {
     this.client = client
     this.submitExtrinsic = submitExtrinsic
@@ -168,6 +178,7 @@ export class DidCommRepository {
     this.submitRemoveContributorExtrinsic = submitRemoveContributorExtrinsic
     this.submitSetBucketPublicKeyExtrinsic = submitSetBucketPublicKeyExtrinsic
     this.submitCreateTagExtrinsic = submitCreateTagExtrinsic
+    this.pinataConfig = sanitizePinataConfig(pinataConfig)
   }
 
   async fetchNamespaces(): Promise<BucketNamespace[]> {
@@ -561,7 +572,8 @@ export class DidCommRepository {
       trimmedMessage,
       ownerAddress,
       onUpdate,
-      trimmedTag || undefined
+      trimmedTag || undefined,
+      this.pinataConfig
     )
     return {
       txHash,
@@ -885,7 +897,8 @@ async function submitBucketsAddMessageExtrinsic(
   message: string,
   ownerAddress: string,
   onUpdate?: ExtrinsicUpdateHandler,
-  tag?: string
+  tag?: string,
+  pinataConfig?: PinataConfig
 ): Promise<string> {
   const [{ ApiPromise, WsProvider }, { web3FromAddress }] = await Promise.all([
     import("@polkadot/api"),
@@ -909,8 +922,9 @@ async function submitBucketsAddMessageExtrinsic(
     let submittedCallName = "buckets.addMessage"
     if (write) {
       const namespaceId = await resolveNamespaceIdForBucketWrite(api, bucketId)
-      const storageAdapter = new CrustStorageAdapter(ownerAddress, injector.signer as CrustSigner)
-      console.log("CrustAdapter: Uploading message reference content to IPFS before buckets.write...")
+      const resolvedPinataConfig = resolvePinataConfig(pinataConfig)
+      const storageAdapter = new PinataStorageAdapter(resolvedPinataConfig)
+      console.log("PinataAdapter: Uploading message reference content to IPFS before buckets.write...")
       let cid = ""
       try {
         cid = await storageAdapter.upload(message)
@@ -923,7 +937,7 @@ async function submitBucketsAddMessageExtrinsic(
         })
         throw new Error(failureMessage)
       }
-      console.log(`CrustAdapter: Using CID as on-chain reference: ${cid}`)
+      console.log(`PinataAdapter: Using CID as on-chain reference: ${cid}`)
       const messageInput = await buildBucketsWriteMessageInput(cid, message, tag)
       tx = write(namespaceId, bucketId, messageInput) as SubmittableTx
       submittedCallName = "buckets.write"
@@ -1590,7 +1604,7 @@ async function buildBucketsWriteMessageInput(referenceCid: string, message: stri
     reference: utf8ToHexBytes(normalizedReferenceCid),
     tag: normalizedTag ? utf8ToHexBytes(normalizedTag) : null,
     metadataInput: {
-      description: utf8ToHexBytes(isDidCommKeySharing ? "didcomm key-sharing payload on crust ipfs" : "dashboard message on crust ipfs"),
+      description: utf8ToHexBytes(isDidCommKeySharing ? "didcomm key-sharing payload on pinata ipfs" : "dashboard message on pinata ipfs"),
       contentType: utf8ToHexBytes(contentType),
       contentHash: messageDigest,
       properties: {}
@@ -1609,6 +1623,72 @@ async function sha256HexUtf8(input: string): Promise<`0x${string}`> {
   const { createHash } = await import("node:crypto")
   const hash = createHash("sha256").update(bytes).digest()
   return bytesToHex(Uint8Array.from(hash.values()))
+}
+
+function resolvePinataConfig(override?: PinataConfig): PinataConfig {
+  const sanitizedOverride = sanitizePinataConfig(override)
+  if (sanitizedOverride) {
+    return sanitizedOverride
+  }
+
+  return {
+    jwt: resolveRuntimeOrEnvValue("pinataJwt", "NUXT_PUBLIC_PINATA_JWT"),
+    apiKey: resolveRuntimeOrEnvValue("pinataApiKey", "NUXT_PUBLIC_PINATA_API_KEY"),
+    apiSecret: resolveRuntimeOrEnvValue("pinataApiSecret", "NUXT_PUBLIC_PINATA_API_SECRET"),
+    publicGateway: resolveRuntimeOrEnvValue("pinataGateway", "NUXT_PUBLIC_PINATA_GATEWAY")
+  }
+}
+
+function resolveRuntimeOrEnvValue(runtimeKey: string, envKey: string): string | undefined {
+  const runtimePublic = (globalThis as unknown as {
+    __NUXT__?: { config?: { public?: Record<string, unknown> } }
+  }).__NUXT__?.config?.public
+
+  const runtimeValue = runtimePublic?.[runtimeKey]
+  if (typeof runtimeValue === "string" && runtimeValue.trim()) {
+    return runtimeValue.trim()
+  }
+
+  const runtimeEnvValue = runtimePublic?.[envKey]
+  if (typeof runtimeEnvValue === "string" && runtimeEnvValue.trim()) {
+    return runtimeEnvValue.trim()
+  }
+
+  const processEnv = (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }).process?.env
+  const fromProcess = processEnv?.[envKey]
+  if (fromProcess && fromProcess.trim()) {
+    return fromProcess.trim()
+  }
+
+  const importMetaEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env
+  const fromImportMeta = importMetaEnv?.[envKey]
+  if (fromImportMeta && fromImportMeta.trim()) {
+    return fromImportMeta.trim()
+  }
+
+  return undefined
+}
+
+function sanitizePinataConfig(config?: PinataConfig): PinataConfig | undefined {
+  if (!config) {
+    return undefined
+  }
+
+  const sanitized: PinataConfig = {}
+  if (typeof config.jwt === "string" && config.jwt.trim()) {
+    sanitized.jwt = config.jwt.trim()
+  }
+  if (typeof config.apiKey === "string" && config.apiKey.trim()) {
+    sanitized.apiKey = config.apiKey.trim()
+  }
+  if (typeof config.apiSecret === "string" && config.apiSecret.trim()) {
+    sanitized.apiSecret = config.apiSecret.trim()
+  }
+  if (typeof config.publicGateway === "string" && config.publicGateway.trim()) {
+    sanitized.publicGateway = config.publicGateway.trim()
+  }
+
+  return Object.keys(sanitized).length ? sanitized : undefined
 }
 
 function normalizeCodecValue(value: unknown): unknown {

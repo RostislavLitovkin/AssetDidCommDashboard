@@ -16,8 +16,31 @@ const runtimeConfig = useRuntimeConfig()
 const session = useSessionStore()
 const operations = useOperationsStore()
 const { formatAddress, addressesEqual } = useAddress()
+
+const asOptionalString = (value: unknown): string | undefined => {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined
+}
+
 const didCommRepository = new DidCommRepository(
-  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string }
+  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string },
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  {
+    jwt: asOptionalString(runtimeConfig.public.pinataJwt),
+    apiKey: asOptionalString(runtimeConfig.public.pinataApiKey),
+    apiSecret: asOptionalString(runtimeConfig.public.pinataApiSecret),
+    publicGateway: asOptionalString(runtimeConfig.public.pinataGateway)
+  }
 )
 
 type DeliveryState = "sending" | "sent" | "failed"

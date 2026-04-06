@@ -17,7 +17,11 @@ export default defineNuxtConfig({
     public: {
       xcavateWsEndpoint:
         process.env.NUXT_PUBLIC_XCAVATE_WS_ENDPOINT ||
-        "wss://xcavate-paseo.api.onfinality.io/public-ws"
+        "wss://xcavate-paseo.api.onfinality.io/public-ws",
+      pinataJwt: process.env.NUXT_PUBLIC_PINATA_JWT || "",
+      pinataApiKey: process.env.NUXT_PUBLIC_PINATA_API_KEY || "",
+      pinataApiSecret: process.env.NUXT_PUBLIC_PINATA_API_SECRET || "",
+      pinataGateway: process.env.NUXT_PUBLIC_PINATA_GATEWAY || "https://gateway.pinata.cloud/ipfs"
     }
   },
   typescript: {
