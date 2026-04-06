@@ -6,6 +6,7 @@ export interface StorageAdapter {
 interface PinataAdapterOptions {
   uploadEndpoint?: string
   publicGateway?: string
+  network?: "public" | "private"
   jwt?: string
   apiKey?: string
   apiSecret?: string
@@ -22,6 +23,7 @@ export class PinataStorageAdapter implements StorageAdapter {
     this.options = {
       uploadEndpoint: options?.uploadEndpoint ?? "https://uploads.pinata.cloud/v3/files",
       publicGateway: options?.publicGateway ?? "https://gateway.pinata.cloud/ipfs",
+      network: options?.network ?? "public",
       jwt: options?.jwt?.trim(),
       apiKey: options?.apiKey?.trim(),
       apiSecret: options?.apiSecret?.trim()
@@ -44,6 +46,8 @@ export class PinataStorageAdapter implements StorageAdapter {
     const blob = new Blob([normalizedBuffer])
     const formData = new FormData()
     formData.append("file", blob, "assetdidcomm-message.jwe")
+    // Explicitly set public network so the CID is retrievable by anyone with the CID.
+    formData.append("network", this.options.network)
 
     const response = await fetch(this.options.uploadEndpoint, {
       method: "POST",

@@ -59,6 +59,12 @@ interface ChatMessage {
   createdAt: Date
   outgoing: boolean
   senderLabel: string
+  description?: string
+  messageType?: string
+  contentType?: string
+  tag?: string
+  reference?: string
+  payloadError?: string
   deliveryState?: DeliveryState
 }
 
@@ -99,6 +105,8 @@ const sendText = ref("")
 const sendError = ref("")
 const sending = ref(false)
 const pendingMessages = ref<PendingChatMessage[]>([])
+const messagePayloadById = ref<Record<string, string>>({})
+const messagePayloadErrorById = ref<Record<string, string>>({})
 const chatViewport = ref<HTMLElement | null>(null)
 const bucketAdmins = ref<string[]>([])
 const bucketContributors = ref<string[]>([])
@@ -159,7 +167,9 @@ async function loadMessages() {
   messagesLoading.value = true
 
   try {
-    messages.value = await didCommRepository.fetchMessages(bucketId.value)
+    const loadedMessages = await didCommRepository.fetchMessages(bucketId.value)
+    messages.value = loadedMessages
+    await hydrateMessagePayloads(loadedMessages)
   } catch (error) {
     messagesError.value = error instanceof Error ? error.message : "Unable to load messages"
   } finally {
@@ -699,6 +709,144 @@ function firstString(record: Record<string, unknown> | undefined, fields: string
   return undefined
 }
 
+function readPath(record: Record<string, unknown> | undefined, path: string): unknown {
+  if (!record) {
+    return undefined
+  }
+
+  const segments = path.split(".").filter((segment) => segment.trim().length > 0)
+  let current: unknown = record
+
+  for (const segment of segments) {
+    const currentRecord = toRecord(current)
+    if (!currentRecord) {
+      return undefined
+    }
+
+    current = currentRecord[segment]
+  }
+
+  return current
+}
+
+function firstStringAtPaths(record: Record<string, unknown> | undefined, paths: string[]): string | undefined {
+  for (const path of paths) {
+    const candidate = textValue(readPath(record, path))
+    if (candidate && candidate.trim()) {
+      return candidate.trim()
+    }
+  }
+
+  return undefined
+}
+
+function tryParseJsonRecord(value: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(value)
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {
+  }
+
+  return undefined
+}
+
+function summarizeJsonPayload(payload: string): string | undefined {
+  const parsed = tryParseJsonRecord(payload)
+  if (!parsed) {
+    return undefined
+  }
+
+  const directText =
+    firstString(parsed, ["message", "content", "payload", "body", "text", "summary"]) ??
+    firstStringAtPaths(parsed, ["data.message", "data.content", "data.body"])
+
+  if (directText) {
+    return directText
+  }
+
+  return JSON.stringify(parsed, null, 2)
+}
+
+function resolveMessageReference(message: BucketMessage): string | undefined {
+  const rawRecord = toRecord(message.raw)
+
+  return (
+    firstString(rawRecord, ["reference", "cid", "ipfsCid", "messageCid"]) ??
+    firstStringAtPaths(rawRecord, [
+      "metadata.reference",
+      "metadata.cid",
+      "metadataInput.reference",
+      "value.reference",
+      "messageInput.reference"
+    ])
+  )
+}
+
+function resolveGatewayUrl(): string {
+  const configured = asOptionalString(runtimeConfig.public.pinataGateway)
+  const fallback = "https://gateway.pinata.cloud/ipfs"
+  const base = configured ?? fallback
+  return base.replace(/\/+$/, "")
+}
+
+async function fetchPayloadFromReference(reference: string): Promise<string> {
+  const response = await fetch(`${resolveGatewayUrl()}/${reference}`)
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`)
+  }
+
+  return await response.text()
+}
+
+async function hydrateMessagePayloads(entries: BucketMessage[]): Promise<void> {
+  const nextPayloadById: Record<string, string> = {}
+  const nextErrorById: Record<string, string> = {}
+
+  await Promise.all(
+    entries.map(async (entry) => {
+      const reference = resolveMessageReference(entry)
+      if (!reference) {
+        return
+      }
+
+      const cachedPayload = messagePayloadById.value[entry.id]
+      if (cachedPayload) {
+        nextPayloadById[entry.id] = cachedPayload
+        return
+      }
+
+      try {
+        const payload = await fetchPayloadFromReference(reference)
+        nextPayloadById[entry.id] = payload
+      } catch (error) {
+        nextErrorById[entry.id] = error instanceof Error ? error.message : "Unable to resolve message payload"
+      }
+    })
+  )
+
+  messagePayloadById.value = nextPayloadById
+  messagePayloadErrorById.value = nextErrorById
+}
+
+function resolveMessageType(contentType: string | undefined, tag: string | undefined, payload: string | undefined): string | undefined {
+  if (contentType) {
+    return contentType
+  }
+
+  if (tag) {
+    return tag
+  }
+
+  if (!payload) {
+    return undefined
+  }
+
+  const parsed = tryParseJsonRecord(payload)
+  return firstString(parsed, ["type", "messageType"])
+}
+
 function toDate(value: unknown): Date | undefined {
   if (!value) {
     return undefined
@@ -812,8 +960,22 @@ function extractBucketMetadataEntries(bucketRecord: BucketRecord | null): Metada
 
 function toChatMessage(message: BucketMessage): ChatMessage {
   const rawRecord = toRecord(message.raw)
-  const body =
-    firstString(rawRecord, ["message", "content", "payload", "body", "text", "summary"]) ?? message.summary
+  const metadataRecord =
+    toRecord(rawRecord?.metadataInput) ??
+    toRecord(rawRecord?.metadata) ??
+    toRecord(rawRecord?.messageMetadata)
+  const reference = resolveMessageReference(message)
+  const payload = messagePayloadById.value[message.id]
+  const payloadError = messagePayloadErrorById.value[message.id]
+  const payloadBody = payload ? summarizeJsonPayload(payload) ?? payload : undefined
+  const body = payloadBody ?? firstString(rawRecord, ["message", "content", "payload", "body", "text", "summary"]) ?? message.summary
+  const description =
+    firstString(metadataRecord, ["description", "summary", "title"]) ??
+    firstString(rawRecord, ["description"])
+  const contentType =
+    firstString(metadataRecord, ["contentType", "mimeType", "type"]) ??
+    firstString(rawRecord, ["contentType", "mimeType"])
+  const tag = firstString(rawRecord, ["tag", "messageTag"])
   const sender = firstString(rawRecord, ["sender", "from", "author", "owner", "account"])
   const createdAt =
     toDate(rawRecord?.createdAt) ??
@@ -829,7 +991,13 @@ function toChatMessage(message: BucketMessage): ChatMessage {
     body,
     createdAt,
     outgoing,
-    senderLabel: outgoing ? "You" : sender ? formatAddress(sender) : "Unknown"
+    senderLabel: outgoing ? "You" : sender ? formatAddress(sender) : "Unknown",
+    description,
+    contentType,
+    tag,
+    reference,
+    messageType: resolveMessageType(contentType, tag, payload),
+    payloadError
   }
 }
 
@@ -1132,6 +1300,19 @@ onMounted(async () => {
         >
           <article class="chat-bubble" :class="message.outgoing ? 'chat-bubble-outgoing' : 'chat-bubble-incoming'">
             <p class="chat-text">{{ message.body }}</p>
+            <p v-if="message.description" class="chat-description">{{ message.description }}</p>
+            <div
+              v-if="message.messageType || message.contentType || message.tag || message.reference || message.payloadError"
+              class="chat-details"
+            >
+              <span v-if="message.messageType" class="chat-detail-chip">Type: {{ message.messageType }}</span>
+              <span v-if="message.contentType" class="chat-detail-chip">Content-Type: {{ message.contentType }}</span>
+              <span v-if="message.tag" class="chat-detail-chip">Tag: {{ message.tag }}</span>
+              <span v-if="message.reference" class="chat-detail-chip">Ref: {{ message.reference }}</span>
+              <span v-if="message.payloadError" class="chat-detail-chip chat-detail-chip-error">
+                Payload unavailable: {{ message.payloadError }}
+              </span>
+            </div>
             <footer class="chat-meta">
               <span>{{ message.senderLabel }}</span>
               <span v-if="formatTimestamp(message.createdAt)">{{ formatTimestamp(message.createdAt) }}</span>
@@ -1224,6 +1405,39 @@ onMounted(async () => {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.chat-description {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-details {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chat-detail-chip {
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.65);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-detail-chip-error {
+  color: var(--status-error);
+  border-color: color-mix(in srgb, var(--status-error) 55%, var(--border-default));
 }
 
 .chat-meta {
