@@ -12,6 +12,7 @@ export const useOperationsStore = defineStore("operations", {
   actions: {
     add(category: OperationCategory, targetRef: string, status: OperationStatus, message: string): void {
       const notifications = useNotificationsStore()
+      const notificationTitle = category === "bucket_write" ? targetRef : `${category} · ${targetRef}`
 
       this.entries.unshift({
         entryId: entryId(),
@@ -22,7 +23,7 @@ export const useOperationsStore = defineStore("operations", {
         timestamp: new Date().toISOString()
       })
 
-      notifications.push(`${category} · ${targetRef}`, message, status)
+      notifications.push(notificationTitle, message, status)
     }
   }
 })

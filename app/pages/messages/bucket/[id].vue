@@ -4,7 +4,7 @@ import LoadingBar from "../../../components/common/LoadingBar.vue"
 import { useAddress } from "../../../composables/useAddress"
 import { Trash2 } from "lucide-vue-next"
 import { hexToU8a } from "@polkadot/util"
-import { base64url } from "jose"
+import * as jose from "jose"
 import { computed, nextTick, onMounted, ref, watch } from "vue"
 import { useNuxtApp, useRoute, useRuntimeConfig } from "nuxt/app"
 import { useOperationsStore } from "../../../stores/operations"
@@ -44,6 +44,16 @@ interface MetadataEntry {
   value: string
 }
 
+interface WasmCompatibleSecretKey {
+  kty: string
+  crv: string
+  x: string
+  d: string
+  y: string
+  use: string
+  kid: string
+}
+
 const bucketId = computed(() => {
   const rawId = route.params.id
   const value = Array.isArray(rawId) ? (rawId[0] ?? "") : (rawId ?? "")
@@ -73,7 +83,37 @@ const removingAdminAddress = ref("")
 const removingContributorAddress = ref("")
 const loadingContributorKeys = ref(false)
 const contributorX25519Keys = ref<Record<string, string>>({})
+const currentBucketCall = ref("buckets.write")
+const generatingEncryptionKey = ref(false)
+const encryptionKeyError = ref("")
+const encryptionKeySuccess = ref("")
+const latestGeneratedKeyId = ref("")
+const latestGeneratedPublicJwk = ref("")
 const bucketDisplayName = computed(() => bucket.value?.name || bucketId.value)
+const keySharingTag = "didcomm/key-sharing-v1"
+
+const connectedAdmin = computed(() => {
+  if (!session.accountAddress) {
+    return false
+  }
+
+  return bucketAdmins.value.some((adminAddress) => addressesEqual(adminAddress, session.accountAddress as string))
+})
+
+const contributorRecipients = computed(() => {
+  return bucketContributors.value.flatMap((address) => {
+    const x25519 = contributorX25519Keys.value[address]
+    if (!isValidX25519(x25519)) {
+      return []
+    }
+
+    return [{ address, x25519: x25519.trim() }]
+  })
+})
+
+const contributorsMissingEncryptionKey = computed(() => {
+  return Math.max(0, bucketContributors.value.length - contributorRecipients.value.length)
+})
 
 const bucketMetadata = computed<MetadataEntry[]>(() => extractBucketMetadataEntries(bucket.value))
 
@@ -149,6 +189,19 @@ function isHex32(value: string): boolean {
   return /^0x[0-9a-fA-F]{64}$/.test(value)
 }
 
+function isValidX25519(value: string | undefined): value is string {
+  if (typeof value !== "string") {
+    return false
+  }
+
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return false
+  }
+
+  return trimmed !== "Not found"
+}
+
 function normalizeX25519Value(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined
@@ -161,7 +214,7 @@ function normalizeX25519Value(value: unknown): string | undefined {
 
   // Some chains return x25519 as hex; convert to JWK x (base64url)
   if (isHex32(trimmed)) {
-    return base64url.encode(hexToU8a(trimmed))
+    return jose.base64url.encode(hexToU8a(trimmed))
   }
 
   // If already base64url (as in did.publicKeys.publicEncryptionKey.x25519), keep as-is
@@ -302,6 +355,7 @@ async function removeAdmin(address: string): Promise<void> {
   }
 
   removingAdminAddress.value = address
+  currentBucketCall.value = "buckets.removeAdmin"
 
   try {
     const result = await didCommRepository.removeBucketAdmin(
@@ -312,11 +366,11 @@ async function removeAdmin(address: string): Promise<void> {
       logExtrinsicUpdate
     )
 
-    operations.add("bucket_write", bucketId.value, "success", `Admin removed: ${result.txHash}`)
+    operations.add("bucket_write", result.method, "success", `Admin removed: ${result.txHash}`)
     await loadBucketMembers()
   } catch (error) {
     membersError.value = error instanceof Error ? error.message : "Unable to remove admin"
-    operations.add("bucket_write", `bucket:${bucketId.value}`, "error", membersError.value)
+    operations.add("bucket_write", currentBucketCall.value, "error", membersError.value)
   } finally {
     removingAdminAddress.value = ""
   }
@@ -337,6 +391,7 @@ async function removeContributor(address: string): Promise<void> {
   }
 
   removingContributorAddress.value = address
+  currentBucketCall.value = "buckets.removeContributor"
 
   try {
     const result = await didCommRepository.removeBucketContributor(
@@ -347,13 +402,227 @@ async function removeContributor(address: string): Promise<void> {
       logExtrinsicUpdate
     )
 
-    operations.add("bucket_write", bucketId.value, "success", `Contributor removed: ${result.txHash}`)
+    operations.add("bucket_write", result.method, "success", `Contributor removed: ${result.txHash}`)
     await loadBucketMembers()
   } catch (error) {
     membersError.value = error instanceof Error ? error.message : "Unable to remove contributor"
-    operations.add("bucket_write", `bucket:${bucketId.value}`, "error", membersError.value)
+    operations.add("bucket_write", currentBucketCall.value, "error", membersError.value)
   } finally {
     removingContributorAddress.value = ""
+  }
+}
+
+function randomNumericKeyId(): number {
+  return Math.floor(Math.random() * 1_000_000_000_000)
+}
+
+function toWasmCompatibleSecretKey(secretJwk: jose.JWK): WasmCompatibleSecretKey {
+  if (!secretJwk.kty || !secretJwk.crv || !secretJwk.x || !secretJwk.d || !secretJwk.use || !secretJwk.kid) {
+    throw new Error("The new secret JWK is missing required properties, including 'kid'.")
+  }
+
+  return {
+    kty: secretJwk.kty,
+    crv: secretJwk.crv,
+    x: secretJwk.x,
+    d: secretJwk.d,
+    y: "", // Workaround for rigid key-sharing consumers expecting y.
+    use: secretJwk.use,
+    kid: secretJwk.kid
+  }
+}
+
+function buildKeySharingMessage(secretJwk: jose.JWK, readerAddresses: string[]): string {
+  const adminAddress = session.accountAddress
+  if (!adminAddress) {
+    throw new Error("Admin wallet address is required")
+  }
+
+  const messageId =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `key-share-${Date.now()}-${Math.random().toString(16).slice(2)}`
+
+  return JSON.stringify({
+    id: messageId,
+    from: adminAddress,
+    to: readerAddresses,
+    keys: [toWasmCompatibleSecretKey(secretJwk)]
+  })
+}
+
+function buildRecipientJwks(bucketPublicJwk: jose.JWK): { recipientJwks: jose.JWK[]; readerAddresses: string[] } {
+  const readerAddresses = contributorRecipients.value.map((recipient) => recipient.address)
+
+  if (!readerAddresses.length) {
+    throw new Error("No valid contributor X25519 keys are available for key sharing")
+  }
+
+  const recipientJwks: jose.JWK[] = [bucketPublicJwk]
+  for (const recipient of contributorRecipients.value) {
+    recipientJwks.push({
+      kty: "OKP",
+      crv: "X25519",
+      x: recipient.x25519,
+      use: "enc",
+      kid: recipient.address
+    })
+  }
+
+  return { recipientJwks, readerAddresses }
+}
+
+async function encryptJweForMultipleRecipients(plaintextBytes: Uint8Array, recipientJwks: jose.JWK[]): Promise<jose.GeneralJWE> {
+  const encryptor = new jose.GeneralEncrypt(plaintextBytes).setProtectedHeader({
+    enc: "A256GCM",
+    typ: keySharingTag
+  })
+
+  for (const recipientJwk of recipientJwks) {
+    const recipientHeader: jose.JWEHeaderParameters = {
+      alg: "ECDH-ES+A256KW"
+    }
+    if (typeof recipientJwk.kid === "string" && recipientJwk.kid.trim()) {
+      recipientHeader.kid = recipientJwk.kid
+    }
+
+    encryptor.addRecipient(recipientJwk).setUnprotectedHeader(recipientHeader)
+  }
+
+  return await encryptor.encrypt()
+}
+
+async function generateAndShareEncryptionKey(): Promise<void> {
+  encryptionKeyError.value = ""
+  encryptionKeySuccess.value = ""
+
+  if (!session.accountAddress) {
+    encryptionKeyError.value = "Connect wallet before generating encryption keys"
+    return
+  }
+
+  if (!connectedAdmin.value) {
+    encryptionKeyError.value = "Only bucket admins can generate and distribute encryption keys"
+    return
+  }
+
+  if (loadingContributorKeys.value) {
+    encryptionKeyError.value = "Contributor X25519 keys are still loading"
+    return
+  }
+
+  const namespaceId = resolveNamespaceIdFromBucket(bucket.value)
+  if (!namespaceId) {
+    encryptionKeyError.value = "Namespace id is required to rotate bucket encryption keys"
+    return
+  }
+
+  generatingEncryptionKey.value = true
+  console.groupCollapsed(`[Bucket Key Rotation] bucket=${bucketId.value}`)
+
+  try {
+    console.log("--- [ADMIN] 4a. Generating Bucket Keys ---")
+    const { publicKey, privateKey } = await jose.generateKeyPair("ECDH-ES+A256KW", {
+      crv: "X25519",
+      extractable: true
+    })
+
+    const bucketPkJwk = await jose.exportJWK(publicKey)
+    const bucketSkJwk = await jose.exportJWK(privateKey)
+
+    const numericKeyId = randomNumericKeyId()
+    const keyId = numericKeyId.toString()
+
+    bucketPkJwk.use = "enc"
+    bucketSkJwk.use = "enc"
+    bucketPkJwk.kid = keyId
+    bucketSkJwk.kid = keyId
+
+    console.log("Generated bucketPkJwk:", bucketPkJwk)
+    console.log("Generated bucketSkJwk:", bucketSkJwk)
+
+    const bucketEncryptionKey = typeof bucketPkJwk.x === "string" ? bucketPkJwk.x.trim() : ""
+    if (!bucketEncryptionKey) {
+      throw new Error("Generated public key is missing JWK.x and cannot be used for on-chain key rotation")
+    }
+
+    console.log(`🔑 Bucket Public Key generated. keyId: ${numericKeyId}`)
+
+    currentBucketCall.value = "buckets.resumeWriting"
+    console.log("--- [ADMIN] 4b. Updating bucket encryption key on-chain (resumeWriting) ---")
+    const setKeyTxHash = await didCommRepository.setBucketPublicKey(
+      namespaceId,
+      bucketId.value,
+      bucketEncryptionKey,
+      session.accountAddress,
+      logExtrinsicUpdate
+    )
+    console.log(`✅ Bucket encryption key updated on-chain. Transaction Hash: ${setKeyTxHash}`)
+
+    let tagTxHash = ""
+    currentBucketCall.value = "buckets.createTag"
+    console.log(`--- [ADMIN] 4c. Creating Tag \"${keySharingTag}\" for Bucket ${bucketId.value} ---`)
+    try {
+      tagTxHash = await didCommRepository.createTag(bucketId.value, keySharingTag, session.accountAddress, logExtrinsicUpdate)
+      console.log(`✅ Tag created successfully. Transaction Hash: ${tagTxHash}`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to create key-sharing tag"
+      if (message.toLowerCase().includes("already")) {
+        console.warn(`⚠️ Tag likely already exists. Continuing. Details: ${message}`)
+      } else {
+        throw error
+      }
+    }
+
+    console.log("--- [ADMIN] 4d. Preparing recipients and encrypting key-sharing payload ---")
+    const { recipientJwks, readerAddresses } = buildRecipientJwks(bucketPkJwk)
+    console.log(`Using ${readerAddresses.length} contributor reader(s):`, readerAddresses)
+
+    const keySharingMessage = buildKeySharingMessage(bucketSkJwk, readerAddresses)
+    console.log("Constructed Key-Sharing Message:", JSON.parse(keySharingMessage) as unknown)
+
+    const plaintextBytes = new TextEncoder().encode(keySharingMessage)
+    const jweObject = await encryptJweForMultipleRecipients(plaintextBytes, recipientJwks)
+    const jweString = JSON.stringify(jweObject)
+    console.log(`Encrypted key-sharing JWE length: ${jweString.length}`)
+    console.log(`Encrypted key-sharing JWE: ${jweString}`)
+
+    const jweDigestBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(jweString))
+    const jweDigest = Array.from(new Uint8Array(jweDigestBuffer)).map((value) => value.toString(16).padStart(2, "0")).join("")
+    console.log(`Key-sharing JWE digest (sha256): 0x${jweDigest}`)
+    console.log("Submitting DIDComm key-sharing payload directly in buckets.write messageInput.reference")
+
+    console.log("--- [ADMIN] 4e. Submitting key-sharing payload to bucket messages ---")
+    currentBucketCall.value = "buckets.write"
+    const shareResult = await didCommRepository.createMessage(
+      bucketId.value,
+      jweString,
+      session.accountAddress,
+      logExtrinsicUpdate,
+      keySharingTag
+    )
+    console.log(`✅ Bucket secret key shared successfully. Transaction Hash: ${shareResult.txHash}`)
+
+    latestGeneratedKeyId.value = keyId
+    latestGeneratedPublicJwk.value = JSON.stringify(bucketPkJwk, null, 2)
+    encryptionKeySuccess.value = `New encryption key generated and shared. keyId=${keyId}`
+
+    operations.add(
+      "bucket_write",
+      "buckets.write",
+      "success",
+      `Bucket key rotated and shared. keyId=${keyId}, tx=${shareResult.txHash}`
+    )
+
+    await loadMessages()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to rotate bucket encryption key"
+    encryptionKeyError.value = message
+    operations.add("bucket_write", currentBucketCall.value, "error", message)
+    console.error("❌ Error rotating bucket key", error)
+  } finally {
+    generatingEncryptionKey.value = false
+    console.groupEnd()
   }
 }
 
@@ -565,7 +834,12 @@ function logExtrinsicUpdate(update: ExtrinsicUpdate): void {
     details.push(`block: ${update.blockHash}`)
   }
 
-  operations.add("bucket_write", `message:${update.stage}`, update.stage === "error" ? "error" : "info", details.join(" · "))
+  operations.add(
+    "bucket_write",
+    `${currentBucketCall.value}:${update.stage}`,
+    update.stage === "error" ? "error" : "info",
+    details.join(" · ")
+  )
 }
 
 async function sendMessage() {
@@ -593,6 +867,7 @@ async function sendMessage() {
 
   sendText.value = ""
   sending.value = true
+  currentBucketCall.value = "buckets.write"
 
   try {
     const result = await didCommRepository.createMessage(bucketId.value, payload, session.accountAddress, logExtrinsicUpdate)
@@ -601,7 +876,7 @@ async function sendMessage() {
       pending.deliveryState = "sent"
     }
 
-    operations.add("bucket_write", bucketId.value, "success", `Message submitted: ${result.txHash}`)
+    operations.add("bucket_write", result.method, "success", `Message submitted: ${result.txHash}`)
     await loadMessages()
     pendingMessages.value = pendingMessages.value.filter((entry) => entry.deliveryState === "failed")
   } catch (error) {
@@ -612,7 +887,7 @@ async function sendMessage() {
       pending.deliveryState = "failed"
     }
 
-    operations.add("bucket_write", bucketId.value, "error", message)
+    operations.add("bucket_write", currentBucketCall.value, "error", message)
     if (!sendText.value) {
       sendText.value = payload
     }
@@ -753,6 +1028,57 @@ onMounted(async () => {
       >
         No contributors found for this bucket.
       </p>
+    </section>
+
+    <section class="card stack" aria-live="polite">
+      <div class="row" style="justify-content: space-between; align-items: center">
+        <h3 style="margin: 0">Communication Encryption Key</h3>
+        <button
+          class="btn btn-primary"
+          type="button"
+          :disabled="
+            generatingEncryptionKey ||
+            !session.accountAddress ||
+            !connectedAdmin ||
+            loadingContributorKeys ||
+            !contributorRecipients.length
+          "
+          @click="generateAndShareEncryptionKey"
+        >
+          {{ generatingEncryptionKey ? "Generating..." : "Generate & Share New Key" }}
+        </button>
+      </div>
+
+      <p class="muted" style="margin: 0">
+        Generates a fresh X25519 encryption keypair, stores the public key ID on-chain, ensures the key-sharing tag exists,
+        then encrypts and shares the new secret key for contributors using their loaded X25519 keys.
+      </p>
+
+      <ul class="key-rotation-checks">
+        <li>Connected admin: {{ connectedAdmin ? "Yes" : "No" }}</li>
+        <li>Contributors with X25519: {{ contributorRecipients.length }} / {{ bucketContributors.length }}</li>
+        <li v-if="contributorsMissingEncryptionKey">Missing contributor keys: {{ contributorsMissingEncryptionKey }}</li>
+        <li v-if="latestGeneratedKeyId">Last generated key ID: {{ latestGeneratedKeyId }}</li>
+      </ul>
+
+      <p v-if="!session.accountAddress" class="muted" style="margin: 0">
+        Connect wallet on the dashboard first to rotate and share bucket encryption keys.
+      </p>
+      <p v-else-if="!connectedAdmin" class="muted" style="margin: 0">
+        Only bucket admins can generate and distribute encryption keys.
+      </p>
+
+      <p v-if="encryptionKeyError" style="margin: 0; color: var(--status-error)">
+        {{ encryptionKeyError }}
+      </p>
+      <p v-if="encryptionKeySuccess" class="status-success" style="margin: 0">
+        {{ encryptionKeySuccess }}
+      </p>
+
+      <div v-if="latestGeneratedPublicJwk" class="key-preview-wrap">
+        <p class="muted" style="margin: 0">Latest generated bucket public JWK</p>
+        <pre class="key-preview">{{ latestGeneratedPublicJwk }}</pre>
+      </div>
     </section>
 
     <section class="card stack chat-shell" aria-live="polite">
@@ -954,6 +1280,37 @@ onMounted(async () => {
   gap: 6px;
   color: var(--status-error);
   border-color: color-mix(in srgb, var(--status-error) 50%, var(--border-default));
+}
+
+.key-rotation-checks {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  display: grid;
+  gap: 2px;
+}
+
+.status-success {
+  color: var(--status-success, #2f7d32);
+}
+
+.key-preview-wrap {
+  display: grid;
+  gap: 6px;
+}
+
+.key-preview {
+  margin: 0;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 8px;
+  max-height: 180px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .chat-composer {

@@ -197,7 +197,7 @@ describe("DidCommRepository", () => {
     await expect(repository.createBucket("ns-7", "   ", "5F3sa2TJ...owner")).rejects.toThrow("Bucket name is required")
   })
 
-  it("submits buckets.addMessage extrinsic", async () => {
+  it("submits buckets.write extrinsic", async () => {
     const repository = new DidCommRepository(
       {
         rpc: async () => [] as unknown[],
@@ -219,7 +219,7 @@ describe("DidCommRepository", () => {
 
     const result = await repository.createMessage("bucket-7", "hello world", "5F3sa2TJ...owner")
 
-    expect(result.method).toBe("buckets.addMessage")
+    expect(result.method).toBe("buckets.write")
     expect(result.txHash).toBe("0xmsg789")
   })
 
@@ -251,7 +251,7 @@ describe("DidCommRepository", () => {
     )
 
     await expect(repository.createMessage("bucket-7", "hello world")).rejects.toThrow(
-      "Wallet must be connected to submit buckets.addMessage extrinsic"
+      "Wallet must be connected to submit buckets.write extrinsic"
     )
   })
 

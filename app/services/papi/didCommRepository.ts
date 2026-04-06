@@ -1,4 +1,5 @@
 import { PapiClient } from "./client"
+import { CrustStorageAdapter, type Signer as CrustSigner } from "../storage/crustStorageAdapter"
 
 type PapiRpcClient = {
   rpc(method: string, params?: unknown[]): Promise<unknown>
@@ -36,7 +37,8 @@ type MessageExtrinsicSubmitter = (
   bucketId: string,
   message: string,
   ownerAddress: string,
-  onUpdate?: ExtrinsicUpdateHandler
+  onUpdate?: ExtrinsicUpdateHandler,
+  tag?: string
 ) => Promise<string>
 
 type BucketMemberExtrinsicSubmitter = (
@@ -44,6 +46,23 @@ type BucketMemberExtrinsicSubmitter = (
   namespaceId: string,
   bucketId: string,
   memberAddress: string,
+  ownerAddress: string,
+  onUpdate?: ExtrinsicUpdateHandler
+) => Promise<string>
+
+type BucketPublicKeyExtrinsicSubmitter = (
+  endpoint: string,
+  namespaceId: string,
+  bucketId: string,
+  newEncryptionKey: string,
+  ownerAddress: string,
+  onUpdate?: ExtrinsicUpdateHandler
+) => Promise<string>
+
+type BucketTagExtrinsicSubmitter = (
+  endpoint: string,
+  bucketId: string,
+  tag: string,
   ownerAddress: string,
   onUpdate?: ExtrinsicUpdateHandler
 ) => Promise<string>
@@ -59,6 +78,11 @@ type SubmittableTx = {
     options: { signer: unknown; tip?: string },
     callback: (result: Record<string, unknown>) => void
   ): Promise<(() => void) | { toHex: () => string } | string>
+}
+
+type ExtrinsicWithEncoding = {
+  method?: { toHex?: () => string }
+  toHex?: () => string
 }
 
 export interface BucketNamespace {
@@ -113,6 +137,8 @@ export class DidCommRepository {
   private submitAddContributorExtrinsic: BucketMemberExtrinsicSubmitter
   private submitRemoveAdminExtrinsic: BucketMemberExtrinsicSubmitter
   private submitRemoveContributorExtrinsic: BucketMemberExtrinsicSubmitter
+  private submitSetBucketPublicKeyExtrinsic: BucketPublicKeyExtrinsicSubmitter
+  private submitCreateTagExtrinsic: BucketTagExtrinsicSubmitter
 
   constructor(
     client: PapiRpcClient = new PapiClient(),
@@ -125,7 +151,9 @@ export class DidCommRepository {
     submitAddAdminExtrinsic: BucketMemberExtrinsicSubmitter = submitBucketsAddAdminExtrinsic,
     submitAddContributorExtrinsic: BucketMemberExtrinsicSubmitter = submitBucketsAddContributorExtrinsic,
     submitRemoveAdminExtrinsic: BucketMemberExtrinsicSubmitter = submitBucketsRemoveAdminExtrinsic,
-    submitRemoveContributorExtrinsic: BucketMemberExtrinsicSubmitter = submitBucketsRemoveContributorExtrinsic
+    submitRemoveContributorExtrinsic: BucketMemberExtrinsicSubmitter = submitBucketsRemoveContributorExtrinsic,
+    submitSetBucketPublicKeyExtrinsic: BucketPublicKeyExtrinsicSubmitter = submitBucketsSetPublicKeyExtrinsic,
+    submitCreateTagExtrinsic: BucketTagExtrinsicSubmitter = submitBucketsCreateTagExtrinsic
   ) {
     this.client = client
     this.submitExtrinsic = submitExtrinsic
@@ -138,6 +166,8 @@ export class DidCommRepository {
     this.submitAddContributorExtrinsic = submitAddContributorExtrinsic
     this.submitRemoveAdminExtrinsic = submitRemoveAdminExtrinsic
     this.submitRemoveContributorExtrinsic = submitRemoveContributorExtrinsic
+    this.submitSetBucketPublicKeyExtrinsic = submitSetBucketPublicKeyExtrinsic
+    this.submitCreateTagExtrinsic = submitCreateTagExtrinsic
   }
 
   async fetchNamespaces(): Promise<BucketNamespace[]> {
@@ -373,12 +403,70 @@ export class DidCommRepository {
     }
   }
 
-  async setBucketPublicKey(_namespaceId: string, _bucketId: string, _numericKeyId: string): Promise<string> {
-    return `tx-${Date.now()}-set-key`
+  async setBucketPublicKey(
+    namespaceId: string,
+    bucketId: string,
+    newEncryptionKey: string,
+    ownerAddress?: string,
+    onUpdate?: ExtrinsicUpdateHandler
+  ): Promise<string> {
+    const trimmedNamespaceId = namespaceId.trim()
+    if (!trimmedNamespaceId) {
+      throw new Error("Namespace id is required")
+    }
+
+    const trimmedBucketId = bucketId.trim()
+    if (!trimmedBucketId) {
+      throw new Error("Bucket id is required")
+    }
+
+    const trimmedNewEncryptionKey = newEncryptionKey.trim()
+    if (!trimmedNewEncryptionKey) {
+      throw new Error("New encryption key is required")
+    }
+
+    const normalizedEncryptionKey = normalizeFixed32ByteKey(trimmedNewEncryptionKey)
+
+    if (!ownerAddress) {
+      throw new Error("Wallet must be connected to submit buckets.resumeWriting extrinsic")
+    }
+
+    const endpoint = this.client.getEndpoint?.()
+    if (!endpoint) {
+      throw new Error("Unable to resolve chain endpoint for extrinsic submission")
+    }
+
+    return await this.submitSetBucketPublicKeyExtrinsic(
+      endpoint,
+      trimmedNamespaceId,
+      trimmedBucketId,
+      normalizedEncryptionKey,
+      ownerAddress,
+      onUpdate
+    )
   }
 
-  async createTag(_bucketId: string, _tag: string): Promise<string> {
-    return `tx-${Date.now()}-create-tag`
+  async createTag(bucketId: string, tag: string, ownerAddress?: string, onUpdate?: ExtrinsicUpdateHandler): Promise<string> {
+    const trimmedBucketId = bucketId.trim()
+    if (!trimmedBucketId) {
+      throw new Error("Bucket id is required")
+    }
+
+    const trimmedTag = tag.trim()
+    if (!trimmedTag) {
+      throw new Error("Tag is required")
+    }
+
+    if (!ownerAddress) {
+      throw new Error("Wallet must be connected to submit buckets.createTag extrinsic")
+    }
+
+    const endpoint = this.client.getEndpoint?.()
+    if (!endpoint) {
+      throw new Error("Unable to resolve chain endpoint for extrinsic submission")
+    }
+
+    return await this.submitCreateTagExtrinsic(endpoint, trimmedBucketId, trimmedTag, ownerAddress, onUpdate)
   }
 
   async createNamespace(
@@ -443,7 +531,8 @@ export class DidCommRepository {
     bucketId: string,
     message: string,
     ownerAddress?: string,
-    onUpdate?: ExtrinsicUpdateHandler
+    onUpdate?: ExtrinsicUpdateHandler,
+    tag?: string
   ): Promise<CreateMessageResult> {
     const trimmedBucketId = bucketId.trim()
     if (!trimmedBucketId) {
@@ -455,8 +544,10 @@ export class DidCommRepository {
       throw new Error("Message is required")
     }
 
+    const trimmedTag = typeof tag === "string" ? tag.trim() : ""
+
     if (!ownerAddress) {
-      throw new Error("Wallet must be connected to submit buckets.addMessage extrinsic")
+      throw new Error("Wallet must be connected to submit buckets.write extrinsic")
     }
 
     const endpoint = this.client.getEndpoint?.()
@@ -464,10 +555,17 @@ export class DidCommRepository {
       throw new Error("Unable to resolve chain endpoint for extrinsic submission")
     }
 
-    const txHash = await this.submitMessageExtrinsic(endpoint, trimmedBucketId, trimmedMessage, ownerAddress, onUpdate)
+    const txHash = await this.submitMessageExtrinsic(
+      endpoint,
+      trimmedBucketId,
+      trimmedMessage,
+      ownerAddress,
+      onUpdate,
+      trimmedTag || undefined
+    )
     return {
       txHash,
-      method: "buckets.addMessage"
+      method: "buckets.write"
     }
   }
 
@@ -684,6 +782,7 @@ async function submitBucketsCreateNamespaceExtrinsic(
     }
 
     const tx = createNamespace(metadataInput) as SubmittableTx
+    logEncodedCallBytes("buckets.createNamespace", tx)
 
     const attemptTips = ["0", "1000000", "2000000"]
     let lastError: Error | null = null
@@ -747,6 +846,7 @@ async function submitBucketsCreateBucketExtrinsic(
     }
 
     const tx = createBucket(namespaceId, metadataInput) as SubmittableTx
+    logEncodedCallBytes("buckets.createBucket", tx)
 
     const attemptTips = ["0", "1000000", "2000000"]
     let lastError: Error | null = null
@@ -784,6 +884,91 @@ async function submitBucketsAddMessageExtrinsic(
   bucketId: string,
   message: string,
   ownerAddress: string,
+  onUpdate?: ExtrinsicUpdateHandler,
+  tag?: string
+): Promise<string> {
+  const [{ ApiPromise, WsProvider }, { web3FromAddress }] = await Promise.all([
+    import("@polkadot/api"),
+    import("@polkadot/extension-dapp")
+  ])
+
+  const provider = new WsProvider(endpoint)
+  const api = await ApiPromise.create({ provider })
+
+  try {
+    const buckets = (api.tx as Record<string, unknown>).buckets as Record<string, unknown> | undefined
+    const write = resolveBucketsArbitraryTxMethod(buckets, ["write"])
+    const addMessage = resolveBucketsArbitraryTxMethod(buckets, ["addMessage"])
+
+    if (!write && !addMessage) {
+      throw new Error("Neither buckets.write nor buckets.addMessage extrinsic is available on this chain")
+    }
+
+    const injector = await web3FromAddress(ownerAddress)
+    let tx: SubmittableTx
+    let submittedCallName = "buckets.addMessage"
+    if (write) {
+      const namespaceId = await resolveNamespaceIdForBucketWrite(api, bucketId)
+      const storageAdapter = new CrustStorageAdapter(ownerAddress, injector.signer as CrustSigner)
+      console.log("CrustAdapter: Uploading message reference content to IPFS before buckets.write...")
+      let cid = ""
+      try {
+        cid = await storageAdapter.upload(message)
+      } catch (error) {
+        const details = error instanceof Error ? error.message : "Unknown upload error"
+        const failureMessage = `IPFS upload failed; aborting buckets.write submission. ${details}`
+        onUpdate?.({
+          stage: "error",
+          message: failureMessage
+        })
+        throw new Error(failureMessage)
+      }
+      console.log(`CrustAdapter: Using CID as on-chain reference: ${cid}`)
+      const messageInput = await buildBucketsWriteMessageInput(cid, message, tag)
+      tx = write(namespaceId, bucketId, messageInput) as SubmittableTx
+      submittedCallName = "buckets.write"
+    } else {
+      tx = addMessage!(bucketId, utf8ToHexBytes(message)) as SubmittableTx
+    }
+    logEncodedCallBytes(submittedCallName, tx)
+
+    const attemptTips = ["0", "1000000", "2000000"]
+    let lastError: Error | null = null
+
+    for (let attempt = 0; attempt < attemptTips.length; attempt += 1) {
+      const tip = attemptTips[attempt]!
+
+      try {
+        if (attempt > 0) {
+          onUpdate?.({
+            stage: "submitted",
+            message: `Retrying extrinsic with higher priority fee (tip=${tip})`
+          })
+        }
+
+        return await submitWithTip(tx, ownerAddress, injector.signer, tip, onUpdate, api)
+      } catch (error) {
+        const normalized = error instanceof Error ? error : new Error("Extrinsic submission failed")
+        lastError = normalized
+
+        if (!isLowPriorityTransactionError(normalized) || attempt === attemptTips.length - 1) {
+          throw normalized
+        }
+      }
+    }
+
+    throw lastError ?? new Error("Extrinsic submission failed")
+  } finally {
+    await api.disconnect()
+  }
+}
+
+async function submitBucketsSetPublicKeyExtrinsic(
+  endpoint: string,
+  namespaceId: string,
+  bucketId: string,
+  newEncryptionKey: string,
+  ownerAddress: string,
   onUpdate?: ExtrinsicUpdateHandler
 ): Promise<string> {
   const [{ ApiPromise, WsProvider }, { web3FromAddress }] = await Promise.all([
@@ -796,14 +981,72 @@ async function submitBucketsAddMessageExtrinsic(
 
   try {
     const buckets = (api.tx as Record<string, unknown>).buckets as Record<string, unknown> | undefined
-    const addMessage = buckets?.addMessage as ((bucket: unknown, payload: unknown) => unknown) | undefined
-
-    if (!addMessage) {
-      throw new Error("buckets.addMessage extrinsic is not available on this chain")
+    const resumeWriting = resolveBucketsArbitraryTxMethod(buckets, ["resumeWriting"])
+    if (!resumeWriting) {
+      throw new Error("buckets.resumeWriting extrinsic is not available on this chain")
     }
 
     const injector = await web3FromAddress(ownerAddress)
-    const tx = addMessage(bucketId, utf8ToHexBytes(message)) as SubmittableTx
+    const tx = resumeWriting(namespaceId, bucketId, newEncryptionKey) as SubmittableTx
+    logEncodedCallBytes("buckets.resumeWriting", tx)
+
+    const attemptTips = ["0", "1000000", "2000000"]
+    let lastError: Error | null = null
+
+    for (let attempt = 0; attempt < attemptTips.length; attempt += 1) {
+      const tip = attemptTips[attempt]!
+
+      try {
+        if (attempt > 0) {
+          onUpdate?.({
+            stage: "submitted",
+            message: `Retrying extrinsic with higher priority fee (tip=${tip})`
+          })
+        }
+
+        return await submitWithTip(tx, ownerAddress, injector.signer, tip, onUpdate, api)
+      } catch (error) {
+        const normalized = error instanceof Error ? error : new Error("Extrinsic submission failed")
+        lastError = normalized
+
+        if (!isLowPriorityTransactionError(normalized) || attempt === attemptTips.length - 1) {
+          throw normalized
+        }
+      }
+    }
+
+    throw lastError ?? new Error("Extrinsic submission failed")
+  } finally {
+    await api.disconnect()
+  }
+}
+
+async function submitBucketsCreateTagExtrinsic(
+  endpoint: string,
+  bucketId: string,
+  tag: string,
+  ownerAddress: string,
+  onUpdate?: ExtrinsicUpdateHandler
+): Promise<string> {
+  const [{ ApiPromise, WsProvider }, { web3FromAddress }] = await Promise.all([
+    import("@polkadot/api"),
+    import("@polkadot/extension-dapp")
+  ])
+
+  const provider = new WsProvider(endpoint)
+  const api = await ApiPromise.create({ provider })
+
+  try {
+    const buckets = (api.tx as Record<string, unknown>).buckets as Record<string, unknown> | undefined
+    const createTag = resolveBucketsArbitraryTxMethod(buckets, ["createTag", "addTag"])
+
+    if (!createTag) {
+      throw new Error("buckets.createTag extrinsic is not available on this chain")
+    }
+
+    const injector = await web3FromAddress(ownerAddress)
+    const tx = createTag(bucketId, utf8ToHexBytes(tag)) as SubmittableTx
+    logEncodedCallBytes("buckets.createTag", tx)
 
     const attemptTips = ["0", "1000000", "2000000"]
     let lastError: Error | null = null
@@ -944,6 +1187,7 @@ async function submitBucketsAddMemberExtrinsic(
 
     const injector = await web3FromAddress(ownerAddress)
     const tx = addMember(namespaceId, bucketId, memberAddress) as SubmittableTx
+    logEncodedCallBytes(fallbackMethodLabel, tx)
 
     const attemptTips = ["0", "1000000", "2000000"]
     let lastError: Error | null = null
@@ -980,6 +1224,14 @@ function resolveBucketsTxMethod(
   buckets: Record<string, unknown> | undefined,
   candidateMethodNames: string[]
 ): ((namespaceId: unknown, bucketId: unknown, memberAddress: unknown) => unknown) | undefined {
+  const method = resolveBucketsArbitraryTxMethod(buckets, candidateMethodNames)
+  return method as ((namespaceId: unknown, bucketId: unknown, memberAddress: unknown) => unknown) | undefined
+}
+
+function resolveBucketsArbitraryTxMethod(
+  buckets: Record<string, unknown> | undefined,
+  candidateMethodNames: string[]
+): ((...args: unknown[]) => unknown) | undefined {
   if (!buckets) {
     return undefined
   }
@@ -987,7 +1239,7 @@ function resolveBucketsTxMethod(
   for (const methodName of candidateMethodNames) {
     const candidate = buckets[methodName]
     if (typeof candidate === "function") {
-      return candidate as (namespaceId: unknown, bucketId: unknown, memberAddress: unknown) => unknown
+      return candidate as (...args: unknown[]) => unknown
     }
   }
 
@@ -998,7 +1250,37 @@ function resolveBucketsTxMethod(
     }
 
     if (normalizedCandidates.has(normalizeMethodName(methodName))) {
-      return candidate as (namespaceId: unknown, bucketId: unknown, memberAddress: unknown) => unknown
+      return candidate as (...args: unknown[]) => unknown
+    }
+  }
+
+  return undefined
+}
+
+function logEncodedCallBytes(callName: string, tx: SubmittableTx): void {
+  const encoded = getEncodedCallBytes(tx)
+  if (encoded) {
+    console.log(`[Extrinsic] ${callName} call bytes: ${encoded}`)
+    return
+  }
+
+  console.log(`[Extrinsic] ${callName} call bytes: unavailable`)
+}
+
+function getEncodedCallBytes(tx: SubmittableTx): `0x${string}` | undefined {
+  const candidate = tx as unknown as ExtrinsicWithEncoding
+
+  if (candidate.method && typeof candidate.method.toHex === "function") {
+    const encoded = candidate.method.toHex()
+    if (typeof encoded === "string" && /^0x[0-9a-fA-F]+$/.test(encoded)) {
+      return encoded as `0x${string}`
+    }
+  }
+
+  if (typeof candidate.toHex === "function") {
+    const encoded = candidate.toHex()
+    if (typeof encoded === "string" && /^0x[0-9a-fA-F]+$/.test(encoded)) {
+      return encoded as `0x${string}`
     }
   }
 
@@ -1240,6 +1522,93 @@ function extractStorageKeyArgs(storageKey: unknown): string[] {
 
 function normalizeComparableId(value: unknown): string {
   return stringifyCodecValue(value).trim().replace(/^"|"$/g, "").toLowerCase()
+}
+
+async function resolveNamespaceIdForBucketWrite(
+  api: { query?: unknown },
+  bucketId: string
+): Promise<string> {
+  const bucketsQuery = (api.query as Record<string, unknown> | undefined)?.buckets as Record<string, unknown> | undefined
+  const bucketsStorage = bucketsQuery?.buckets as { entries?: () => Promise<Array<[unknown, unknown]>> } | undefined
+
+  if (!bucketsStorage?.entries) {
+    throw new Error("buckets.buckets storage is not available on this chain")
+  }
+
+  const targetBucketId = normalizeComparableId(bucketId)
+  const entries = await bucketsStorage.entries()
+
+  for (const [storageKey, value] of entries) {
+    const keyArgs = extractStorageKeyArgs(storageKey)
+    const keyMatched = keyArgs.length > 0 && normalizeComparableId(keyArgs[keyArgs.length - 1]) === targetBucketId
+
+    if (keyMatched && keyArgs.length > 1) {
+      return keyArgs[0]!
+    }
+
+    const normalized = normalizeCodecValue(value)
+    if (normalized && typeof normalized === "object" && !Array.isArray(normalized)) {
+      const valueRecord = normalized as Record<string, unknown>
+      const candidateBucketId = valueRecord.id ?? valueRecord.bucketId
+      if (normalizeComparableId(candidateBucketId) === targetBucketId) {
+        const namespaceCandidate = valueRecord.namespaceId ?? valueRecord.namespace
+        const namespaceId = stringifyCodecValue(namespaceCandidate).trim()
+        if (namespaceId) {
+          return namespaceId
+        }
+      }
+    }
+  }
+
+  throw new Error(`Unable to resolve namespace id for bucket ${bucketId} required by buckets.write`)
+}
+
+async function buildBucketsWriteMessageInput(referenceCid: string, message: string, tag?: string): Promise<{
+  reference: `0x${string}`
+  tag: `0x${string}` | null
+  metadataInput: {
+    description: `0x${string}`
+    contentType: `0x${string}`
+    contentHash: `0x${string}`
+    properties: Record<string, unknown>
+  }
+}> {
+  const normalizedReferenceCid = referenceCid.trim()
+  if (!normalizedReferenceCid) {
+    throw new Error("Reference CID is required for buckets.write")
+  }
+
+  const normalizedTag = typeof tag === "string" ? tag.trim() : ""
+  const messageDigest = await sha256HexUtf8(message)
+  const isDidCommKeySharing = normalizedTag === "didcomm/key-sharing-v1"
+
+  const contentType = normalizedTag === "didcomm/key-sharing-v1"
+    ? "application/didcomm-encrypted+json"
+    : "text/plain;charset=utf-8"
+
+  return {
+    reference: utf8ToHexBytes(normalizedReferenceCid),
+    tag: normalizedTag ? utf8ToHexBytes(normalizedTag) : null,
+    metadataInput: {
+      description: utf8ToHexBytes(isDidCommKeySharing ? "didcomm key-sharing payload on crust ipfs" : "dashboard message on crust ipfs"),
+      contentType: utf8ToHexBytes(contentType),
+      contentHash: messageDigest,
+      properties: {}
+    }
+  }
+}
+
+async function sha256HexUtf8(input: string): Promise<`0x${string}`> {
+  const bytes = new TextEncoder().encode(input)
+
+  if (typeof crypto !== "undefined" && crypto.subtle) {
+    const digest = await crypto.subtle.digest("SHA-256", bytes)
+    return bytesToHex(new Uint8Array(digest))
+  }
+
+  const { createHash } = await import("node:crypto")
+  const hash = createHash("sha256").update(bytes).digest()
+  return bytesToHex(Uint8Array.from(hash.values()))
 }
 
 function normalizeCodecValue(value: unknown): unknown {
@@ -1591,7 +1960,14 @@ function normalizeModuleErrorBytes(value: unknown): Uint8Array | undefined {
   if (value && typeof value === "object" && "toU8a" in value) {
     const toU8a = (value as { toU8a?: unknown }).toU8a
     if (typeof toU8a === "function") {
-      return (toU8a as () => Uint8Array)()
+      try {
+        const converted = (toU8a as () => unknown)()
+        const normalized = coerceToU8a(converted)
+        if (normalized) {
+          return normalized
+        }
+      } catch {
+      }
     }
   }
 
@@ -1610,6 +1986,50 @@ function normalizeModuleErrorBytes(value: unknown): Uint8Array | undefined {
 
   if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 255) {
     return new Uint8Array([value, 0, 0, 0])
+  }
+
+  if (Array.isArray(value) && value.every((item) => typeof item === "number" && item >= 0 && item <= 255)) {
+    return Uint8Array.from(value)
+  }
+
+  const coerced = coerceToU8a(value)
+  if (coerced) {
+    return coerced
+  }
+
+  if (value && typeof value === "object") {
+    const toString = (value as { toString?: unknown }).toString
+    if (typeof toString === "function") {
+      try {
+        const serialized = (toString as () => string)()
+        const fromSerialized = normalizeModuleErrorBytes(serialized)
+        if (fromSerialized) {
+          return fromSerialized
+        }
+      } catch {
+      }
+    }
+  }
+
+  return undefined
+}
+
+function coerceToU8a(value: unknown): Uint8Array | undefined {
+  if (!value) {
+    return undefined
+  }
+
+  if (value instanceof Uint8Array) {
+    return value
+  }
+
+  if (ArrayBuffer.isView(value)) {
+    const view = value as ArrayBufferView
+    return new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
+  }
+
+  if (value instanceof ArrayBuffer) {
+    return new Uint8Array(value)
   }
 
   if (Array.isArray(value) && value.every((item) => typeof item === "number" && item >= 0 && item <= 255)) {
@@ -1639,6 +2059,90 @@ function utf8ToHexBytes(input: string): `0x${string}` {
     hex += value.toString(16).padStart(2, "0")
   }
 
+  return `0x${hex}`
+}
+
+function normalizeFixed32ByteKey(input: string): `0x${string}` {
+  const trimmed = input.trim()
+  if (!trimmed) {
+    throw new Error("New encryption key is required")
+  }
+
+  const fromHex = tryParseHexBytes(trimmed)
+  if (fromHex) {
+    if (fromHex.length !== 32) {
+      throw new Error(`Expected input with 32 bytes (256 bits), found ${fromHex.length} bytes`)
+    }
+    return bytesToHex(fromHex)
+  }
+
+  const fromBase64Url = tryDecodeBase64Url(trimmed)
+  if (fromBase64Url) {
+    if (fromBase64Url.length !== 32) {
+      throw new Error(`Expected input with 32 bytes (256 bits), found ${fromBase64Url.length} bytes`)
+    }
+    return bytesToHex(fromBase64Url)
+  }
+
+  const fromUtf8 = new TextEncoder().encode(trimmed)
+  if (fromUtf8.length === 32) {
+    return bytesToHex(fromUtf8)
+  }
+
+  throw new Error(`Expected input with 32 bytes (256 bits), found ${fromUtf8.length} bytes`)
+}
+
+function tryParseHexBytes(value: string): Uint8Array | undefined {
+  if (!/^0x[0-9a-fA-F]+$/.test(value) || value.length % 2 !== 0) {
+    return undefined
+  }
+
+  const payload = value.slice(2)
+  const bytes = new Uint8Array(payload.length / 2)
+  for (let index = 0; index < payload.length; index += 2) {
+    bytes[index / 2] = Number.parseInt(payload.slice(index, index + 2), 16)
+  }
+  return bytes
+}
+
+function tryDecodeBase64Url(value: string): Uint8Array | undefined {
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) {
+    return undefined
+  }
+
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/")
+  const paddingLength = (4 - (base64.length % 4)) % 4
+  const padded = `${base64}${"=".repeat(paddingLength)}`
+
+  try {
+    if (typeof atob === "function") {
+      const binary = atob(padded)
+      const bytes = new Uint8Array(binary.length)
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index)
+      }
+      return bytes
+    }
+
+    const globalWithBuffer = globalThis as unknown as {
+      Buffer?: { from(input: string, encoding: string): { values(): Iterable<number> } }
+    }
+    if (globalWithBuffer.Buffer) {
+      const buffer = globalWithBuffer.Buffer.from(padded, "base64")
+      return Uint8Array.from(buffer.values())
+    }
+  } catch {
+    return undefined
+  }
+
+  return undefined
+}
+
+function bytesToHex(bytes: Uint8Array): `0x${string}` {
+  let hex = ""
+  for (const value of bytes) {
+    hex += value.toString(16).padStart(2, "0")
+  }
   return `0x${hex}`
 }
 
