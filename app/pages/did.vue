@@ -12,7 +12,6 @@ import { useOperationsStore } from "../stores/operations"
 import { useSessionStore } from "../stores/session"
 import type { KeyMaterial } from "../types/keys"
 
-const defaultEndpoint = "wss://xcavate-paseo.api.onfinality.io/public-ws"
 const { ss58Prefix, formatAddress } = useAddress()
 const mnemonic = ref("")
 const ss58Address = ref("")
@@ -505,7 +504,7 @@ async function searchDidByAddress(): Promise<void> {
     | undefined
 
   try {
-    const endpoint = session.networkEndpoint || runtimeConfig.public.xcavateWsEndpoint || defaultEndpoint
+    const endpoint = session.networkEndpoint || runtimeConfig.public.xcavateWsEndpoint
     const { ApiPromise, WsProvider } = await import("@polkadot/api")
 
     provider = new WsProvider(endpoint)
@@ -608,7 +607,7 @@ async function submitDidCreateExtrinsic(): Promise<void> {
   let api: { disconnect: () => Promise<void>; tx?: unknown; registry?: { findMetaError?: unknown } } | undefined
 
   try {
-    const endpoint = session.networkEndpoint || runtimeConfig.public.xcavateWsEndpoint || defaultEndpoint
+    const endpoint = session.networkEndpoint || runtimeConfig.public.xcavateWsEndpoint
     const [{ ApiPromise, WsProvider }, { web3FromAddress }] = await Promise.all([
       import("@polkadot/api"),
       import("@polkadot/extension-dapp")
@@ -715,7 +714,7 @@ async function submitDidCreateFromAccountExtrinsic(): Promise<void> {
   let api: { disconnect: () => Promise<void>; tx?: unknown; registry?: { findMetaError?: unknown } } | undefined
 
   try {
-    const endpoint = session.networkEndpoint || runtimeConfig.public.xcavateWsEndpoint || defaultEndpoint
+    const endpoint = session.networkEndpoint || runtimeConfig.public.xcavateWsEndpoint
     const [{ ApiPromise, WsProvider }, { web3FromAddress }] = await Promise.all([
       import("@polkadot/api"),
       import("@polkadot/extension-dapp")

@@ -773,15 +773,71 @@ function resolveMessageReference(message: BucketMessage): string | undefined {
   const rawRecord = toRecord(message.raw)
 
   return (
-    firstString(rawRecord, ["reference", "cid", "ipfsCid", "messageCid"]) ??
+    firstString(rawRecord, ["reference", "ref", "cid", "ipfsCid", "messageCid"]) ??
     firstStringAtPaths(rawRecord, [
+      "metadata.ref",
       "metadata.reference",
       "metadata.cid",
+      "metadataInput.ref",
       "metadataInput.reference",
+      "value.ref",
       "value.reference",
+      "messageInput.ref",
       "messageInput.reference"
     ])
   )
+}
+
+function extractCidFromReference(reference: string): string | undefined {
+  const trimmed = reference.trim()
+  if (!trimmed) {
+    return undefined
+  }
+
+  if (/^[a-z0-9]+$/i.test(trimmed) && trimmed.length >= 32) {
+    return trimmed
+  }
+
+  if (trimmed.startsWith("ipfs://")) {
+    const withoutScheme = trimmed.slice("ipfs://".length).replace(/^ipfs\//i, "")
+    const [cidCandidate] = withoutScheme.split(/[/?#]/)
+    return cidCandidate?.trim() || undefined
+  }
+
+  try {
+    const parsedUrl = new URL(trimmed)
+    const pathSegments = parsedUrl.pathname.split("/").filter((segment) => segment.trim().length > 0)
+    const ipfsIndex = pathSegments.findIndex((segment) => segment.toLowerCase() === "ipfs")
+
+    if (ipfsIndex >= 0) {
+      const cidCandidate = pathSegments[ipfsIndex + 1]
+      if (cidCandidate?.trim()) {
+        return cidCandidate.trim()
+      }
+    }
+
+    return undefined
+  } catch {
+    return undefined
+  }
+}
+
+function resolvePayloadUrl(reference: string): string {
+  const trimmed = reference.trim()
+  if (!trimmed) {
+    throw new Error("Message reference is empty")
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed
+  }
+
+  const cid = extractCidFromReference(trimmed)
+  if (!cid) {
+    throw new Error("Message reference is not a valid CID or URL")
+  }
+
+  return `${resolveGatewayUrl()}/ipfs/${cid}`
 }
 
 function resolveGatewayUrl(): string {
@@ -792,7 +848,7 @@ function resolveGatewayUrl(): string {
 }
 
 async function fetchPayloadFromReference(reference: string): Promise<string> {
-  const response = await fetch(`${resolveGatewayUrl()}/${reference}`)
+  const response = await fetch(resolvePayloadUrl(reference))
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`)
   }
@@ -821,7 +877,16 @@ async function hydrateMessagePayloads(entries: BucketMessage[]): Promise<void> {
         const payload = await fetchPayloadFromReference(reference)
         nextPayloadById[entry.id] = payload
       } catch (error) {
-        nextErrorById[entry.id] = error instanceof Error ? error.message : "Unable to resolve message payload"
+        const message = error instanceof Error ? error.message : "Unable to resolve message payload"
+        nextErrorById[entry.id] = message
+
+        if (message.includes("HTTP 400")) {
+          console.error("[Bucket Messages] Payload unavailable (HTTP 400)", {
+            messageId: entry.id,
+            reference,
+            error: message
+          })
+        }
       }
     })
   )

@@ -147,7 +147,6 @@ async function copyX25519PublicKey() {
     <aside class="app-shell-sidebar">
       <NuxtLink to="/" style="padding: 8px 8px 20px; text-decoration: none; color: inherit; display: block">
         <h2 style="margin: 0; font-size: 18px">Asset DIDComm</h2>
-        <p class="muted" style="margin: 6px 0 0; font-size: 13px">Admin Dashboard</p>
       </NuxtLink>
 
       <nav class="stack" style="gap: 8px">
