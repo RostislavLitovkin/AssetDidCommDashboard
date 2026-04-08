@@ -75,6 +75,18 @@ type BucketTagExtrinsicSubmitter = (
   onUpdate?: ExtrinsicUpdateHandler
 ) => Promise<string>
 
+type BucketKeyRotationBatchExtrinsicSubmitter = (
+  endpoint: string,
+  namespaceId: string,
+  bucketId: string,
+  newEncryptionKey: string,
+  tag: string,
+  message: string,
+  ownerAddress: string,
+  onUpdate?: ExtrinsicUpdateHandler,
+  pinataConfig?: PinataConfig
+) => Promise<string>
+
 type NamespaceStorageReader = (endpoint: string) => Promise<unknown>
 type BucketsStorageReader = (endpoint: string) => Promise<unknown>
 type MessagesStorageReader = (endpoint: string) => Promise<unknown>
@@ -133,6 +145,11 @@ export interface AddBucketMemberResult {
   method: string
 }
 
+export interface RotateBucketKeyBatchResult {
+  txHash: string
+  method: string
+}
+
 export class DidCommRepository {
   private client: PapiRpcClient
   private submitExtrinsic: ExtrinsicSubmitter
@@ -147,6 +164,7 @@ export class DidCommRepository {
   private submitRemoveContributorExtrinsic: BucketMemberExtrinsicSubmitter
   private submitSetBucketPublicKeyExtrinsic: BucketPublicKeyExtrinsicSubmitter
   private submitCreateTagExtrinsic: BucketTagExtrinsicSubmitter
+  private submitBucketKeyRotationBatchExtrinsic: BucketKeyRotationBatchExtrinsicSubmitter
   private pinataConfig?: PinataConfig
 
   constructor(
@@ -163,7 +181,8 @@ export class DidCommRepository {
     submitRemoveContributorExtrinsic: BucketMemberExtrinsicSubmitter = submitBucketsRemoveContributorExtrinsic,
     submitSetBucketPublicKeyExtrinsic: BucketPublicKeyExtrinsicSubmitter = submitBucketsSetPublicKeyExtrinsic,
     submitCreateTagExtrinsic: BucketTagExtrinsicSubmitter = submitBucketsCreateTagExtrinsic,
-    pinataConfig?: PinataConfig
+    pinataConfig?: PinataConfig,
+    submitBucketKeyRotationBatchExtrinsic: BucketKeyRotationBatchExtrinsicSubmitter = submitBucketsBatchKeyRotationExtrinsic
   ) {
     this.client = client
     this.submitExtrinsic = submitExtrinsic
@@ -178,6 +197,7 @@ export class DidCommRepository {
     this.submitRemoveContributorExtrinsic = submitRemoveContributorExtrinsic
     this.submitSetBucketPublicKeyExtrinsic = submitSetBucketPublicKeyExtrinsic
     this.submitCreateTagExtrinsic = submitCreateTagExtrinsic
+    this.submitBucketKeyRotationBatchExtrinsic = submitBucketKeyRotationBatchExtrinsic
     this.pinataConfig = sanitizePinataConfig(pinataConfig)
   }
 
@@ -578,6 +598,63 @@ export class DidCommRepository {
     return {
       txHash,
       method: "buckets.write"
+    }
+  }
+
+  async rotateBucketKeyAndShare(
+    namespaceId: string,
+    bucketId: string,
+    newEncryptionKey: string,
+    tag: string,
+    message: string,
+    ownerAddress?: string,
+    onUpdate?: ExtrinsicUpdateHandler
+  ): Promise<RotateBucketKeyBatchResult> {
+    const trimmedNamespaceId = namespaceId.trim()
+    if (!trimmedNamespaceId) {
+      throw new Error("Namespace id is required")
+    }
+
+    const trimmedBucketId = bucketId.trim()
+    if (!trimmedBucketId) {
+      throw new Error("Bucket id is required")
+    }
+
+    const normalizedEncryptionKey = normalizeFixed32ByteKey(newEncryptionKey.trim())
+    const trimmedTag = tag.trim()
+    if (!trimmedTag) {
+      throw new Error("Tag is required")
+    }
+
+    const trimmedMessage = message.trim()
+    if (!trimmedMessage) {
+      throw new Error("Message is required")
+    }
+
+    if (!ownerAddress) {
+      throw new Error("Wallet must be connected to submit utility.batchAll extrinsic")
+    }
+
+    const endpoint = this.client.getEndpoint?.()
+    if (!endpoint) {
+      throw new Error("Unable to resolve chain endpoint for extrinsic submission")
+    }
+
+    const txHash = await this.submitBucketKeyRotationBatchExtrinsic(
+      endpoint,
+      trimmedNamespaceId,
+      trimmedBucketId,
+      normalizedEncryptionKey,
+      trimmedTag,
+      trimmedMessage,
+      ownerAddress,
+      onUpdate,
+      this.pinataConfig
+    )
+
+    return {
+      txHash,
+      method: "utility.batchAll"
     }
   }
 
@@ -1004,6 +1081,96 @@ async function submitBucketsSetPublicKeyExtrinsic(
     const tx = resumeWriting(namespaceId, bucketId, newEncryptionKey) as SubmittableTx
     logEncodedCallBytes("buckets.resumeWriting", tx)
 
+    const attemptTips = ["0", "1000000", "2000000"]
+    let lastError: Error | null = null
+
+    for (let attempt = 0; attempt < attemptTips.length; attempt += 1) {
+      const tip = attemptTips[attempt]!
+
+      try {
+        if (attempt > 0) {
+          onUpdate?.({
+            stage: "submitted",
+            message: `Retrying extrinsic with higher priority fee (tip=${tip})`
+          })
+        }
+
+        return await submitWithTip(tx, ownerAddress, injector.signer, tip, onUpdate, api)
+      } catch (error) {
+        const normalized = error instanceof Error ? error : new Error("Extrinsic submission failed")
+        lastError = normalized
+
+        if (!isLowPriorityTransactionError(normalized) || attempt === attemptTips.length - 1) {
+          throw normalized
+        }
+      }
+    }
+
+    throw lastError ?? new Error("Extrinsic submission failed")
+  } finally {
+    await api.disconnect()
+  }
+}
+
+async function submitBucketsBatchKeyRotationExtrinsic(
+  endpoint: string,
+  namespaceId: string,
+  bucketId: string,
+  newEncryptionKey: string,
+  tag: string,
+  message: string,
+  ownerAddress: string,
+  onUpdate?: ExtrinsicUpdateHandler,
+  pinataConfig?: PinataConfig
+): Promise<string> {
+  const [{ ApiPromise, WsProvider }, { web3FromAddress }] = await Promise.all([
+    import("@polkadot/api"),
+    import("@polkadot/extension-dapp")
+  ])
+
+  const provider = new WsProvider(endpoint)
+  const api = await ApiPromise.create({ provider })
+
+  try {
+    const txRoot = api.tx as Record<string, unknown>
+    const utility = txRoot.utility as Record<string, unknown> | undefined
+    const batchAll = utility?.batchAll as ((calls: unknown[]) => unknown) | undefined
+    if (!batchAll) {
+      throw new Error("utility.batchAll extrinsic is not available on this chain")
+    }
+
+    const buckets = txRoot.buckets as Record<string, unknown> | undefined
+    const resumeWriting = resolveBucketsArbitraryTxMethod(buckets, ["resumeWriting"])
+    const createTag = resolveBucketsArbitraryTxMethod(buckets, ["createTag", "addTag"])
+    const write = resolveBucketsArbitraryTxMethod(buckets, ["write"])
+
+    if (!resumeWriting) {
+      throw new Error("buckets.resumeWriting extrinsic is not available on this chain")
+    }
+    if (!createTag) {
+      throw new Error("buckets.createTag extrinsic is not available on this chain")
+    }
+    if (!write) {
+      throw new Error("buckets.write extrinsic is not available on this chain")
+    }
+
+    const resolvedPinataConfig = resolvePinataConfig(pinataConfig)
+    const storageAdapter = new PinataStorageAdapter(resolvedPinataConfig)
+    console.log("PinataAdapter: Uploading message reference content to IPFS before utility.batchAll...")
+    const cid = await storageAdapter.upload(message)
+    console.log(`PinataAdapter: Using CID as on-chain reference: ${cid}`)
+
+    const messageInput = await buildBucketsWriteMessageInput(cid, message, tag)
+    const calls = [
+      resumeWriting(namespaceId, bucketId, newEncryptionKey),
+      createTag(bucketId, utf8ToHexBytes(tag)),
+      write(namespaceId, bucketId, messageInput)
+    ]
+
+    const tx = batchAll(calls) as SubmittableTx
+    logEncodedCallBytes("utility.batchAll", tx)
+
+    const injector = await web3FromAddress(ownerAddress)
     const attemptTips = ["0", "1000000", "2000000"]
     let lastError: Error | null = null
 

@@ -791,33 +791,7 @@ async function generateAndShareEncryptionKey(): Promise<void> {
 
     console.log(`🔑 Bucket Public Key generated. keyId: ${numericKeyId}`)
 
-    currentBucketCall.value = "buckets.resumeWriting"
-    console.log("--- [ADMIN] 4b. Updating bucket encryption key on-chain (resumeWriting) ---")
-    const setKeyTxHash = await didCommRepository.setBucketPublicKey(
-      namespaceId,
-      bucketId.value,
-      bucketEncryptionKey,
-      session.accountAddress,
-      logExtrinsicUpdate
-    )
-    console.log(`✅ Bucket encryption key updated on-chain. Transaction Hash: ${setKeyTxHash}`)
-
-    let tagTxHash = ""
-    currentBucketCall.value = "buckets.createTag"
-    console.log(`--- [ADMIN] 4c. Creating Tag \"${keySharingTag}\" for Bucket ${bucketId.value} ---`)
-    try {
-      tagTxHash = await didCommRepository.createTag(bucketId.value, keySharingTag, session.accountAddress, logExtrinsicUpdate)
-      console.log(`✅ Tag created successfully. Transaction Hash: ${tagTxHash}`)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unable to create key-sharing tag"
-      if (message.toLowerCase().includes("already")) {
-        console.warn(`⚠️ Tag likely already exists. Continuing. Details: ${message}`)
-      } else {
-        throw error
-      }
-    }
-
-    console.log("--- [ADMIN] 4d. Preparing recipients and encrypting key-sharing payload ---")
+    console.log("--- [ADMIN] 4b. Preparing recipients and encrypting key-sharing payload ---")
     const { recipientJwks, readerAddresses } = buildRecipientJwks(bucketPkJwk)
     console.log(`Using ${readerAddresses.length} contributor reader(s):`, readerAddresses)
 
@@ -833,18 +807,18 @@ async function generateAndShareEncryptionKey(): Promise<void> {
     const jweDigestBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(jweString))
     const jweDigest = Array.from(new Uint8Array(jweDigestBuffer)).map((value) => value.toString(16).padStart(2, "0")).join("")
     console.log(`Key-sharing JWE digest (sha256): 0x${jweDigest}`)
-    console.log("Submitting DIDComm key-sharing payload directly in buckets.write messageInput.reference")
-
-    console.log("--- [ADMIN] 4e. Submitting key-sharing payload to bucket messages ---")
-    currentBucketCall.value = "buckets.write"
-    const shareResult = await didCommRepository.createMessage(
+    console.log("--- [ADMIN] 4c. Submitting utility.batchAll for resumeWriting + createTag + write ---")
+    currentBucketCall.value = "utility.batchAll"
+    const batchResult = await didCommRepository.rotateBucketKeyAndShare(
+      namespaceId,
       bucketId.value,
+      bucketEncryptionKey,
+      keySharingTag,
       jweString,
       session.accountAddress,
-      logExtrinsicUpdate,
-      keySharingTag
+      logExtrinsicUpdate
     )
-    console.log(`✅ Bucket secret key shared successfully. Transaction Hash: ${shareResult.txHash}`)
+    console.log(`✅ Bucket key rotation + tag + key-sharing message finalized in batchAll. Transaction Hash: ${batchResult.txHash}`)
 
     latestGeneratedKeyId.value = keyId
     latestGeneratedPublicJwk.value = JSON.stringify(bucketPkJwk, null, 2)
@@ -852,9 +826,9 @@ async function generateAndShareEncryptionKey(): Promise<void> {
 
     operations.add(
       "bucket_write",
-      "buckets.write",
+      batchResult.method,
       "success",
-      `Bucket key rotated and shared. keyId=${keyId}, tx=${shareResult.txHash}`
+      `Bucket key rotated and shared via batchAll. keyId=${keyId}, tx=${batchResult.txHash}`
     )
 
     await loadMessages()
@@ -1404,19 +1378,12 @@ onMounted(async () => {
   <div class="stack message-page">
     <header class="card">
       <h2 style="margin: 0">Bucket {{ bucketDisplayName }}</h2>
-      <p class="muted" style="margin: 8px 0 0">WhatsApp-style thread view for messages in this bucket.</p>
     </header>
 
     <section class="card stack" aria-live="polite">
       <div class="row" style="justify-content: space-between; align-items: center">
         <h3 style="margin: 0">Bucket Metadata</h3>
         <div class="row" style="gap: 8px">
-          <NuxtLink
-            class="btn"
-            :to="`/messages/bucket/members/${encodeURIComponent(bucketId)}?namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`"
-          >
-            Manage Members
-          </NuxtLink>
           <button class="btn" type="button" :disabled="bucketLoading || messagesLoading" @click="loadBucketPage">
             {{ bucketLoading || messagesLoading ? "Loading..." : "Reload" }}
           </button>
@@ -1537,16 +1504,11 @@ onMounted(async () => {
       </p>
 
       <ul class="key-rotation-checks">
-        <li>Connected admin: {{ connectedAdmin ? "Yes" : "No" }}</li>
         <li>Contributors with X25519: {{ contributorRecipients.length }} / {{ bucketContributors.length }}</li>
-        <li v-if="contributorsMissingEncryptionKey">Missing contributor keys: {{ contributorsMissingEncryptionKey }}</li>
         <li v-if="latestGeneratedKeyId">Last generated key ID: {{ latestGeneratedKeyId }}</li>
       </ul>
 
-      <p v-if="!session.accountAddress" class="muted" style="margin: 0">
-        Connect wallet on the dashboard first to rotate and share bucket encryption keys.
-      </p>
-      <p v-else-if="!connectedAdmin" class="muted" style="margin: 0">
+      <p v-if="!connectedAdmin" class="muted" style="margin: 0">
         Only bucket admins can generate and distribute encryption keys.
       </p>
 
@@ -1563,12 +1525,6 @@ onMounted(async () => {
       </div>
 
       <div class="key-preview-wrap">
-        <div class="row" style="justify-content: space-between; align-items: center; gap: 8px">
-          <p class="muted" style="margin: 0">Debug: Decrypted latest didcomm/key-sharing-v1 payload</p>
-          <button class="btn" type="button" :disabled="decryptingKeySharingPayload" @click="decryptLatestKeySharingPayload">
-            {{ decryptingKeySharingPayload ? "Decrypting..." : "Re-run Decrypt" }}
-          </button>
-        </div>
 
         <p v-if="decryptedKeySharingSourceMessageId" class="muted" style="margin: 0">
           Source message id: {{ decryptedKeySharingSourceMessageId }}
