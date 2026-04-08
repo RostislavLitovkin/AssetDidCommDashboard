@@ -9,11 +9,13 @@ import { computed, nextTick, onMounted, ref, watch } from "vue"
 import { useNuxtApp, useRoute, useRuntimeConfig } from "nuxt/app"
 import { useOperationsStore } from "../../../stores/operations"
 import { useSessionStore } from "../../../stores/session"
+import { useSettingsStore } from "../../../stores/settings"
 
 const route = useRoute()
 const { $papiClient } = useNuxtApp()
 const runtimeConfig = useRuntimeConfig()
 const session = useSessionStore()
+const settings = useSettingsStore()
 const operations = useOperationsStore()
 const { formatAddress, addressesEqual } = useAddress()
 
@@ -120,6 +122,10 @@ const encryptionKeyError = ref("")
 const encryptionKeySuccess = ref("")
 const latestGeneratedKeyId = ref("")
 const latestGeneratedPublicJwk = ref("")
+const decryptingKeySharingPayload = ref(false)
+const decryptedKeySharingPayload = ref("")
+const decryptedKeySharingError = ref("")
+const decryptedKeySharingSourceMessageId = ref("")
 const bucketDisplayName = computed(() => bucket.value?.name || bucketId.value)
 const keySharingTag = "didcomm/key-sharing-v1"
 
@@ -162,6 +168,12 @@ const chatMessages = computed<ChatMessage[]>(() => {
   return [...chainMessages, ...pending].sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime())
 })
 
+const latestKeySharingChatMessage = computed(() => {
+  return [...chatMessages.value]
+    .filter((message) => message.tag === keySharingTag)
+    .at(-1)
+})
+
 async function loadMessages() {
   messagesError.value = ""
   messagesLoading.value = true
@@ -170,10 +182,74 @@ async function loadMessages() {
     const loadedMessages = await didCommRepository.fetchMessages(bucketId.value)
     messages.value = loadedMessages
     await hydrateMessagePayloads(loadedMessages)
+    await decryptLatestKeySharingPayload()
   } catch (error) {
     messagesError.value = error instanceof Error ? error.message : "Unable to load messages"
   } finally {
     messagesLoading.value = false
+  }
+}
+
+function parseJsonSafely(value: string): unknown {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return undefined
+  }
+}
+
+async function decryptLatestKeySharingPayload(): Promise<void> {
+  decryptedKeySharingPayload.value = ""
+  decryptedKeySharingError.value = ""
+  decryptedKeySharingSourceMessageId.value = ""
+
+  const sourceMessage = latestKeySharingChatMessage.value
+  if (!sourceMessage) {
+    decryptedKeySharingError.value = "No didcomm/key-sharing-v1 message found in this bucket yet."
+    return
+  }
+
+  const sidebarSecretJwk = settings.x25519SecretJwk
+  if (!sidebarSecretJwk) {
+    decryptedKeySharingError.value = "Load your X25519 secret JWK in the sidebar to decrypt key-sharing payloads."
+    return
+  }
+
+  const payloadCandidate = messagePayloadById.value[sourceMessage.id] ?? sourceMessage.body
+  const payloadText = typeof payloadCandidate === "string" ? payloadCandidate.trim() : ""
+  if (!payloadText) {
+    decryptedKeySharingError.value = "Latest key-sharing payload is empty or not loaded yet."
+    return
+  }
+
+  decryptingKeySharingPayload.value = true
+  decryptedKeySharingSourceMessageId.value = sourceMessage.id
+
+  try {
+    const parsedPayload = parseJsonSafely(payloadText)
+    if (!parsedPayload || typeof parsedPayload !== "object" || Array.isArray(parsedPayload)) {
+      throw new Error("Latest key-sharing payload is not valid JWE JSON")
+    }
+
+    const privateKey = await jose.importJWK(sidebarSecretJwk as jose.JWK, "ECDH-ES+A256KW")
+    const { plaintext } = await jose.generalDecrypt(parsedPayload as jose.GeneralJWE, privateKey)
+    const decodedPlaintext = new TextDecoder().decode(plaintext)
+
+    const parsedPlaintext = parseJsonSafely(decodedPlaintext)
+    if (parsedPlaintext && typeof parsedPlaintext === "object") {
+      decryptedKeySharingPayload.value = JSON.stringify(parsedPlaintext, null, 2)
+    } else {
+      decryptedKeySharingPayload.value = decodedPlaintext
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to decrypt key-sharing payload"
+    decryptedKeySharingError.value = message
+    console.error("[Bucket Messages] Failed to decrypt latest didcomm/key-sharing-v1 payload", {
+      messageId: sourceMessage.id,
+      error: message
+    })
+  } finally {
+    decryptingKeySharingPayload.value = false
   }
 }
 
@@ -1168,7 +1244,16 @@ watch(
   }
 )
 
+watch(
+  () => settings.x25519SecretJwk,
+  async () => {
+    await decryptLatestKeySharingPayload()
+  },
+  { deep: true }
+)
+
 onMounted(async () => {
+  settings.initialize()
   await loadBucketPage()
   await scrollToBottom()
 })
@@ -1334,6 +1419,25 @@ onMounted(async () => {
       <div v-if="latestGeneratedPublicJwk" class="key-preview-wrap">
         <p class="muted" style="margin: 0">Latest generated bucket public JWK</p>
         <pre class="key-preview">{{ latestGeneratedPublicJwk }}</pre>
+      </div>
+
+      <div class="key-preview-wrap">
+        <div class="row" style="justify-content: space-between; align-items: center; gap: 8px">
+          <p class="muted" style="margin: 0">Debug: Decrypted latest didcomm/key-sharing-v1 payload</p>
+          <button class="btn" type="button" :disabled="decryptingKeySharingPayload" @click="decryptLatestKeySharingPayload">
+            {{ decryptingKeySharingPayload ? "Decrypting..." : "Re-run Decrypt" }}
+          </button>
+        </div>
+
+        <p v-if="decryptedKeySharingSourceMessageId" class="muted" style="margin: 0">
+          Source message id: {{ decryptedKeySharingSourceMessageId }}
+        </p>
+
+        <p v-if="decryptedKeySharingError" style="margin: 0; color: var(--status-error)">
+          {{ decryptedKeySharingError }}
+        </p>
+
+        <pre v-else-if="decryptedKeySharingPayload" class="key-preview">{{ decryptedKeySharingPayload }}</pre>
       </div>
     </section>
 
