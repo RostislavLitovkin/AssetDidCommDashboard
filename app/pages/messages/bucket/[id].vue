@@ -109,6 +109,8 @@ const sending = ref(false)
 const pendingMessages = ref<PendingChatMessage[]>([])
 const messagePayloadById = ref<Record<string, string>>({})
 const messagePayloadErrorById = ref<Record<string, string>>({})
+const decryptedMessagePayloadById = ref<Record<string, string>>({})
+const messageDecryptErrorById = ref<Record<string, string>>({})
 const chatViewport = ref<HTMLElement | null>(null)
 const bucketAdmins = ref<string[]>([])
 const bucketContributors = ref<string[]>([])
@@ -126,8 +128,10 @@ const decryptingKeySharingPayload = ref(false)
 const decryptedKeySharingPayload = ref("")
 const decryptedKeySharingError = ref("")
 const decryptedKeySharingSourceMessageId = ref("")
+const activeBucketEncryptionSecretJwk = ref<jose.JWK | null>(null)
 const bucketDisplayName = computed(() => bucket.value?.name || bucketId.value)
 const keySharingTag = "didcomm/key-sharing-v1"
+const encryptedMessageTag = "didcomm/encrypted-message-v1"
 
 const connectedAdmin = computed(() => {
   if (!session.accountAddress) {
@@ -183,6 +187,7 @@ async function loadMessages() {
     messages.value = loadedMessages
     await hydrateMessagePayloads(loadedMessages)
     await decryptLatestKeySharingPayload()
+    await decryptReceivedMessages(loadedMessages)
   } catch (error) {
     messagesError.value = error instanceof Error ? error.message : "Unable to load messages"
   } finally {
@@ -198,10 +203,71 @@ function parseJsonSafely(value: string): unknown {
   }
 }
 
+function isX25519SecretJwk(value: unknown): value is jose.JWK {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false
+  }
+
+  const candidate = value as Record<string, unknown>
+  return candidate.kty === "OKP"
+    && candidate.crv === "X25519"
+    && typeof candidate.x === "string"
+    && candidate.x.trim().length > 0
+    && typeof candidate.d === "string"
+    && candidate.d.trim().length > 0
+}
+
+function extractActiveBucketSecretJwk(payload: unknown): jose.JWK | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null
+  }
+
+  const payloadRecord = payload as Record<string, unknown>
+  const keys = Array.isArray(payloadRecord.keys) ? payloadRecord.keys : []
+
+  for (const keyCandidate of keys) {
+    if (isX25519SecretJwk(keyCandidate)) {
+      return {
+        ...keyCandidate,
+        use: "enc"
+      }
+    }
+  }
+
+  return null
+}
+
+async function encryptOutgoingBucketMessage(plaintext: string): Promise<string> {
+  const secretJwk = activeBucketEncryptionSecretJwk.value
+  if (!secretJwk || !isX25519SecretJwk(secretJwk)) {
+    throw new Error("No decrypted bucket encryption key is available. Decrypt latest key-sharing payload first.")
+  }
+
+  const recipientPublicJwk: jose.JWK = {
+    kty: "OKP",
+    crv: "X25519",
+    x: secretJwk.x,
+    use: "enc",
+    kid: typeof secretJwk.kid === "string" ? secretJwk.kid : undefined
+  }
+
+  const publicKey = await jose.importJWK(recipientPublicJwk, "ECDH-ES+A256KW")
+  const encryptor = new jose.CompactEncrypt(new TextEncoder().encode(plaintext))
+    .setProtectedHeader({
+      alg: "ECDH-ES+A256KW",
+      enc: "A256GCM",
+      typ: encryptedMessageTag,
+      kid: recipientPublicJwk.kid
+    })
+
+  return await encryptor.encrypt(publicKey)
+}
+
 async function decryptLatestKeySharingPayload(): Promise<void> {
   decryptedKeySharingPayload.value = ""
   decryptedKeySharingError.value = ""
   decryptedKeySharingSourceMessageId.value = ""
+  activeBucketEncryptionSecretJwk.value = null
 
   const sourceMessage = latestKeySharingChatMessage.value
   if (!sourceMessage) {
@@ -236,11 +302,18 @@ async function decryptLatestKeySharingPayload(): Promise<void> {
     const decodedPlaintext = new TextDecoder().decode(plaintext)
 
     const parsedPlaintext = parseJsonSafely(decodedPlaintext)
+    activeBucketEncryptionSecretJwk.value = extractActiveBucketSecretJwk(parsedPlaintext)
+    if (!activeBucketEncryptionSecretJwk.value) {
+      throw new Error("Decrypted key-sharing payload does not include an X25519 secret key")
+    }
+
     if (parsedPlaintext && typeof parsedPlaintext === "object") {
       decryptedKeySharingPayload.value = JSON.stringify(parsedPlaintext, null, 2)
     } else {
       decryptedKeySharingPayload.value = decodedPlaintext
     }
+
+    await decryptReceivedMessages(messages.value)
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to decrypt key-sharing payload"
     decryptedKeySharingError.value = message
@@ -251,6 +324,67 @@ async function decryptLatestKeySharingPayload(): Promise<void> {
   } finally {
     decryptingKeySharingPayload.value = false
   }
+}
+
+function resolveMessageTag(message: BucketMessage): string | undefined {
+  const rawRecord = toRecord(message.raw)
+  return firstString(rawRecord, ["tag", "messageTag"])
+}
+
+function looksLikeCompactJwe(payload: string): boolean {
+  const parts = payload.split(".")
+  return parts.length === 5 && parts.every((part) => part.trim().length > 0)
+}
+
+async function decryptMessagePayload(payload: string): Promise<string> {
+  const secretJwk = activeBucketEncryptionSecretJwk.value
+  if (!secretJwk || !isX25519SecretJwk(secretJwk)) {
+    throw new Error("No active bucket encryption key is available for decrypting messages")
+  }
+
+  const privateKey = await jose.importJWK(secretJwk as jose.JWK, "ECDH-ES+A256KW")
+  const { plaintext } = await jose.compactDecrypt(payload, privateKey)
+  return new TextDecoder().decode(plaintext)
+}
+
+async function decryptReceivedMessages(entries: BucketMessage[]): Promise<void> {
+  const nextDecryptedPayloadById: Record<string, string> = {}
+  const nextDecryptErrorById: Record<string, string> = {}
+
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (resolveMessageTag(entry) === keySharingTag) {
+        return
+      }
+
+      const payload = messagePayloadById.value[entry.id]
+      if (!payload) {
+        return
+      }
+
+      const trimmedPayload = payload.trim()
+      if (!looksLikeCompactJwe(trimmedPayload)) {
+        nextDecryptedPayloadById[entry.id] = payload
+        return
+      }
+
+      try {
+        const decrypted = await decryptMessagePayload(trimmedPayload)
+        nextDecryptedPayloadById[entry.id] = decrypted
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to decrypt message payload"
+        nextDecryptErrorById[entry.id] = message
+        nextDecryptedPayloadById[entry.id] = payload
+        console.error("[Bucket Messages] Failed to decrypt message payload", {
+          messageId: entry.id,
+          error: message
+        })
+      }
+    })
+  )
+
+  decryptedMessagePayloadById.value = nextDecryptedPayloadById
+  messageDecryptErrorById.value = nextDecryptErrorById
 }
 
 async function loadBucket() {
@@ -1106,8 +1240,8 @@ function toChatMessage(message: BucketMessage): ChatMessage {
     toRecord(rawRecord?.metadata) ??
     toRecord(rawRecord?.messageMetadata)
   const reference = resolveMessageReference(message)
-  const payload = messagePayloadById.value[message.id]
-  const payloadError = messagePayloadErrorById.value[message.id]
+  const payload = decryptedMessagePayloadById.value[message.id] ?? messagePayloadById.value[message.id]
+  const payloadError = messagePayloadErrorById.value[message.id] ?? messageDecryptErrorById.value[message.id]
   const payloadBody = payload ? summarizeJsonPayload(payload) ?? payload : undefined
   const body = payloadBody ?? firstString(rawRecord, ["message", "content", "payload", "body", "text", "summary"]) ?? message.summary
   const description =
@@ -1202,7 +1336,13 @@ async function sendMessage() {
   currentBucketCall.value = "buckets.write"
 
   try {
-    const result = await didCommRepository.createMessage(bucketId.value, payload, session.accountAddress, logExtrinsicUpdate)
+    const encryptedPayload = await encryptOutgoingBucketMessage(payload)
+    const result = await didCommRepository.createMessage(
+      bucketId.value,
+      encryptedPayload,
+      session.accountAddress,
+      logExtrinsicUpdate
+    )
     const pending = pendingMessages.value.find((entry) => entry.id === pendingId)
     if (pending) {
       pending.deliveryState = "sent"
@@ -1248,6 +1388,7 @@ watch(
   () => settings.x25519SecretJwk,
   async () => {
     await decryptLatestKeySharingPayload()
+    await decryptReceivedMessages(messages.value)
   },
   { deep: true }
 )
