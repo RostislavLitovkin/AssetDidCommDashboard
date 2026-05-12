@@ -10,6 +10,10 @@ const saveError = ref("")
 const saveSuccess = ref("")
 
 const currentPrefix = computed(() => settings.ss58Prefix)
+const showMessageDebug = computed({
+  get: () => settings.showMessageDebug,
+  set: (value: boolean) => settings.setShowMessageDebug(value)
+})
 
 function saveSettings(): void {
   saveError.value = ""
@@ -37,7 +41,7 @@ function resetToCurrent(): void {
     <header class="card stack" style="gap: 8px">
       <h1 style="margin: 0">Settings</h1>
       <p class="muted" style="margin: 0">
-        Configure a global SS58 prefix used to display addresses across the dashboard.
+        Configure the dashboard to your needs.
       </p>
     </header>
 
@@ -58,7 +62,7 @@ function resetToCurrent(): void {
         />
       </label>
 
-      <div class="row" style="justify-content: flex-end; gap: 8px">
+      <div class="row settings-actions" style="justify-content: flex-end; gap: 8px">
         <button class="btn" type="button" @click="resetToCurrent">Reset</button>
         <button class="btn btn-primary" type="button" @click="saveSettings">Save</button>
       </div>
@@ -66,12 +70,25 @@ function resetToCurrent(): void {
       <p v-if="saveError" class="error-text">{{ saveError }}</p>
       <p v-if="saveSuccess" class="success-text">{{ saveSuccess }}</p>
     </section>
+
+    <section class="card stack" style="gap: 10px">
+      <h2 style="margin: 0">Message Debugging</h2>
+      <p class="muted" style="margin: 0">
+        Show collapsible debug data in message threads, including IPFS references and message IDs.
+      </p>
+      <label class="toggle-row">
+        <input v-model="showMessageDebug" type="checkbox" />
+        <span>Show message debug data</span>
+      </label>
+    </section>
   </main>
 </template>
 
 <style scoped>
 .settings-page {
-  padding-top: 12px;
+  padding: 16px;
+  max-width: 720px;
+  margin: 0 auto;
 }
 
 .error-text {
@@ -82,5 +99,36 @@ function resetToCurrent(): void {
 .success-text {
   margin: 0;
   color: var(--status-success);
+}
+
+.toggle-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 500;
+}
+
+.toggle-row input {
+  width: 18px;
+  height: 18px;
+}
+
+@media (max-width: 720px) {
+  .settings-page {
+    padding: 12px;
+  }
+
+  .settings-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .settings-actions .btn {
+    width: 100%;
+  }
+
+  .toggle-row {
+    width: 100%;
+  }
 }
 </style>

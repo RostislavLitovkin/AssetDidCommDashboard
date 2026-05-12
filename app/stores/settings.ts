@@ -2,6 +2,7 @@ import { defineStore } from "pinia"
 
 const SETTINGS_STORAGE_KEY = "asset-didcomm.ss58-prefix"
 const X25519_SECRET_JWK_STORAGE_KEY = "asset-didcomm.x25519-secret-jwk"
+const MESSAGE_DEBUG_STORAGE_KEY = "asset-didcomm.message-debug"
 const DEFAULT_SS58_PREFIX = 42
 const MAX_SS58_PREFIX = 16383
 
@@ -91,11 +92,25 @@ function loadStoredX25519SecretJwk(): X25519SecretJwk | null {
   }
 }
 
+function loadStoredMessageDebug(): boolean {
+  if (!import.meta.client) {
+    return false
+  }
+
+  const raw = window.localStorage.getItem(MESSAGE_DEBUG_STORAGE_KEY)
+  if (raw === null) {
+    return false
+  }
+
+  return raw === "true"
+}
+
 export const useSettingsStore = defineStore("settings", {
   state: () => ({
     initialized: false,
     ss58Prefix: DEFAULT_SS58_PREFIX,
-    x25519SecretJwk: null as X25519SecretJwk | null
+    x25519SecretJwk: null as X25519SecretJwk | null,
+    showMessageDebug: false
   }),
   actions: {
     initialize(): void {
@@ -105,6 +120,7 @@ export const useSettingsStore = defineStore("settings", {
 
       this.ss58Prefix = loadStoredSs58Prefix()
       this.x25519SecretJwk = loadStoredX25519SecretJwk()
+      this.showMessageDebug = loadStoredMessageDebug()
       this.initialized = true
     },
     setSs58Prefix(prefix: number): void {
@@ -137,6 +153,13 @@ export const useSettingsStore = defineStore("settings", {
 
       if (import.meta.client) {
         window.localStorage.removeItem(X25519_SECRET_JWK_STORAGE_KEY)
+      }
+    },
+    setShowMessageDebug(value: boolean): void {
+      this.showMessageDebug = value
+
+      if (import.meta.client) {
+        window.localStorage.setItem(MESSAGE_DEBUG_STORAGE_KEY, String(value))
       }
     }
   }

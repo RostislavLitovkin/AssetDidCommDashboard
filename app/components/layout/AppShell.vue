@@ -326,6 +326,28 @@ async function copyX25519PublicKey() {
   min-width: 0;
   padding: 24px;
   overflow: auto;
+  overflow-x: hidden;
+}
+
+@media (max-width: 960px) {
+  .app-shell-root {
+    flex-direction: column;
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .app-shell-sidebar {
+    width: 100%;
+    height: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--border-default);
+    padding: 16px;
+  }
+
+  .app-shell-content {
+    padding: 16px;
+    overflow: visible;
+  }
 }
 
 .sr-only-input {

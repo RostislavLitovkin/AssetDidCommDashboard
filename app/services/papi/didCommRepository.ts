@@ -1771,7 +1771,7 @@ async function buildBucketsWriteMessageInput(referenceCid: string, message: stri
     reference: utf8ToHexBytes(normalizedReferenceCid),
     tag: normalizedTag ? utf8ToHexBytes(normalizedTag) : null,
     metadataInput: {
-      description: utf8ToHexBytes(isDidCommKeySharing ? "didcomm key-sharing payload on pinata ipfs" : "dashboard message on pinata ipfs"),
+      description: utf8ToHexBytes(""),
       contentType: utf8ToHexBytes(contentType),
       contentHash: messageDigest,
       properties: {}

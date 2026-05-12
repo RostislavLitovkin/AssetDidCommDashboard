@@ -61,12 +61,13 @@ interface ChatMessage {
   createdAt: Date
   outgoing: boolean
   senderLabel: string
-  description?: string
+  senderAddress?: string
   messageType?: string
   contentType?: string
   tag?: string
   reference?: string
   payloadError?: string
+  payloadLength?: number
   deliveryState?: DeliveryState
 }
 
@@ -1218,9 +1219,6 @@ function toChatMessage(message: BucketMessage): ChatMessage {
   const payloadError = messagePayloadErrorById.value[message.id] ?? messageDecryptErrorById.value[message.id]
   const payloadBody = payload ? summarizeJsonPayload(payload) ?? payload : undefined
   const body = payloadBody ?? firstString(rawRecord, ["message", "content", "payload", "body", "text", "summary"]) ?? message.summary
-  const description =
-    firstString(metadataRecord, ["description", "summary", "title"]) ??
-    firstString(rawRecord, ["description"])
   const contentType =
     firstString(metadataRecord, ["contentType", "mimeType", "type"]) ??
     firstString(rawRecord, ["contentType", "mimeType"])
@@ -1241,13 +1239,79 @@ function toChatMessage(message: BucketMessage): ChatMessage {
     createdAt,
     outgoing,
     senderLabel: outgoing ? "You" : sender ? formatAddress(sender) : "Unknown",
-    description,
+    senderAddress: sender,
     contentType,
     tag,
     reference,
     messageType: resolveMessageType(contentType, tag, payload),
-    payloadError
+    payloadError,
+    payloadLength: payload ? payload.length : undefined
   }
+}
+
+function formatMessageMeta(message: ChatMessage): string {
+  if (message.createdAt.getTime() === 0) {
+    return ""
+  }
+
+  const timestamp = message.createdAt.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  })
+
+  const prefix = message.outgoing ? "Sent" : "Received"
+  const base = `${prefix} ${timestamp}`
+
+  if (message.deliveryState === "sending") {
+    return `${base} | Sending...`
+  }
+
+  if (message.deliveryState === "failed") {
+    return `${base} | Failed`
+  }
+
+  return base
+}
+
+function buildMessageDebugEntries(message: ChatMessage): MetadataEntry[] {
+  const entries: MetadataEntry[] = []
+  const cid = message.reference ? extractCidFromReference(message.reference) : undefined
+
+  const pushEntry = (key: string, value: unknown) => {
+    if (value === undefined || value === null) {
+      return
+    }
+
+    const formatted = String(value).trim()
+    if (!formatted) {
+      return
+    }
+
+    entries.push({ key, value: formatted })
+  }
+
+  pushEntry("Message ID", message.id)
+  pushEntry("Direction", message.outgoing ? "outgoing" : "incoming")
+  pushEntry("Sender Label", message.senderLabel)
+  pushEntry("Sender Address", message.senderAddress)
+  if (message.createdAt.getTime() > 0) {
+    pushEntry("Created At", message.createdAt.toISOString())
+  }
+  pushEntry("Message Type", message.messageType)
+  pushEntry("Content Type", message.contentType)
+  pushEntry("Tag", message.tag)
+  pushEntry("Reference", message.reference)
+  pushEntry("IPFS CID", cid)
+  if (message.payloadLength !== undefined) {
+    pushEntry("Payload Length", `${message.payloadLength} chars`)
+  }
+  pushEntry("Payload Error", message.payloadError)
+  pushEntry("Delivery State", message.deliveryState)
+
+  return entries
 }
 
 async function loadBucketPage() {
@@ -1380,174 +1444,195 @@ onMounted(async () => {
       <h2 style="margin: 0">Bucket {{ bucketDisplayName }}</h2>
     </header>
 
-    <section class="card stack" aria-live="polite">
-      <div class="row" style="justify-content: space-between; align-items: center">
-        <h3 style="margin: 0">Bucket Metadata</h3>
-        <div class="row" style="gap: 8px">
-          <button class="btn" type="button" :disabled="bucketLoading || messagesLoading" @click="loadBucketPage">
-            {{ bucketLoading || messagesLoading ? "Loading..." : "Reload" }}
-          </button>
-        </div>
-      </div>
-
-      <LoadingBar v-if="bucketLoading" label="Loading bucket metadata..." />
-      <p v-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
-
-      <dl v-if="!bucketLoading && !bucketError && bucketMetadata.length" class="bucket-metadata">
-        <div v-for="entry in bucketMetadata" :key="`bucket-${entry.key}`" class="bucket-metadata-item">
-          <dt>{{ entry.key }}</dt>
-          <dd>{{ entry.value }}</dd>
-        </div>
-      </dl>
-
-      <p v-if="!bucketLoading && !bucketError && !bucketMetadata.length" class="muted" style="margin: 0">
-        No metadata found for this bucket.
-      </p>
-    </section>
-
-    <section class="card stack" aria-live="polite">
-      <div class="row" style="justify-content: space-between; align-items: center">
-        <h3 style="margin: 0">Admins</h3>
-        <NuxtLink
-          class="btn"
-          :to="`/messages/bucket/members/${encodeURIComponent(bucketId)}?role=admin&namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`"
-        >
-          Add Admin
-        </NuxtLink>
-      </div>
-      <LoadingBar v-if="bucketLoading" label="Loading admins..." />
-      <p v-else-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
-      <p v-else-if="membersError" style="margin: 0; color: var(--status-error)">{{ membersError }}</p>
-      <ul v-else-if="bucketAdmins.length" class="bucket-members-list">
-        <li v-for="adminAddress in bucketAdmins" :key="`admin-${adminAddress}`" class="bucket-member-item">
-          <span>{{ formatAddress(adminAddress) }}</span>
-          <button
-            class="btn member-remove-btn"
-            type="button"
-            :disabled="Boolean(removingAdminAddress) || Boolean(removingContributorAddress) || !session.accountAddress"
-            @click="removeAdmin(adminAddress)"
-          >
-            <Trash2 :size="14" aria-hidden="true" />
-            <span>{{ removingAdminAddress === adminAddress ? "Removing..." : "Remove" }}</span>
-          </button>
-        </li>
-      </ul>
-      <p v-else class="muted" style="margin: 0">No admins found for this bucket.</p>
-    </section>
-
-    <section class="card stack" aria-live="polite">
-      <div class="row" style="justify-content: space-between; align-items: center">
-        <h3 style="margin: 0">Contributors</h3>
-        <NuxtLink
-          class="btn"
-          :to="`/messages/bucket/members/${encodeURIComponent(bucketId)}?role=contributor&namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`"
-        >
-          Add Contributor
-        </NuxtLink>
-      </div>
-      <LoadingBar v-if="bucketLoading" label="Loading contributors..." />
-      <p v-else-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
-      <p v-else-if="membersError" style="margin: 0; color: var(--status-error)">{{ membersError }}</p>
-      <ul v-else-if="bucketContributors.length" class="bucket-members-list">
-        <li v-for="contributorAddress in bucketContributors" :key="`contributor-${contributorAddress}`" class="bucket-member-item">
-          <div class="contributor-details">
-            <span>{{ formatAddress(contributorAddress) }}</span>
-            <span class="muted contributor-key">
-              X25519: {{ contributorX25519Keys[contributorAddress] || (loadingContributorKeys ? "Loading..." : "Not found") }}
-            </span>
+    <details class="card stack collapsible-card" aria-live="polite">
+      <summary class="collapsible-summary">Bucket Metadata</summary>
+      <div class="collapsible-body stack">
+        <div class="row" style="justify-content: space-between; align-items: center">
+          <h3 style="margin: 0">Bucket Metadata</h3>
+          <div class="row" style="gap: 8px">
+            <button class="btn" type="button" :disabled="bucketLoading || messagesLoading" @click="loadBucketPage">
+              {{ bucketLoading || messagesLoading ? "Loading..." : "Reload" }}
+            </button>
           </div>
-          <button
-            class="btn member-remove-btn"
-            type="button"
-            :disabled="Boolean(removingAdminAddress) || Boolean(removingContributorAddress) || !session.accountAddress"
-            @click="removeContributor(contributorAddress)"
+        </div>
+
+        <LoadingBar v-if="bucketLoading" label="Loading bucket metadata..." />
+        <p v-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
+
+        <dl v-if="!bucketLoading && !bucketError && bucketMetadata.length" class="bucket-metadata">
+          <div v-for="entry in bucketMetadata" :key="`bucket-${entry.key}`" class="bucket-metadata-item">
+            <dt>{{ entry.key }}</dt>
+            <dd>{{ entry.value }}</dd>
+          </div>
+        </dl>
+
+        <p v-if="!bucketLoading && !bucketError && !bucketMetadata.length" class="muted" style="margin: 0">
+          No metadata found for this bucket.
+        </p>
+      </div>
+    </details>
+
+    <details class="card stack collapsible-card" aria-live="polite">
+      <summary class="collapsible-summary">Admins</summary>
+      <div class="collapsible-body stack">
+        <div class="row" style="justify-content: space-between; align-items: center">
+          <h3 style="margin: 0">Admins</h3>
+          <NuxtLink
+            class="btn"
+            :to="`/messages/bucket/members/${encodeURIComponent(bucketId)}?role=admin&namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`"
           >
-            <Trash2 :size="14" aria-hidden="true" />
-            <span>{{ removingContributorAddress === contributorAddress ? "Removing..." : "Remove" }}</span>
-          </button>
-        </li>
-      </ul>
-      <p v-if="!session.accountAddress" class="muted" style="margin: 0">
-        Connect wallet on the dashboard first to remove bucket members.
-      </p>
-      <p
-        v-if="!bucketLoading && !bucketError && !membersError && !bucketContributors.length"
-        class="muted"
-        style="margin: 0"
-      >
-        No contributors found for this bucket.
-      </p>
-    </section>
+            Add Admin
+          </NuxtLink>
+        </div>
+        <LoadingBar v-if="bucketLoading" label="Loading admins..." />
+        <p v-else-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
+        <p v-else-if="membersError" style="margin: 0; color: var(--status-error)">{{ membersError }}</p>
+        <ul v-else-if="bucketAdmins.length" class="bucket-members-list">
+          <li v-for="adminAddress in bucketAdmins" :key="`admin-${adminAddress}`" class="bucket-member-item">
+            <span>{{ formatAddress(adminAddress) }}</span>
+            <button
+              class="btn member-remove-btn"
+              type="button"
+              :disabled="Boolean(removingAdminAddress) || Boolean(removingContributorAddress) || !session.accountAddress"
+              @click="removeAdmin(adminAddress)"
+            >
+              <Trash2 :size="14" aria-hidden="true" />
+              <span>{{ removingAdminAddress === adminAddress ? "Removing..." : "Remove" }}</span>
+            </button>
+          </li>
+        </ul>
+        <p v-else class="muted" style="margin: 0">No admins found for this bucket.</p>
+      </div>
+    </details>
 
-    <section class="card stack" aria-live="polite">
-      <div class="row" style="justify-content: space-between; align-items: center">
-        <h3 style="margin: 0">Communication Encryption Key</h3>
-        <button
-          class="btn btn-primary"
-          type="button"
-          :disabled="
-            generatingEncryptionKey ||
-            !session.accountAddress ||
-            !connectedAdmin ||
-            loadingContributorKeys ||
-            !contributorRecipients.length
-          "
-          @click="generateAndShareEncryptionKey"
+    <details class="card stack collapsible-card" aria-live="polite">
+      <summary class="collapsible-summary">Contributors</summary>
+      <div class="collapsible-body stack">
+        <div class="row" style="justify-content: space-between; align-items: center">
+          <h3 style="margin: 0">Contributors</h3>
+          <NuxtLink
+            class="btn"
+            :to="`/messages/bucket/members/${encodeURIComponent(bucketId)}?role=contributor&namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`"
+          >
+            Add Contributor
+          </NuxtLink>
+        </div>
+        <LoadingBar v-if="bucketLoading" label="Loading contributors..." />
+        <p v-else-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
+        <p v-else-if="membersError" style="margin: 0; color: var(--status-error)">{{ membersError }}</p>
+        <ul v-else-if="bucketContributors.length" class="bucket-members-list">
+          <li v-for="contributorAddress in bucketContributors" :key="`contributor-${contributorAddress}`" class="bucket-member-item">
+            <div class="contributor-details">
+              <span>{{ formatAddress(contributorAddress) }}</span>
+              <span class="muted contributor-key">
+                X25519: {{ contributorX25519Keys[contributorAddress] || (loadingContributorKeys ? "Loading..." : "Not found") }}
+              </span>
+            </div>
+            <button
+              class="btn member-remove-btn"
+              type="button"
+              :disabled="Boolean(removingAdminAddress) || Boolean(removingContributorAddress) || !session.accountAddress"
+              @click="removeContributor(contributorAddress)"
+            >
+              <Trash2 :size="14" aria-hidden="true" />
+              <span>{{ removingContributorAddress === contributorAddress ? "Removing..." : "Remove" }}</span>
+            </button>
+          </li>
+        </ul>
+        <p v-if="!session.accountAddress" class="muted" style="margin: 0">
+          Connect wallet on the dashboard first to remove bucket members.
+        </p>
+        <p
+          v-if="!bucketLoading && !bucketError && !membersError && !bucketContributors.length"
+          class="muted"
+          style="margin: 0"
         >
-          {{ generatingEncryptionKey ? "Generating..." : "Generate & Share New Key" }}
-        </button>
-      </div>
-
-      <p class="muted" style="margin: 0">
-        Generates a fresh X25519 encryption keypair, stores the public key ID on-chain, ensures the key-sharing tag exists,
-        then encrypts and shares the new secret key for contributors using their loaded X25519 keys.
-      </p>
-
-      <ul class="key-rotation-checks">
-        <li>Contributors with X25519: {{ contributorRecipients.length }} / {{ bucketContributors.length }}</li>
-        <li v-if="latestGeneratedKeyId">Last generated key ID: {{ latestGeneratedKeyId }}</li>
-      </ul>
-
-      <p v-if="!connectedAdmin" class="muted" style="margin: 0">
-        Only bucket admins can generate and distribute encryption keys.
-      </p>
-
-      <p v-if="encryptionKeyError" style="margin: 0; color: var(--status-error)">
-        {{ encryptionKeyError }}
-      </p>
-      <p v-if="encryptionKeySuccess" class="status-success" style="margin: 0">
-        {{ encryptionKeySuccess }}
-      </p>
-
-      <div v-if="latestGeneratedPublicJwk" class="key-preview-wrap">
-        <p class="muted" style="margin: 0">Latest generated bucket public JWK</p>
-        <pre class="key-preview">{{ latestGeneratedPublicJwk }}</pre>
-      </div>
-
-      <div class="key-preview-wrap">
-
-        <p v-if="decryptedKeySharingSourceMessageId" class="muted" style="margin: 0">
-          Source message id: {{ decryptedKeySharingSourceMessageId }}
+          No contributors found for this bucket.
         </p>
-
-        <p v-if="decryptedKeySharingError" style="margin: 0; color: var(--status-error)">
-          {{ decryptedKeySharingError }}
-        </p>
-
-        <pre v-else-if="decryptedKeySharingPayload" class="key-preview">{{ decryptedKeySharingPayload }}</pre>
       </div>
-    </section>
+    </details>
 
-    <section class="card stack chat-shell" aria-live="polite">
-      <div class="row" style="justify-content: space-between; align-items: center">
-        <h3 style="margin: 0">Conversation</h3>
-        <div class="row" style="gap: 8px">
-          <NuxtLink class="btn" to="/messages">Back</NuxtLink>
-          <button class="btn" type="button" :disabled="messagesLoading || bucketLoading" @click="loadBucketPage">
-            {{ messagesLoading || bucketLoading ? "Loading..." : "Reload" }}
+    <details class="card stack collapsible-card" aria-live="polite">
+      <summary class="collapsible-summary">Communication Encryption Key</summary>
+      <div class="collapsible-body stack">
+        <div class="row" style="justify-content: space-between; align-items: center">
+          <h3 style="margin: 0">Communication Encryption Key</h3>
+          <button
+            class="btn btn-primary"
+            type="button"
+            :disabled="
+              generatingEncryptionKey ||
+              !session.accountAddress ||
+              !connectedAdmin ||
+              loadingContributorKeys ||
+              !contributorRecipients.length
+            "
+            @click="generateAndShareEncryptionKey"
+          >
+            {{ generatingEncryptionKey ? "Generating..." : "Generate & Share New Key" }}
           </button>
         </div>
+
+        <p class="muted" style="margin: 0">
+          Generates a fresh X25519 encryption keypair, stores the public key ID on-chain, ensures the key-sharing tag exists,
+          then encrypts and shares the new secret key for contributors using their loaded X25519 keys.
+        </p>
+
+        <ul class="key-rotation-checks">
+          <li>Contributors with X25519: {{ contributorRecipients.length }} / {{ bucketContributors.length }}</li>
+          <li v-if="latestGeneratedKeyId">Last generated key ID: {{ latestGeneratedKeyId }}</li>
+        </ul>
+
+        <p v-if="!connectedAdmin" class="muted" style="margin: 0">
+          Only bucket admins can generate and distribute encryption keys.
+        </p>
+
+        <p v-if="encryptionKeyError" style="margin: 0; color: var(--status-error)">
+          {{ encryptionKeyError }}
+        </p>
+        <p v-if="encryptionKeySuccess" class="status-success" style="margin: 0">
+          {{ encryptionKeySuccess }}
+        </p>
+
+        <div v-if="latestGeneratedPublicJwk" class="key-preview-wrap">
+          <p class="muted" style="margin: 0">Latest generated bucket public JWK</p>
+          <pre class="key-preview">{{ latestGeneratedPublicJwk }}</pre>
+        </div>
+
+        <div class="key-preview-wrap">
+
+          <p v-if="decryptedKeySharingSourceMessageId" class="muted" style="margin: 0">
+            Source message id: {{ decryptedKeySharingSourceMessageId }}
+          </p>
+
+          <p v-if="decryptedKeySharingError" style="margin: 0; color: var(--status-error)">
+            {{ decryptedKeySharingError }}
+          </p>
+
+          <pre v-else-if="decryptedKeySharingPayload" class="key-preview">{{ decryptedKeySharingPayload }}</pre>
+        </div>
       </div>
+    </details>
+
+    <section class="chat-shell" aria-live="polite">
+      <header class="chat-header">
+        <NuxtLink class="chat-icon-button chat-back-button" to="/messages" aria-label="Back to message buckets">
+          &lt;
+        </NuxtLink>
+        <div class="chat-header-title">
+          <span class="chat-header-kicker">Bucket</span>
+          <h3>{{ bucketDisplayName }}</h3>
+        </div>
+        <button
+          class="chat-icon-button"
+          type="button"
+          :disabled="messagesLoading || bucketLoading"
+          aria-label="Reload messages"
+          @click="loadBucketPage"
+        >
+          R
+        </button>
+      </header>
 
       <LoadingBar v-if="messagesLoading" label="Loading messages..." />
 
@@ -1564,28 +1649,28 @@ onMounted(async () => {
           class="chat-row"
           :class="message.outgoing ? 'chat-row-outgoing' : 'chat-row-incoming'"
         >
-          <article class="chat-bubble" :class="message.outgoing ? 'chat-bubble-outgoing' : 'chat-bubble-incoming'">
-            <p class="chat-text">{{ message.body }}</p>
-            <p v-if="message.description" class="chat-description">{{ message.description }}</p>
-            <div
-              v-if="message.messageType || message.contentType || message.tag || message.reference || message.payloadError"
-              class="chat-details"
-            >
-              <span v-if="message.messageType" class="chat-detail-chip">Type: {{ message.messageType }}</span>
-              <span v-if="message.contentType" class="chat-detail-chip">Content-Type: {{ message.contentType }}</span>
-              <span v-if="message.tag" class="chat-detail-chip">Tag: {{ message.tag }}</span>
-              <span v-if="message.reference" class="chat-detail-chip">Ref: {{ message.reference }}</span>
-              <span v-if="message.payloadError" class="chat-detail-chip chat-detail-chip-error">
-                Payload unavailable: {{ message.payloadError }}
-              </span>
-            </div>
-            <footer class="chat-meta">
-              <span>{{ message.senderLabel }}</span>
-              <span v-if="formatTimestamp(message.createdAt)">{{ formatTimestamp(message.createdAt) }}</span>
-              <span v-if="message.deliveryState === 'sending'">Sending...</span>
-              <span v-if="message.deliveryState === 'failed'" style="color: var(--status-error)">Failed</span>
-            </footer>
-          </article>
+          <div class="chat-message">
+            <p v-if="!message.outgoing" class="chat-sender">{{ message.senderLabel }}</p>
+            <article class="chat-bubble" :class="message.outgoing ? 'chat-bubble-outgoing' : 'chat-bubble-incoming'">
+              <p class="chat-text">{{ message.body }}</p>
+              <p v-if="message.payloadError" class="chat-warning">Payload unavailable: {{ message.payloadError }}</p>
+
+              <details v-if="settings.showMessageDebug" class="chat-debug">
+                <summary>Debug data</summary>
+                <dl v-if="buildMessageDebugEntries(message).length" class="chat-debug-grid">
+                  <div
+                    v-for="entry in buildMessageDebugEntries(message)"
+                    :key="`${message.id}-${entry.key}`"
+                    class="chat-debug-item"
+                  >
+                    <dt>{{ entry.key }}</dt>
+                    <dd>{{ entry.value }}</dd>
+                  </div>
+                </dl>
+              </details>
+            </article>
+            <p class="chat-timestamp">{{ formatMessageMeta(message) }}</p>
+          </div>
         </div>
       </div>
 
@@ -1598,7 +1683,7 @@ onMounted(async () => {
           rows="2"
           :disabled="sending"
         />
-        <button class="btn btn-primary" type="submit" :disabled="sending || messagesLoading">
+        <button class="btn btn-primary chat-send-btn" type="submit" :disabled="sending || messagesLoading">
           {{ sending ? "Sending..." : "Send" }}
         </button>
       </form>
@@ -1616,25 +1701,117 @@ onMounted(async () => {
   min-height: 0;
 }
 
+.collapsible-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.collapsible-summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 14px 16px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.collapsible-summary::-webkit-details-marker {
+  display: none;
+}
+
+.collapsible-summary::after {
+  content: "+";
+  font-size: 16px;
+  color: var(--text-secondary);
+}
+
+.collapsible-card[open] .collapsible-summary::after {
+  content: "-";
+}
+
+.collapsible-body {
+  padding: 0 16px 16px;
+}
+
 .chat-shell {
-  min-height: calc(100vh - 220px);
+  min-height: 100vh;
+  padding: 0;
+  overflow: hidden;
+  background: var(--color-white);
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border-default);
+  border-bottom: 1px solid var(--border-default);
+}
+
+.chat-header {
+  display: grid;
+  grid-template-columns: 40px 1fr 40px;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--color-white);
+}
+
+.chat-header-title {
+  text-align: center;
+  display: grid;
+  gap: 2px;
+}
+
+.chat-header-title h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.chat-header-kicker {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+.chat-icon-button {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  border: 1px solid var(--border-default);
+  background: var(--color-white);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-weight: 600;
+  transition: border-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
+}
+
+.chat-icon-button:hover:not(:disabled),
+.chat-icon-button:focus-visible:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 20%, transparent);
+}
+
+.chat-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .chat-viewport {
   flex: 1;
   min-height: 380px;
-  max-height: 62vh;
+  max-height: none;
   overflow-y: auto;
-  border: 1px solid var(--border-default);
-  border-radius: 14px;
-  padding: 14px;
-  background:
-    radial-gradient(circle at 20% 20%, rgba(87, 160, 197, 0.12), transparent 30%),
-    radial-gradient(circle at 80% 0%, rgba(87, 160, 197, 0.08), transparent 24%),
-    var(--color-gray-50);
+  padding: 16px 18px 24px;
+  background: #f7f8fa;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
 }
 
 .chat-row {
@@ -1650,21 +1827,55 @@ onMounted(async () => {
   justify-content: flex-end;
 }
 
-.chat-bubble {
+.chat-message {
   max-width: min(78%, 560px);
-  border-radius: 12px;
-  padding: 10px 12px;
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.06);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.chat-row-outgoing .chat-message {
+  align-items: flex-end;
+}
+
+.chat-sender {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.chat-bubble {
+  width: 100%;
+  border-radius: 14px;
+  padding: 12px 14px;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.06);
 }
 
 .chat-bubble-incoming {
-  background: var(--color-white);
-  border: 1px solid var(--border-default);
+  background: color-mix(in srgb, var(--color-primary) 6%, var(--color-white));
+  border: 1px solid color-mix(in srgb, var(--color-primary) 35%, var(--border-default));
+  border-left: 3px solid var(--color-primary);
+  padding-left: 12px;
 }
 
 .chat-bubble-outgoing {
-  background: #dcf8c6;
-  border: 1px solid rgba(92, 135, 84, 0.25);
+  background: var(--color-primary);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 70%, #000000);
+}
+
+.chat-bubble-outgoing .chat-text,
+.chat-bubble-outgoing .chat-description,
+.chat-bubble-outgoing .chat-debug,
+.chat-bubble-outgoing .chat-debug summary,
+.chat-bubble-outgoing .chat-debug-item dt,
+.chat-bubble-outgoing .chat-debug-item dd {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.chat-bubble-outgoing .chat-warning {
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .chat-text {
@@ -1673,45 +1884,52 @@ onMounted(async () => {
   word-break: break-word;
 }
 
-.chat-description {
+.chat-warning {
   margin: 8px 0 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  white-space: pre-wrap;
-  word-break: break-word;
+  font-size: 12px;
+  color: var(--status-error);
 }
 
-.chat-details {
-  margin-top: 8px;
-  display: flex;
-  flex-wrap: wrap;
+.chat-debug {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.chat-debug summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chat-debug-grid {
+  margin: 8px 0 0;
+  display: grid;
   gap: 6px;
 }
 
-.chat-detail-chip {
-  border: 1px solid var(--border-default);
-  border-radius: 999px;
-  padding: 2px 8px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.65);
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-detail-chip-error {
-  color: var(--status-error);
-  border-color: color-mix(in srgb, var(--status-error) 55%, var(--border-default));
-}
-
-.chat-meta {
-  margin-top: 6px;
-  display: flex;
-  justify-content: flex-end;
+.chat-debug-item {
+  display: grid;
+  grid-template-columns: minmax(120px, 160px) 1fr;
   gap: 8px;
-  font-size: 12px;
+  word-break: break-word;
+}
+
+.chat-debug-item dt {
+  margin: 0;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.chat-debug-item dd {
+  margin: 0;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+}
+
+.chat-timestamp {
+  margin: 0;
+  font-size: 11px;
   color: var(--text-secondary);
 }
 
@@ -1819,27 +2037,45 @@ onMounted(async () => {
 .chat-composer {
   display: flex;
   gap: 10px;
-  align-items: flex-end;
+  align-items: stretch;
+  padding: 12px 14px 16px;
+  border-top: 1px solid var(--border-default);
+  background: var(--color-white);
 }
 
 .chat-input {
-  resize: vertical;
-  min-height: 56px;
+  resize: none;
+  min-height: 48px;
+  height: 48px;
+  border-radius: 999px;
+  padding: 12px 16px;
+  background: #f6f7f9;
+  border: none;
+  box-shadow: none;
+  flex: 1;
+  line-height: 24px;
+}
+
+.chat-send-btn {
+  border-radius: 999px;
+  padding: 10px 18px;
+  min-height: 48px;
+  border: none;
 }
 
 @media (max-width: 840px) {
   .chat-shell {
-    min-height: calc(100vh - 190px);
+    min-height: 100vh;
   }
 
   .chat-viewport {
     min-height: 320px;
-    max-height: 56vh;
-    padding: 10px;
+    max-height: none;
+    padding: 12px 12px 20px;
   }
 
-  .chat-bubble {
-    max-width: 88%;
+  .chat-message {
+    max-width: 100%;
   }
 
   .chat-composer {
@@ -1847,10 +2083,13 @@ onMounted(async () => {
     align-items: stretch;
   }
 
+  .chat-debug-item {
+    grid-template-columns: 1fr;
+  }
+
   .bucket-metadata-item {
     grid-template-columns: 1fr;
     gap: 2px;
   }
-
 }
 </style>
