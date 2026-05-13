@@ -7,12 +7,14 @@ import { computed } from "vue"
 import { ref } from "vue"
 import { useRuntimeConfig } from "nuxt/app"
 import { useAddress } from "../composables/useAddress"
+import { useSettingsStore } from "../stores/settings"
 import { X25519KeyService } from "../services/crypto/x25519KeyService"
 import { useOperationsStore } from "../stores/operations"
 import { useSessionStore } from "../stores/session"
 import type { KeyMaterial } from "../types/keys"
 
 const { ss58Prefix, formatAddress } = useAddress()
+const settings = useSettingsStore()
 const mnemonic = ref("")
 const ss58Address = ref("")
 const generatingMnemonic = ref(false)
@@ -57,6 +59,9 @@ const submittingDidAddKeyAgreement = ref(false)
 const didAddKeyAgreementError = ref<string | null>(null)
 const didAddKeyAgreementStatus = ref("")
 const didAddKeyAgreementTxHash = ref("")
+
+const didSignMnemonic = ref("")
+const didSignPayloadHex = ref("")
 
 async function generateMnemonic(): Promise<void> {
   generatingMnemonic.value = true
@@ -1071,6 +1076,32 @@ const displayedDerivedDidAddress = computed(() => formatAddress(derivedDidAddres
       <p v-if="didAddKeyAgreementError" class="error-text">{{ didAddKeyAgreementError }}</p>
       <p v-if="didAddKeyAgreementStatus" class="muted" style="margin: 0">{{ didAddKeyAgreementStatus }}</p>
       <p v-if="didAddKeyAgreementTxHash" class="muted" style="margin: 0">Tx Hash: {{ didAddKeyAgreementTxHash }}</p>
+    </section>
+
+    <section v-if="settings.showMessageDebug" class="card stack">
+      <div class="row section-header">
+        <h2 style="margin: 0">DID Signing</h2>
+      </div>
+
+      <label class="stack field-group">
+        <span class="muted">DID mnemonic</span>
+        <textarea
+          v-model="didSignMnemonic"
+          class="input mnemonic-input"
+          rows="2"
+          placeholder="word1 word2 ..."
+        />
+      </label>
+
+      <label class="stack field-group">
+        <span class="muted">Hex encoded data to sign</span>
+        <textarea
+          v-model="didSignPayloadHex"
+          class="input address-value"
+          rows="2"
+          placeholder="0x..."
+        />
+      </label>
     </section>
   </main>
 </template>

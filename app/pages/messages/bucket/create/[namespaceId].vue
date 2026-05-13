@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { DidCommRepository, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
+import WalletConnectPrompt from "../../../../components/common/WalletConnectPrompt.vue"
 import { computed, ref } from "vue"
 import { useNuxtApp, useRoute } from "nuxt/app"
 import { useOperationsStore } from "../../../../stores/operations"
@@ -25,6 +26,7 @@ const namespaceId = computed(() => {
 })
 
 const namespaceRoutePath = computed(() => `/messages/namespace/${encodeURIComponent(namespaceId.value)}`)
+const isWalletConnected = computed(() => session.walletStatus === "connected" && Boolean(session.accountAddress))
 
 const bucketName = ref("")
 const submitting = ref(false)
@@ -95,7 +97,13 @@ async function submitCreateBucket(): Promise<void> {
       </p>
     </header>
 
-    <section class="card stack" aria-live="polite">
+    <WalletConnectPrompt
+      v-if="!isWalletConnected"
+      title="Connect Your Wallet"
+      description="Connect your wallet to create a bucket in this namespace."
+    />
+
+    <section v-else class="card stack" aria-live="polite">
       <label class="stack" style="gap: 6px">
         <span>Namespace</span>
         <input class="input" type="text" :value="namespaceId" disabled />
@@ -119,10 +127,6 @@ async function submitCreateBucket(): Promise<void> {
           {{ submitting ? "Submitting..." : "Submit Extrinsic" }}
         </button>
       </div>
-
-      <p v-if="!session.accountAddress" class="muted" style="margin: 0">
-        Connect wallet on the dashboard first to sign and submit this extrinsic.
-      </p>
 
       <p v-if="submitError" style="margin: 0; color: var(--status-error)">{{ submitError }}</p>
       <p v-if="submittedTxHash" style="margin: 0; color: var(--status-success)">

@@ -58,14 +58,9 @@ onMounted(async () => {
 
 <template>
   <div class="stack">
-    <header class="card">
-      <h2 style="margin: 0">Asset DIDComm Management</h2>
-      <p class="muted" style="margin: 8px 0 0">Manage key material and message-related operations.</p>
-    </header>
-
-    <section class="card stack" aria-live="polite">
-      <div class="row" style="justify-content: space-between; align-items: center">
-        <h3 style="margin: 0">Buckets Namespaces</h3>
+    <section class="stack" aria-live="polite">
+      <div class="row buckets-header" style="justify-content: space-between; align-items: center">
+        <h3 style="margin: 0">Namespaces</h3>
         <div class="row" style="gap: 8px">
           <NuxtLink class="btn" to="/messages/namespaces/new">Add Namespace</NuxtLink>
           <button class="btn" type="button" :disabled="namespacesLoading" @click="loadNamespaces">
@@ -73,19 +68,30 @@ onMounted(async () => {
           </button>
         </div>
       </div>
+
       <LoadingBar v-if="namespacesLoading" label="Loading namespaces..." />
+
       <p v-if="namespaceError" style="margin: 0; color: var(--status-error)">{{ namespaceError }}</p>
       <p v-else-if="!namespaces.length && !namespacesLoading" class="muted" style="margin: 0">
         No namespaces found.
       </p>
-      <ul v-else style="margin: 0; padding-left: 18px">
-        <li v-for="namespace in namespaces" :key="namespace.id">
-          <NuxtLink :to="`/messages/namespace/${encodeURIComponent(namespace.id)}`">
-            <strong>{{ namespace.name }}</strong>
-            <span class="muted"> ({{ namespace.id }})</span>
-          </NuxtLink>
-        </li>
-      </ul>
+
+      <div v-else-if="namespaces.length" class="stack" style="gap: 12px">
+        <NuxtLink
+          v-for="namespace in namespaces"
+          :key="namespace.id"
+          :to="`/messages/namespace/${encodeURIComponent(namespace.id)}`"
+          class="card bucket-card"
+          style="padding: 16px; text-decoration: none; color: inherit; display: block"
+        >
+          <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap">
+            <div class="stack" style="gap: 6px">
+              <strong style="font-size: 16px">{{ namespace.name }}</strong>
+              <p class="muted" style="margin: 0">Namespace ID: {{ namespace.id }}</p>
+            </div>
+          </div>
+        </NuxtLink>
+      </div>
     </section>
 
     <KeyManagementPanel

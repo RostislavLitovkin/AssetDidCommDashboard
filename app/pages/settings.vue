@@ -9,7 +9,6 @@ const ss58PrefixInput = ref(String(settings.ss58Prefix))
 const saveError = ref("")
 const saveSuccess = ref("")
 
-const currentPrefix = computed(() => settings.ss58Prefix)
 const showMessageDebug = computed({
   get: () => settings.showMessageDebug,
   set: (value: boolean) => settings.setShowMessageDebug(value)
@@ -23,63 +22,46 @@ function saveSettings(): void {
     const parsed = Number.parseInt(ss58PrefixInput.value, 10)
     settings.setSs58Prefix(parsed)
     ss58PrefixInput.value = String(settings.ss58Prefix)
-    saveSuccess.value = "SS58 prefix saved. Address formatting has been updated across the dashboard."
+    saveSuccess.value = "Saved"
   } catch (error) {
-    saveError.value = error instanceof Error ? error.message : "Unable to save SS58 prefix"
+    saveError.value = error instanceof Error ? error.message : "Unable to save"
   }
-}
-
-function resetToCurrent(): void {
-  ss58PrefixInput.value = String(settings.ss58Prefix)
-  saveError.value = ""
-  saveSuccess.value = ""
 }
 </script>
 
 <template>
   <main class="stack settings-page">
-    <header class="card stack" style="gap: 8px">
-      <h1 style="margin: 0">Settings</h1>
-      <p class="muted" style="margin: 0">
-        Configure the dashboard to your needs.
-      </p>
-    </header>
-
     <section class="card stack" style="gap: 10px" aria-live="polite">
-      <p class="muted" style="margin: 0">Current saved prefix: <strong>{{ currentPrefix }}</strong></p>
-
       <label class="stack" style="gap: 6px">
         <span>SS58 Prefix</span>
-        <input
-          v-model="ss58PrefixInput"
-          class="input"
-          type="number"
-          min="0"
-          max="16383"
-          step="1"
-          inputmode="numeric"
-          placeholder="42"
-        />
+        <div style="display: flex; gap: 8px; align-items: flex-end">
+          <input
+            v-model="ss58PrefixInput"
+            class="input"
+            type="number"
+            min="0"
+            max="16383"
+            step="1"
+            inputmode="numeric"
+            placeholder="42"
+            style="flex: 1"
+          />
+          <button class="btn btn-primary" type="button" @click="saveSettings" style="white-space: nowrap">
+            Save
+          </button>
+        </div>
       </label>
-
-      <div class="row settings-actions" style="justify-content: flex-end; gap: 8px">
-        <button class="btn" type="button" @click="resetToCurrent">Reset</button>
-        <button class="btn btn-primary" type="button" @click="saveSettings">Save</button>
-      </div>
-
       <p v-if="saveError" class="error-text">{{ saveError }}</p>
       <p v-if="saveSuccess" class="success-text">{{ saveSuccess }}</p>
     </section>
 
     <section class="card stack" style="gap: 10px">
-      <h2 style="margin: 0">Message Debugging</h2>
-      <p class="muted" style="margin: 0">
-        Show collapsible debug data in message threads, including IPFS references and message IDs.
-      </p>
       <label class="toggle-row">
         <input v-model="showMessageDebug" type="checkbox" />
-        <span>Show message debug data</span>
+        <span>Show debug data</span>
       </label>
+      <span>This will display extra data like on-chain ids, block numbers and extra debugging windows. Keep disabled if you are unsure what this does.</span>
+
     </section>
   </main>
 </template>

@@ -1,10 +1,15 @@
+@font-face {
+  font-family: "Xcavate";
+  src: url("~/assets/fonts/xcavatefont.ttf") format("truetype");
+}
+
 * {
   box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  font-family: Inter, Arial, sans-serif;
+  font-family: "Xcavate", Inter, Arial, sans-serif;
   background: var(--surface-bg);
   color: var(--text-primary);
 }
@@ -49,6 +54,17 @@ select {
   border: 1px solid var(--border-default);
   border-radius: 12px;
   padding: 16px;
+}
+
+.card.bucket-card {
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.card.bucket-card:hover:not(:disabled),
+.card.bucket-card:focus-visible:not(:disabled) {
+  border-color: var(--color-primary);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.06);
+  transform: translateY(-2px);
 }
 
 .btn {
@@ -151,6 +167,81 @@ select:focus-visible {
   .row {
     flex-direction: column;
     align-items: stretch;
+  }
+}
+
+/* Keep bucket cards on a single row on small screens and truncate text */
+@media (max-width: 720px) {
+  .card.bucket-card {
+    padding: 12px;
+  }
+
+  .card.bucket-card .row {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .card.bucket-card .stack {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .card.bucket-card strong,
+  .card.bucket-card .muted {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
+  }
+
+  .card.bucket-card .row > .row {
+    flex: 0 0 auto;
+  }
+}
+
+/* Ensure header stays a single row (desktop-like) on small screens */
+@media (max-width: 720px) {
+  .buckets-header {
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+  }
+
+  .buckets-header .row {
+    flex-direction: row !important;
+    align-items: center !important;
+  }
+}
+
+/* Keep header (title + add button) layout non-wrapping and truncate text on small screens */
+@media (max-width: 720px) {
+  .buckets-header {
+    width: 100%;
+  }
+
+  .buckets-header .stack {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .buckets-header h3 {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin: 0;
+  }
+
+  .buckets-header .row {
+    flex: 0 0 auto;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .buckets-header .btn {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }
 

@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { DidCommRepository, type BucketRecord } from "../../../services/papi/didCommRepository"
 import LoadingBar from "../../../components/common/LoadingBar.vue"
+import WalletConnectPrompt from "../../../components/common/WalletConnectPrompt.vue"
 import { computed, onMounted, ref } from "vue"
 import { useNuxtApp, useRoute } from "nuxt/app"
+import { useSessionStore } from "../../../stores/session"
 
 const route = useRoute()
 const { $papiClient } = useNuxtApp()
+const session = useSessionStore()
 const didCommRepository = new DidCommRepository(
   $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string }
 )
@@ -24,6 +27,19 @@ const namespaceId = computed(() => {
 const buckets = ref<BucketRecord[]>([])
 const bucketsLoading = ref(false)
 const bucketsError = ref("")
+const namespaceName = ref("")
+
+const namespaceDisplayName = computed(() => namespaceName.value || `Namespace id: ${namespaceId.value}`)
+const isWalletConnected = computed(() => session.walletStatus === "connected" && Boolean(session.accountAddress))
+
+function resolveDisplayName(bucket: BucketRecord): string {
+  const name = typeof bucket.name === "string" ? bucket.name.trim() : ""
+  if (name) {
+    return name
+  }
+
+  return `Bucket ${bucket.id}`
+}
 
 async function loadBuckets() {
   bucketsError.value = ""
@@ -38,44 +54,74 @@ async function loadBuckets() {
   }
 }
 
+function normalizeNamespaceId(value: string): string {
+  return value.trim().toLowerCase()
+}
+
+async function loadNamespaceName() {
+  namespaceName.value = ""
+
+  try {
+    const namespaces = await didCommRepository.fetchNamespaces()
+    const matched = namespaces.find(
+      (namespace) => normalizeNamespaceId(namespace.id) === normalizeNamespaceId(namespaceId.value)
+    )
+
+    namespaceName.value = matched?.name?.trim() ?? ""
+  } catch {
+    namespaceName.value = ""
+  }
+}
+
 onMounted(async () => {
+  await loadNamespaceName()
   await loadBuckets()
 })
 </script>
 
 <template>
   <div class="stack">
-    <header class="card">
-      <h2 style="margin: 0">Namespace {{ namespaceId }}</h2>
-      <p class="muted" style="margin: 8px 0 0">Buckets from buckets.buckets storage.</p>
-    </header>
-
-    <section class="card stack" aria-live="polite">
-      <div class="row" style="justify-content: space-between; align-items: center">
-        <h3 style="margin: 0">Buckets</h3>
+    <section class="stack" aria-live="polite">
+      <div class="row buckets-header" style="justify-content: space-between; align-items: center">
+        <div class="stack" style="gap: 4px">
+          <h3 style="margin: 0">{{ namespaceDisplayName }}</h3>
+        </div>
         <div class="row" style="gap: 8px">
           <NuxtLink class="btn" :to="`/messages/bucket/create/${encodeURIComponent(namespaceId)}`">Add Bucket</NuxtLink>
-          <NuxtLink class="btn" to="/messages">Back</NuxtLink>
-          <button class="btn" type="button" :disabled="bucketsLoading" @click="loadBuckets">
-            {{ bucketsLoading ? "Loading..." : "Reload" }}
-          </button>
         </div>
       </div>
 
-      <LoadingBar v-if="bucketsLoading" label="Loading buckets..." />
+      <WalletConnectPrompt
+        v-if="!isWalletConnected"
+        title="Connect Your Wallet"
+        description="Connect your wallet to manage buckets in this namespace."
+      />
 
-      <p v-if="bucketsError" style="margin: 0; color: var(--status-error)">{{ bucketsError }}</p>
-      <p v-else-if="!buckets.length && !bucketsLoading" class="muted" style="margin: 0">
-        No buckets found for this namespace.
-      </p>
-      <ul v-else style="margin: 0; padding-left: 18px">
-        <li v-for="bucket in buckets" :key="bucket.id">
-          <NuxtLink :to="`/messages/bucket/${encodeURIComponent(bucket.id)}`">
-            <strong>{{ bucket.name }}</strong>
-            <span class="muted"> ({{ bucket.id }})</span>
+      <template v-else>
+        <LoadingBar v-if="bucketsLoading" label="Loading buckets..." />
+
+        <p v-if="bucketsError" style="margin: 0; color: var(--status-error)">{{ bucketsError }}</p>
+        <p v-else-if="!buckets.length && !bucketsLoading" class="muted" style="margin: 0">
+          No buckets found for this namespace.
+        </p>
+
+        <div v-else-if="buckets.length" class="stack" style="gap: 12px">
+          <NuxtLink
+            v-for="bucket in buckets"
+            :key="bucket.id"
+            :to="`/messages/bucket/${encodeURIComponent(bucket.id)}`"
+            class="card bucket-card"
+            style="padding: 16px; text-decoration: none; color: inherit; display: block"
+          >
+            <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap">
+              <div class="stack" style="gap: 6px">
+                <strong style="font-size: 16px">{{ resolveDisplayName(bucket) }}</strong>
+                <p class="muted" style="margin: 0">Bucket ID: {{ bucket.id }}</p>
+              </div>
+            </div>
           </NuxtLink>
-        </li>
-      </ul>
+        </div>
+      </template>
     </section>
   </div>
 </template>

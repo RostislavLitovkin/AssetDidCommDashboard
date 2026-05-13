@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { DidCommRepository, type ExtrinsicUpdate } from "../../../services/papi/didCommRepository"
-import { ref } from "vue"
+import WalletConnectPrompt from "../../../components/common/WalletConnectPrompt.vue"
+import { computed, ref } from "vue"
 import { useNuxtApp } from "nuxt/app"
 import { useOperationsStore } from "../../../stores/operations"
 import { useSessionStore } from "../../../stores/session"
@@ -11,6 +12,8 @@ const operations = useOperationsStore()
 const didCommRepository = new DidCommRepository(
   $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string }
 )
+
+const isWalletConnected = computed(() => session.walletStatus === "connected" && Boolean(session.accountAddress))
 
 const namespaceName = ref("")
 const submitting = ref(false)
@@ -63,40 +66,74 @@ async function submitCreateNamespace(): Promise<void> {
 </script>
 
 <template>
-  <div class="stack">
-    <header class="card">
-      <h2 style="margin: 0">Add Namespace</h2>
-      <p class="muted" style="margin: 8px 0 0">Submit a create-namespace extrinsic to the Xcavate blockchain.</p>
-    </header>
+  <main class="stack namespace-create-page">
+    <div class="row buckets-header" style="justify-content: space-between; align-items: center">
+        <h3 style="margin: 0">Add namespace</h3>
+      </div>
+    <WalletConnectPrompt
+      v-if="!isWalletConnected"
+      title="Connect Your Wallet"
+      description="Connect your wallet to create a namespace."
+    />
 
-    <section class="card stack" aria-live="polite">
+    <section v-else class="card stack" style="gap: 10px" aria-live="polite">
       <label class="stack" style="gap: 6px">
-        <span>Namespace Name</span>
-        <input
-          v-model="namespaceName"
-          class="input"
-          type="text"
-          name="namespace-name"
-          placeholder="e.g. asset-messages"
-          :disabled="submitting"
-        />
+        <span>Namespace name</span>
+        <div class="namespace-actions">
+          <input
+            v-model="namespaceName"
+            class="input"
+            type="text"
+            name="namespace-name"
+            placeholder="e.g. asset-messages"
+            :disabled="submitting"
+            style="flex: 1"
+          />
+          <button class="btn btn-primary" type="button" :disabled="submitting" @click="submitCreateNamespace" style="white-space: nowrap">
+            {{ submitting ? "Submitting..." : "Create" }}
+          </button>
+        </div>
       </label>
 
-      <div class="row" style="justify-content: flex-end; gap: 8px">
-        <NuxtLink class="btn" to="/messages">Cancel</NuxtLink>
-        <button class="btn" type="button" :disabled="submitting" @click="submitCreateNamespace">
-          {{ submitting ? "Submitting..." : "Submit Extrinsic" }}
-        </button>
-      </div>
-
-      <p v-if="!session.accountAddress" class="muted" style="margin: 0">
-        Connect wallet on the dashboard first to sign and submit this extrinsic.
-      </p>
-
-      <p v-if="submitError" style="margin: 0; color: var(--status-error)">{{ submitError }}</p>
-      <p v-if="submittedTxHash" style="margin: 0; color: var(--status-success)">
+      <p v-if="submitError" class="error-text">{{ submitError }}</p>
+      <p v-if="submittedTxHash" class="success-text">
         Submitted via {{ submittedMethod }} with hash {{ submittedTxHash }}
       </p>
     </section>
-  </div>
+  </main>
 </template>
+
+<style scoped>
+.namespace-create-page {
+  padding: 0;
+  max-width: 100%;
+  margin: 0;
+}
+
+.namespace-actions {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.error-text {
+  margin: 0;
+  color: var(--status-error);
+}
+
+.success-text {
+  margin: 0;
+  color: var(--status-success);
+}
+
+@media (max-width: 720px) {
+  .namespace-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .namespace-actions .btn {
+    width: 100%;
+  }
+}
+</style>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronRight, FileUp, Fingerprint, MessageSquare, Settings, Trash2, Wallet, X } from "lucide-vue-next"
+import { ChevronRight, FileUp, Fingerprint, Layers, Menu, MessageSquare, Settings, Trash2, Wallet, X } from "lucide-vue-next"
 import { computed, ref } from "vue"
 import NotificationCenter from "../common/NotificationCenter.vue"
 import { useAddress } from "../../composables/useAddress"
@@ -21,6 +21,7 @@ const walletCopySuccess = ref("")
 const x25519FileInputRef = ref<HTMLInputElement | null>(null)
 const showX25519CopyEffect = ref(false)
 const showWalletCopyEffect = ref(false)
+const isTopbarExpanded = ref(false)
 let x25519CopyEffectTimeout: ReturnType<typeof setTimeout> | undefined
 let walletCopyEffectTimeout: ReturnType<typeof setTimeout> | undefined
 const isWalletConnected = computed(() => wallet.walletStatus.value === "connected" && Boolean(wallet.accountAddress.value))
@@ -38,7 +39,16 @@ const formattedAccounts = computed(() =>
 
 async function openWalletPopup() {
   showWalletPopup.value = true
+  isTopbarExpanded.value = false
   accounts.value = await wallet.listAccounts()
+}
+
+function toggleTopbar(): void {
+  isTopbarExpanded.value = !isTopbarExpanded.value
+}
+
+function collapseTopbar(): void {
+  isTopbarExpanded.value = false
 }
 
 async function selectWallet(address: string) {
@@ -71,6 +81,7 @@ async function loadX25519SecretFromFile(event: Event) {
 
 function openX25519FilePicker() {
   x25519FileInputRef.value?.click()
+  isTopbarExpanded.value = false
 }
 
 function clearX25519Secret() {
@@ -144,29 +155,39 @@ async function copyX25519PublicKey() {
 
 <template>
   <main class="app-shell-root">
-    <aside class="app-shell-sidebar">
-      <NuxtLink to="/" style="padding: 8px 8px 20px; text-decoration: none; color: inherit; display: block">
-        <h2 style="margin: 0; font-size: 18px">Asset DIDComm</h2>
-      </NuxtLink>
+    <aside class="app-shell-sidebar" :class="{ 'topbar-expanded': isTopbarExpanded }">
+      <div class="sidebar-header">
+        <NuxtLink class="sidebar-brand" to="/">
+          <h2 style="margin: 0; font-size: 18px">Asset DIDComm</h2>
+        </NuxtLink>
+        <button class="btn sidebar-toggle" type="button" @click="toggleTopbar" :aria-expanded="isTopbarExpanded" aria-label="Toggle navigation">
+          <X v-if="isTopbarExpanded" :size="16" />
+          <Menu v-else :size="16" />
+        </button>
+      </div>
 
-      <nav class="stack" style="gap: 8px">
-        <NuxtLink class="btn sidebar-btn" to="/did" style="display: flex; align-items: center; gap: 8px; text-decoration: none">
+      <nav class="stack sidebar-nav" style="gap: 8px">
+        <NuxtLink aria-label="DID" class="btn sidebar-btn" to="/did" style="display: flex; align-items: center; gap: 8px; text-decoration: none" @click="collapseTopbar">
           <Fingerprint :size="16" />
-          DID
+          <span class="sidebar-label">DID</span>
         </NuxtLink>
-        <NuxtLink class="btn sidebar-btn" to="/messages" style="display: flex; align-items: center; gap: 8px; text-decoration: none">
+        <NuxtLink aria-label="Namespaces" class="btn sidebar-btn" to="/messages" style="display: flex; align-items: center; gap: 8px; text-decoration: none" @click="collapseTopbar">
+          <Layers :size="16" />
+          <span class="sidebar-label">Namespaces</span>
+        </NuxtLink>
+        <NuxtLink aria-label="Messages" class="btn sidebar-btn" to="/messages/my-buckets" style="display: flex; align-items: center; gap: 8px; text-decoration: none" @click="collapseTopbar">
           <MessageSquare :size="16" />
-          Messages
+          <span class="sidebar-label">Messages</span>
         </NuxtLink>
-        <NuxtLink class="btn sidebar-btn" to="/settings" style="display: flex; align-items: center; gap: 8px; text-decoration: none">
+        <NuxtLink aria-label="Settings" class="btn sidebar-btn" to="/settings" style="display: flex; align-items: center; gap: 8px; text-decoration: none" @click="collapseTopbar">
           <Settings :size="16" />
-          Settings
+          <span class="sidebar-label">Settings</span>
         </NuxtLink>
       </nav>
 
-      <div style="margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border-default)">
+      <div class="sidebar-extra" style="margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border-default)">
         <div
-          class="row muted"
+          class="row muted sidebar-inline-row"
           style="margin: 0 0 8px; font-size: 12px; align-items: center; gap: 6px; flex-wrap: nowrap"
           v-if="isWalletConnected"
         >
@@ -187,9 +208,6 @@ async function copyX25519PublicKey() {
           </span>
           <span class="wallet-copy-badge" v-if="showWalletCopyEffect">Copied!</span>
         </div>
-        <p class="muted" style="margin: 0 0 8px; font-size: 12px" v-if="wallet.providerName">
-          Provider: {{ wallet.providerName }}
-        </p>
         <p class="muted" style="margin: 0 0 8px; font-size: 12px" v-if="!isWalletConnected">
           No wallet connected
         </p>
@@ -209,7 +227,7 @@ async function copyX25519PublicKey() {
 
         <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-default)" aria-live="polite">
           <div
-            class="row muted"
+            class="row muted sidebar-inline-row"
             style="margin: 0 0 8px; font-size: 12px; align-items: center; gap: 6px; flex-wrap: nowrap"
             v-if="hasActiveX25519Key && activeX25519PublicX"
           >
@@ -265,7 +283,7 @@ async function copyX25519PublicKey() {
 
     <div
       v-if="showWalletPopup"
-      style="position: fixed; inset: 0; background: rgba(0,0,0,0.25); display: grid; place-items: center; z-index: 20"
+      style="position: fixed; inset: 0; background: rgba(0,0,0,0.25); display: grid; place-items: center; z-index: 40"
       @click.self="showWalletPopup = false"
     >
       <div class="card stack" style="width: min(560px, 92vw)">
@@ -275,7 +293,6 @@ async function copyX25519PublicKey() {
             <X :size="14" />
           </button>
         </div>
-        <p class="muted" style="margin: 0">Choose an extension account to connect:</p>
 
         <div class="stack" style="max-height: 300px; overflow: auto">
           <button
@@ -294,7 +311,7 @@ async function copyX25519PublicKey() {
           </button>
         </div>
 
-        <p class="muted" style="margin: 0" v-if="!accounts.length">No wallet accounts available.</p>
+        <p class="muted" style="margin: 0" v-if="!accounts.length">Loading wallets.</p>
       </div>
     </div>
 
@@ -336,16 +353,27 @@ async function copyX25519PublicKey() {
     min-height: 100vh;
   }
 
+  /* Collapse sidebar into a compact topbar on small screens */
   .app-shell-sidebar {
     width: 100%;
-    height: auto;
+    height: 56px;
     border-right: none;
     border-bottom: 1px solid var(--border-default);
-    padding: 16px;
+    padding: 8px 12px;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow: hidden;
   }
 
   .app-shell-content {
     padding: 16px;
+    padding-top: calc(56px + 16px);
     overflow: visible;
   }
 }
@@ -356,6 +384,151 @@ async function copyX25519PublicKey() {
   height: 1px;
   opacity: 0;
   pointer-events: none;
+}
+
+/* Compact topbar styles for the sidebar on small screens */
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
+  width: 100%;
+}
+
+.sidebar-header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+}
+
+.sidebar-brand {
+  padding: 8px 8px 20px;
+  text-decoration: none;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+}
+
+.app-shell-sidebar .sidebar-btn {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.sidebar-toggle {
+  display: none;
+}
+
+@media (max-width: 960px) {
+  .sidebar-header {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .sidebar-brand {
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    height: 40px;
+  }
+
+  .sidebar-toggle {
+    display: inline-flex;
+    margin-left: auto;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+  }
+
+  .sidebar-toggle svg {
+    display: block;
+  }
+
+  .sidebar-nav,
+  .sidebar-extra {
+    display: none;
+  }
+
+  .app-shell-sidebar.topbar-expanded {
+    height: 100vh;
+    align-items: flex-start;
+    overflow-y: auto;
+    padding-bottom: 24px;
+  }
+
+  .app-shell-sidebar.topbar-expanded .sidebar-nav,
+  .app-shell-sidebar.topbar-expanded .sidebar-extra {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    margin-top: 12px;
+  }
+
+  .app-shell-sidebar.topbar-expanded .sidebar-btn {
+    width: 100%;
+    justify-content: flex-start;
+    font-size: 14px;
+  }
+
+  .app-shell-sidebar.topbar-expanded .sidebar-btn .sidebar-label {
+    display: inline-block;
+  }
+
+  .sidebar-btn {
+    padding: 8px;
+    border-radius: 8px;
+    min-width: 0;
+    font-size: 0; /* hide label text visually */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .sidebar-btn svg {
+    margin: 0;
+  }
+
+  .sidebar-label {
+    display: inline-block;
+    font-size: 14px;
+    margin-left: 6px;
+  }
+
+  /* hide labels but keep for larger small screens if space allows */
+  .sidebar-btn .sidebar-label {
+    display: none;
+  }
+
+  /* show small app title as minimal text */
+  .app-shell-sidebar h2 {
+    font-size: 14px;
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+@media (min-width: 480px) and (max-width: 960px) {
+  /* allow labels to show on slightly larger small screens */
+  .sidebar-btn {
+    font-size: inherit;
+    padding: 8px 10px;
+  }
+
+  .sidebar-btn .sidebar-label {
+    display: inline-block;
+  }
 }
 
 .sidebar-status-error,
@@ -387,6 +560,21 @@ async function copyX25519PublicKey() {
   cursor: pointer;
   position: relative;
   transition: color 180ms ease;
+}
+
+@media (max-width: 960px) {
+  .wallet-address-text,
+  .x25519-key-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .sidebar-inline-row {
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: nowrap;
+  }
 }
 
 .wallet-address-text-copied {
