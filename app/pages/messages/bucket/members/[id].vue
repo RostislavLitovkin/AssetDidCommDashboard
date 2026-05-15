@@ -4,6 +4,7 @@ import { useNuxtApp, useRoute } from "nuxt/app"
 import { DidCommRepository, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
 import { useOperationsStore } from "../../../../stores/operations"
 import { useSessionStore } from "../../../../stores/session"
+import WalletConnectPrompt from "../../../../components/common/WalletConnectPrompt.vue"
 
 const route = useRoute()
 const { $papiClient } = useNuxtApp()
@@ -155,64 +156,89 @@ async function submitAddMember(): Promise<void> {
 
 <template>
   <div class="stack">
-    <header class="card">
-      <h2 style="margin: 0">Manage Bucket Members</h2>
-      <p class="muted" style="margin: 8px 0 0">Add an admin or contributor to bucket {{ bucketId }}.</p>
-    </header>
-
-    <section class="card stack" aria-live="polite">
-      <label class="stack" style="gap: 6px">
-        <span>Namespace</span>
-        <input
-          v-model="namespaceId"
-          class="input"
-          type="text"
-          name="namespace-id"
-          placeholder="e.g. 0"
-          :disabled="submitting"
-        />
-      </label>
-
-      <label class="stack" style="gap: 6px">
-        <span>Bucket</span>
-        <input class="input" type="text" :value="bucketId" disabled />
-      </label>
-
-      <label class="stack" style="gap: 6px">
-        <span>Role</span>
-        <select v-model="role" class="input" name="member-role" :disabled="submitting">
-          <option value="admin">Admin</option>
-          <option value="contributor">Contributor</option>
-        </select>
-      </label>
-
-      <label class="stack" style="gap: 6px">
-        <span>Address</span>
-        <input
-          v-model="memberAddress"
-          class="input"
-          type="text"
-          name="member-address"
-          placeholder="e.g. 5F3sa2TJ..."
-          :disabled="submitting"
-        />
-      </label>
-
-      <div class="row" style="justify-content: flex-end; gap: 8px">
-        <NuxtLink class="btn" :to="bucketRoutePath">Cancel</NuxtLink>
-        <button class="btn" type="button" :disabled="submitting" @click="submitAddMember">
-          {{ submitting ? "Submitting..." : "Submit Extrinsic" }}
-        </button>
+    <section class="stack" aria-live="polite">
+      <div class="row buckets-header" style="justify-content: space-between; align-items: center">
+        <div class="row" style="gap: 12px; align-items: center">
+          <div class="stack" style="gap: 4px">
+            <h3 style="margin: 0">Add {{ role === 'admin' ? 'Admin' : 'Contributor' }}</h3>
+          </div>
+        </div>
       </div>
 
-      <p v-if="!session.accountAddress" class="muted" style="margin: 0">
-        Connect wallet on the dashboard first to sign and submit this extrinsic.
-      </p>
+      <WalletConnectPrompt
+        v-if="!session.accountAddress"
+        title="Connect Wallet to Manage Members"
+        description="You must connect your wallet to submit member management extrinsics."
+      />
+      
+      <div v-else class="card stack" style="gap: 16px;">
+        <h4 style="margin: 0; font-size: 16px;">Assign Permissions</h4>
 
-      <p v-if="submitError" style="margin: 0; color: var(--status-error)">{{ submitError }}</p>
-      <p v-if="submittedTxHash" style="margin: 0; color: var(--status-success)">
-        Submitted via {{ submittedMethod }} with hash {{ submittedTxHash }}
-      </p>
+        <label class="stack" style="gap: 8px">
+          <span style="font-weight: 600; font-size: 14px;">Member Address</span>
+          <input
+            v-model="memberAddress"
+            class="input"
+            type="text"
+            name="member-address"
+            placeholder="Enter SS58 address"
+            :disabled="submitting"
+          />
+        </label>
+
+        <div class="stack" style="gap: 8px">
+          <span style="font-weight: 600; font-size: 14px;">Role</span>
+          <div style="display: flex; background: #f6f7f9; border-radius: 8px; border: 1px solid var(--border-default); overflow: hidden; padding: 4px; gap: 4px;">
+            <button 
+              type="button" 
+              style="flex: 1; padding: 10px 16px; border: none; background: transparent; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s; border-radius: 6px;"
+              :style="role === 'admin' ? 'background: var(--color-white); box-shadow: 0 1px 3px rgba(0,0,0,0.1); color: var(--color-primary);' : 'color: var(--text-secondary);'"
+              @click="role = 'admin'"
+              :disabled="submitting"
+            >
+              Admin
+            </button>
+            <button 
+              type="button" 
+              style="flex: 1; padding: 10px 16px; border: none; background: transparent; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s; border-radius: 6px;"
+              :style="role === 'contributor' ? 'background: var(--color-white); box-shadow: 0 1px 3px rgba(0,0,0,0.1); color: var(--color-primary);' : 'color: var(--text-secondary);'"
+              @click="role = 'contributor'"
+              :disabled="submitting"
+            >
+              Contributor
+            </button>
+          </div>
+        </div>
+        
+        <label class="stack" style="gap: 8px">
+          <span style="font-weight: 600; font-size: 14px;">Namespace ID</span>
+          <input
+            v-model="namespaceId"
+            class="input"
+            type="text"
+            name="namespace-id"
+            placeholder="e.g. 0"
+            :disabled="submitting"
+          />
+        </label>
+
+        <label class="stack" style="gap: 8px">
+          <span style="font-weight: 600; font-size: 14px;">Bucket ID</span>
+          <input class="input" type="text" :value="bucketId" disabled />
+        </label>
+
+        <p v-if="submitError" style="margin: 0; color: var(--status-error); font-size: 13px;">{{ submitError }}</p>
+        <p v-if="submittedTxHash" style="margin: 0; color: var(--status-success); font-size: 13px;">
+          Submitted via {{ submittedMethod }} with hash {{ submittedTxHash }}
+        </p>
+
+        <div class="row" style="justify-content: flex-end; gap: 12px; margin-top: 8px;">
+          <NuxtLink class="btn" :to="`${bucketRoutePath}/info`">Cancel</NuxtLink>
+          <button class="btn btn-primary" type="button" :disabled="submitting || !memberAddress" @click="submitAddMember">
+            {{ submitting ? "Submitting..." : "Submit Transaction" }}
+          </button>
+        </div>
+      </div>
     </section>
   </div>
 </template>
