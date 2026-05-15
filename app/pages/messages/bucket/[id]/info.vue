@@ -132,7 +132,7 @@ const decryptedKeySharingPayload = ref("")
 const decryptedKeySharingError = ref("")
 const decryptedKeySharingSourceMessageId = ref("")
 const activeBucketEncryptionSecretJwk = ref<jose.JWK | null>(null)
-const bucketDisplayName = computed(() => bucket.value?.name || bucketId.value)
+const bucketDisplayName = computed(() => bucket.value?.name || `Bucket ${bucketId.value}`)
 const bucketCreatedAtTimestampString = ref("")
 const keySharingTag = "didcomm/key-sharing-v1"
 const encryptedMessageTag = "didcomm/encrypted-message-v1"
@@ -1510,7 +1510,7 @@ function isRemoving(address) {
       <div class="row buckets-header" style="justify-content: space-between; align-items: center">
         <div class="row" style="gap: 12px; align-items: center">
           <div class="stack" style="gap: 4px">
-            <h3 style="margin: 0">Bucket Info: {{ bucketDisplayName }}</h3>
+            <h3 style="margin: 0">{{ bucketDisplayName }}</h3>
           </div>
         </div>
       </div>

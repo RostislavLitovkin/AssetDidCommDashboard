@@ -129,7 +129,7 @@ const decryptedKeySharingPayload = ref("")
 const decryptedKeySharingError = ref("")
 const decryptedKeySharingSourceMessageId = ref("")
 const activeBucketEncryptionSecretJwk = ref<jose.JWK | null>(null)
-const bucketDisplayName = computed(() => bucket.value?.name || bucketId.value)
+const bucketDisplayName = computed(() => bucket.value?.name || `Bucket ${bucketId.value}`)
 const keySharingTag = "didcomm/key-sharing-v1"
 const encryptedMessageTag = "didcomm/encrypted-message-v1"
 
@@ -1442,11 +1442,8 @@ onMounted(async () => {
     <section class="stack" aria-live="polite">
       <div class="row buckets-header" style="justify-content: space-between; align-items: center">
         <div class="row" style="gap: 12px; align-items: center">
-          <NuxtLink class="btn" to="/messages" aria-label="Back to message buckets" style="padding: 6px 12px; min-width: unset;">
-            &lt;
-          </NuxtLink>
           <div class="stack" style="gap: 4px">
-            <h3 style="margin: 0">Bucket: {{ bucketDisplayName }}</h3>
+            <h3 style="margin: 0">{{ bucketDisplayName }}</h3>
           </div>
         </div>
         <div class="row" style="gap: 8px">
@@ -1463,25 +1460,24 @@ onMounted(async () => {
       <p v-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
       <p v-if="messagesError" style="margin: 0; color: var(--status-error)">{{ messagesError }}</p>
 
-      <div ref="chatViewport" class="chat-viewport card" role="log" aria-live="polite" aria-label="Bucket conversation" style="margin-top: 12px;">
+      <div ref="chatViewport" class="chat-viewport card" role="log" aria-live="polite" aria-label="Bucket conversation"
+        style="margin-top: 12px;">
         <p v-if="!chatMessages.length && !messagesLoading" class="muted" style="margin: 0">
           No messages found for this bucket.
         </p>
-        <div v-for="message in chatMessages" :key="message.id" class="chat-row" :class="message.outgoing ? 'chat-row-outgoing' : 'chat-row-incoming'">
+        <div v-for="message in chatMessages" :key="message.id" class="chat-row"
+          :class="message.outgoing ? 'chat-row-outgoing' : 'chat-row-incoming'">
           <div class="chat-message">
             <p v-if="!message.outgoing" class="chat-sender">{{ message.senderLabel }}</p>
             <article class="chat-bubble" :class="message.outgoing ? 'chat-bubble-outgoing' : 'chat-bubble-incoming'">
               <p class="chat-text">{{ message.body }}</p>
               <p v-if="message.payloadError" class="chat-warning">Payload unavailable: {{ message.payloadError }}</p>
-              
+
               <details v-if="settings.showMessageDebug" class="chat-debug">
                 <summary>Debug data</summary>
                 <dl v-if="buildMessageDebugEntries(message).length" class="chat-debug-grid">
-                  <div
-                    v-for="entry in buildMessageDebugEntries(message)"
-                    :key="`${message.id}-${entry.key}`"
-                    class="chat-debug-item"
-                  >
+                  <div v-for="entry in buildMessageDebugEntries(message)" :key="`${message.id}-${entry.key}`"
+                    class="chat-debug-item">
                     <dt>{{ entry.key }}</dt>
                     <dd>{{ entry.value }}</dd>
                   </div>
@@ -1494,8 +1490,10 @@ onMounted(async () => {
       </div>
 
       <form class="chat-composer card" @submit.prevent="sendMessage" style="padding: 12px; margin-top: 8px;">
-        <textarea v-model="sendText" class="input chat-input" name="message-text" placeholder="Write a message" rows="2" :disabled="sending" style="flex: 1;" />
-        <button class="btn btn-primary chat-send-btn" type="submit" :disabled="sending || messagesLoading" style="align-self: center;">
+        <textarea v-model="sendText" class="input chat-input" name="message-text" placeholder="Write a message" rows="2"
+          :disabled="sending" style="flex: 1;" />
+        <button class="btn btn-primary chat-send-btn" type="submit" :disabled="sending || messagesLoading"
+          style="align-self: center;">
           {{ sending ? "Sending..." : "Send" }}
         </button>
       </form>
