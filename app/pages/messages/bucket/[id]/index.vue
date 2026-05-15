@@ -1,15 +1,14 @@
 <script setup lang="ts">
-import { DidCommRepository, type BucketMessage, type BucketRecord, type ExtrinsicUpdate } from "../../../services/papi/didCommRepository"
-import LoadingBar from "../../../components/common/LoadingBar.vue"
-import { useAddress } from "../../../composables/useAddress"
-import { Trash2 } from "lucide-vue-next"
+import { DidCommRepository, type BucketMessage, type BucketRecord, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
+import LoadingBar from "../../../../components/common/LoadingBar.vue"
+import { useAddress } from "../../../../composables/useAddress"
 import { hexToU8a } from "@polkadot/util"
 import * as jose from "jose"
 import { computed, nextTick, onMounted, ref, watch } from "vue"
 import { useNuxtApp, useRoute, useRuntimeConfig } from "nuxt/app"
-import { useOperationsStore } from "../../../stores/operations"
-import { useSessionStore } from "../../../stores/session"
-import { useSettingsStore } from "../../../stores/settings"
+import { useOperationsStore } from "../../../../stores/operations"
+import { useSessionStore } from "../../../../stores/session"
+import { useSettingsStore } from "../../../../stores/settings"
 
 const route = useRoute()
 const { $papiClient } = useNuxtApp()
@@ -1439,222 +1438,42 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="stack message-page">
-    <header class="card">
-      <h2 style="margin: 0">Bucket {{ bucketDisplayName }}</h2>
-    </header>
-
-    <details class="card stack collapsible-card" aria-live="polite">
-      <summary class="collapsible-summary">Bucket Metadata</summary>
-      <div class="collapsible-body stack">
-        <div class="row" style="justify-content: space-between; align-items: center">
-          <h3 style="margin: 0">Bucket Metadata</h3>
-          <div class="row" style="gap: 8px">
-            <button class="btn" type="button" :disabled="bucketLoading || messagesLoading" @click="loadBucketPage">
-              {{ bucketLoading || messagesLoading ? "Loading..." : "Reload" }}
-            </button>
+  <div class="stack">
+    <section class="stack" aria-live="polite">
+      <div class="row buckets-header" style="justify-content: space-between; align-items: center">
+        <div class="row" style="gap: 12px; align-items: center">
+          <NuxtLink class="btn" to="/messages" aria-label="Back to message buckets" style="padding: 6px 12px; min-width: unset;">
+            &lt;
+          </NuxtLink>
+          <div class="stack" style="gap: 4px">
+            <h3 style="margin: 0">Bucket: {{ bucketDisplayName }}</h3>
           </div>
         </div>
-
-        <LoadingBar v-if="bucketLoading" label="Loading bucket metadata..." />
-        <p v-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
-
-        <dl v-if="!bucketLoading && !bucketError && bucketMetadata.length" class="bucket-metadata">
-          <div v-for="entry in bucketMetadata" :key="`bucket-${entry.key}`" class="bucket-metadata-item">
-            <dt>{{ entry.key }}</dt>
-            <dd>{{ entry.value }}</dd>
-          </div>
-        </dl>
-
-        <p v-if="!bucketLoading && !bucketError && !bucketMetadata.length" class="muted" style="margin: 0">
-          No metadata found for this bucket.
-        </p>
-      </div>
-    </details>
-
-    <details class="card stack collapsible-card" aria-live="polite">
-      <summary class="collapsible-summary">Admins</summary>
-      <div class="collapsible-body stack">
-        <div class="row" style="justify-content: space-between; align-items: center">
-          <h3 style="margin: 0">Admins</h3>
-          <NuxtLink
-            class="btn"
-            :to="`/messages/bucket/members/${encodeURIComponent(bucketId)}?role=admin&namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`"
-          >
-            Add Admin
-          </NuxtLink>
-        </div>
-        <LoadingBar v-if="bucketLoading" label="Loading admins..." />
-        <p v-else-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
-        <p v-else-if="membersError" style="margin: 0; color: var(--status-error)">{{ membersError }}</p>
-        <ul v-else-if="bucketAdmins.length" class="bucket-members-list">
-          <li v-for="adminAddress in bucketAdmins" :key="`admin-${adminAddress}`" class="bucket-member-item">
-            <span>{{ formatAddress(adminAddress) }}</span>
-            <button
-              class="btn member-remove-btn"
-              type="button"
-              :disabled="Boolean(removingAdminAddress) || Boolean(removingContributorAddress) || !session.accountAddress"
-              @click="removeAdmin(adminAddress)"
-            >
-              <Trash2 :size="14" aria-hidden="true" />
-              <span>{{ removingAdminAddress === adminAddress ? "Removing..." : "Remove" }}</span>
-            </button>
-          </li>
-        </ul>
-        <p v-else class="muted" style="margin: 0">No admins found for this bucket.</p>
-      </div>
-    </details>
-
-    <details class="card stack collapsible-card" aria-live="polite">
-      <summary class="collapsible-summary">Contributors</summary>
-      <div class="collapsible-body stack">
-        <div class="row" style="justify-content: space-between; align-items: center">
-          <h3 style="margin: 0">Contributors</h3>
-          <NuxtLink
-            class="btn"
-            :to="`/messages/bucket/members/${encodeURIComponent(bucketId)}?role=contributor&namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`"
-          >
-            Add Contributor
-          </NuxtLink>
-        </div>
-        <LoadingBar v-if="bucketLoading" label="Loading contributors..." />
-        <p v-else-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
-        <p v-else-if="membersError" style="margin: 0; color: var(--status-error)">{{ membersError }}</p>
-        <ul v-else-if="bucketContributors.length" class="bucket-members-list">
-          <li v-for="contributorAddress in bucketContributors" :key="`contributor-${contributorAddress}`" class="bucket-member-item">
-            <div class="contributor-details">
-              <span>{{ formatAddress(contributorAddress) }}</span>
-              <span class="muted contributor-key">
-                X25519: {{ contributorX25519Keys[contributorAddress] || (loadingContributorKeys ? "Loading..." : "Not found") }}
-              </span>
-            </div>
-            <button
-              class="btn member-remove-btn"
-              type="button"
-              :disabled="Boolean(removingAdminAddress) || Boolean(removingContributorAddress) || !session.accountAddress"
-              @click="removeContributor(contributorAddress)"
-            >
-              <Trash2 :size="14" aria-hidden="true" />
-              <span>{{ removingContributorAddress === contributorAddress ? "Removing..." : "Remove" }}</span>
-            </button>
-          </li>
-        </ul>
-        <p v-if="!session.accountAddress" class="muted" style="margin: 0">
-          Connect wallet on the dashboard first to remove bucket members.
-        </p>
-        <p
-          v-if="!bucketLoading && !bucketError && !membersError && !bucketContributors.length"
-          class="muted"
-          style="margin: 0"
-        >
-          No contributors found for this bucket.
-        </p>
-      </div>
-    </details>
-
-    <details class="card stack collapsible-card" aria-live="polite">
-      <summary class="collapsible-summary">Communication Encryption Key</summary>
-      <div class="collapsible-body stack">
-        <div class="row" style="justify-content: space-between; align-items: center">
-          <h3 style="margin: 0">Communication Encryption Key</h3>
-          <button
-            class="btn btn-primary"
-            type="button"
-            :disabled="
-              generatingEncryptionKey ||
-              !session.accountAddress ||
-              !connectedAdmin ||
-              loadingContributorKeys ||
-              !contributorRecipients.length
-            "
-            @click="generateAndShareEncryptionKey"
-          >
-            {{ generatingEncryptionKey ? "Generating..." : "Generate & Share New Key" }}
+        <div class="row" style="gap: 8px">
+          <button class="btn" type="button" :disabled="messagesLoading || bucketLoading" @click="loadBucketPage">
+            Reload
           </button>
-        </div>
-
-        <p class="muted" style="margin: 0">
-          Generates a fresh X25519 encryption keypair, stores the public key ID on-chain, ensures the key-sharing tag exists,
-          then encrypts and shares the new secret key for contributors using their loaded X25519 keys.
-        </p>
-
-        <ul class="key-rotation-checks">
-          <li>Contributors with X25519: {{ contributorRecipients.length }} / {{ bucketContributors.length }}</li>
-          <li v-if="latestGeneratedKeyId">Last generated key ID: {{ latestGeneratedKeyId }}</li>
-        </ul>
-
-        <p v-if="!connectedAdmin" class="muted" style="margin: 0">
-          Only bucket admins can generate and distribute encryption keys.
-        </p>
-
-        <p v-if="encryptionKeyError" style="margin: 0; color: var(--status-error)">
-          {{ encryptionKeyError }}
-        </p>
-        <p v-if="encryptionKeySuccess" class="status-success" style="margin: 0">
-          {{ encryptionKeySuccess }}
-        </p>
-
-        <div v-if="latestGeneratedPublicJwk" class="key-preview-wrap">
-          <p class="muted" style="margin: 0">Latest generated bucket public JWK</p>
-          <pre class="key-preview">{{ latestGeneratedPublicJwk }}</pre>
-        </div>
-
-        <div class="key-preview-wrap">
-
-          <p v-if="decryptedKeySharingSourceMessageId" class="muted" style="margin: 0">
-            Source message id: {{ decryptedKeySharingSourceMessageId }}
-          </p>
-
-          <p v-if="decryptedKeySharingError" style="margin: 0; color: var(--status-error)">
-            {{ decryptedKeySharingError }}
-          </p>
-
-          <pre v-else-if="decryptedKeySharingPayload" class="key-preview">{{ decryptedKeySharingPayload }}</pre>
+          <NuxtLink class="btn btn-primary" :to="`/messages/bucket/${encodeURIComponent(bucketId)}/info`">
+            Info
+          </NuxtLink>
         </div>
       </div>
-    </details>
 
-    <section class="chat-shell" aria-live="polite">
-      <header class="chat-header">
-        <NuxtLink class="chat-icon-button chat-back-button" to="/messages" aria-label="Back to message buckets">
-          &lt;
-        </NuxtLink>
-        <div class="chat-header-title">
-          <span class="chat-header-kicker">Bucket</span>
-          <h3>{{ bucketDisplayName }}</h3>
-        </div>
-        <button
-          class="chat-icon-button"
-          type="button"
-          :disabled="messagesLoading || bucketLoading"
-          aria-label="Reload messages"
-          @click="loadBucketPage"
-        >
-          R
-        </button>
-      </header>
-
-      <LoadingBar v-if="messagesLoading" label="Loading messages..." />
-
+      <LoadingBar v-if="messagesLoading || bucketLoading" label="Loading..." />
+      <p v-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
       <p v-if="messagesError" style="margin: 0; color: var(--status-error)">{{ messagesError }}</p>
 
-      <div ref="chatViewport" class="chat-viewport" role="log" aria-live="polite" aria-label="Bucket conversation">
+      <div ref="chatViewport" class="chat-viewport card" role="log" aria-live="polite" aria-label="Bucket conversation" style="margin-top: 12px;">
         <p v-if="!chatMessages.length && !messagesLoading" class="muted" style="margin: 0">
           No messages found for this bucket.
         </p>
-
-        <div
-          v-for="message in chatMessages"
-          :key="message.id"
-          class="chat-row"
-          :class="message.outgoing ? 'chat-row-outgoing' : 'chat-row-incoming'"
-        >
+        <div v-for="message in chatMessages" :key="message.id" class="chat-row" :class="message.outgoing ? 'chat-row-outgoing' : 'chat-row-incoming'">
           <div class="chat-message">
             <p v-if="!message.outgoing" class="chat-sender">{{ message.senderLabel }}</p>
             <article class="chat-bubble" :class="message.outgoing ? 'chat-bubble-outgoing' : 'chat-bubble-incoming'">
               <p class="chat-text">{{ message.body }}</p>
               <p v-if="message.payloadError" class="chat-warning">Payload unavailable: {{ message.payloadError }}</p>
-
+              
               <details v-if="settings.showMessageDebug" class="chat-debug">
                 <summary>Debug data</summary>
                 <dl v-if="buildMessageDebugEntries(message).length" class="chat-debug-grid">
@@ -1674,20 +1493,12 @@ onMounted(async () => {
         </div>
       </div>
 
-      <form class="chat-composer" @submit.prevent="sendMessage">
-        <textarea
-          v-model="sendText"
-          class="input chat-input"
-          name="message-text"
-          placeholder="Write a message"
-          rows="2"
-          :disabled="sending"
-        />
-        <button class="btn btn-primary chat-send-btn" type="submit" :disabled="sending || messagesLoading">
+      <form class="chat-composer card" @submit.prevent="sendMessage" style="padding: 12px; margin-top: 8px;">
+        <textarea v-model="sendText" class="input chat-input" name="message-text" placeholder="Write a message" rows="2" :disabled="sending" style="flex: 1;" />
+        <button class="btn btn-primary chat-send-btn" type="submit" :disabled="sending || messagesLoading" style="align-self: center;">
           {{ sending ? "Sending..." : "Send" }}
         </button>
       </form>
-
       <p v-if="!session.accountAddress" class="muted" style="margin: 0">
         Connect wallet on the dashboard first to sign and send bucket messages.
       </p>
