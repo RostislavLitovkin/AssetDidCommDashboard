@@ -1042,12 +1042,16 @@ const displayedDerivedDidAddress = computed(() => formatAddress(derivedDidAddres
 
 <template>
   <main class="container did-page stack">
-    <header class="stack page-header">
-      <h1 class="page-title">DID management</h1>
-    </header>
+    <div class="row buckets-header" style="justify-content: space-between; align-items: center">
+      <div class="stack" style="gap: 4px">
+        <h3 style="margin: 0">DID Management</h3>
+      </div>
+    </div>
 
     <section class="card stack">
-      <h2 style="margin: 0">DID Search</h2>
+      <div class="row section-header">
+        <h4 style="margin: 0; font-size: 16px;">DID Search</h4>
+      </div>
 
       <div class="row">
         <input v-model="didSearchAddress" class="input address-value" style="flex: 1" type="text" placeholder="Enter SS58 Address..." :disabled="searchingDid" />
@@ -1066,7 +1070,7 @@ const displayedDerivedDidAddress = computed(() => formatAddress(derivedDidAddres
 
     <section class="card stack">
       <div class="row section-header">
-        <h2 style="margin: 0">DID (Sr25519) Key</h2>
+        <h4 style="margin: 0; font-size: 16px;">DID (Sr25519) Key</h4>
         <div class="row">
           <button class="btn btn-primary" type="button" @click="generateMnemonic" :disabled="generatingMnemonic">
             {{ generatingMnemonic ? "Generating..." : "Generate Mnemonic" }}
@@ -1093,7 +1097,7 @@ const displayedDerivedDidAddress = computed(() => formatAddress(derivedDidAddres
 
     <section class="card stack">
       <div class="row section-header">
-        <h2 style="margin: 0">X25519 Key</h2>
+        <h4 style="margin: 0; font-size: 16px;">X25519 Key</h4>
         <div class="row">
           <button class="btn btn-primary" type="button" @click="generateJwk" :disabled="generatingJwk">
             {{ generatingJwk ? "Generating..." : "Generate X25519" }}
@@ -1111,16 +1115,16 @@ const displayedDerivedDidAddress = computed(() => formatAddress(derivedDidAddres
 
     <section class="card stack">
       <div class="row section-header">
-        <h2 style="margin: 0">Register DID</h2>
+        <h4 style="margin: 0; font-size: 16px;">Register DID</h4>
       </div>
 
       <label class="stack field-group">
-        <span class="muted">DID address</span>
+        <span>DID address</span>
         <input v-model="didCreateDidAddress" class="input address-value" type="text" placeholder="Enter SS58 Address ..." :disabled="submittingDidCreate" />
       </label>
 
       <label class="stack field-group">
-        <span class="muted">DID mnemonic (which is used to sign creation details)</span>
+        <span>DID mnemonic (used to sign creation details)</span>
         <textarea
           v-model="didCreateMnemonic"
           class="input mnemonic-input"
@@ -1131,7 +1135,7 @@ const displayedDerivedDidAddress = computed(() => formatAddress(derivedDidAddres
       </label>
 
       <label class="stack field-group">
-        <span class="muted">Encryption key</span>
+        <span>Encryption key</span>
         <input
           v-model="didCreateKeyAgreementX"
           class="input address-value"
@@ -1152,11 +1156,11 @@ const displayedDerivedDidAddress = computed(() => formatAddress(derivedDidAddres
 
     <section v-if="settings.showMessageDebug" class="card stack">
       <div class="row section-header">
-        <h2 style="margin: 0">DID Signing</h2>
+        <h4 style="margin: 0; font-size: 16px;">DID Signing</h4>
       </div>
 
       <label class="stack field-group">
-        <span class="muted">DID mnemonic</span>
+        <span>DID mnemonic</span>
         <textarea
           v-model="didSignMnemonic"
           class="input mnemonic-input"
@@ -1166,7 +1170,7 @@ const displayedDerivedDidAddress = computed(() => formatAddress(derivedDidAddres
       </label>
 
       <label class="stack field-group">
-        <span class="muted">Hex encoded data to sign</span>
+        <span>Hex encoded data to sign</span>
         <textarea
           v-model="didSignPayloadHex"
           class="input address-value"
@@ -1176,12 +1180,12 @@ const displayedDerivedDidAddress = computed(() => formatAddress(derivedDidAddres
       </label>
 
       <label class="stack field-group">
-        <span class="muted">Submitter Address (defaults to connected wallet)</span>
+        <span>Submitter Address (defaults to connected wallet)</span>
         <input v-model="didSignSubmitterAddress" class="input address-value" type="text" placeholder="5F..." />
       </label>
 
       <label class="stack field-group">
-        <span class="muted">Verification Key Relationship</span>
+        <span>Verification Key Relationship</span>
         <select v-model="didSignKeyRelationship" class="input">
           <option value="Authentication">Authentication</option>
           <option value="CapabilityDelegation">CapabilityDelegation</option>
@@ -1213,7 +1217,7 @@ const displayedDerivedDidAddress = computed(() => formatAddress(derivedDidAddres
           </p>
         </div>
         <p class="address-value" style="margin: 4px 0 0; word-break: break-all;">{{ didSignSignature }}</p>
-        
+
         <div class="row section-header" style="margin-top: 12px">
           <p class="muted" style="margin: 0">Payload Signed (Debug)</p>
         </div>
@@ -1229,19 +1233,6 @@ const displayedDerivedDidAddress = computed(() => formatAddress(derivedDidAddres
   padding-bottom: 24px;
 }
 
-.page-header {
-  gap: 4px;
-}
-
-.page-title {
-  margin: 0;
-  font-size: clamp(1.5rem, 2.2vw, 2rem);
-}
-
-.page-subtitle {
-  margin: 0;
-  max-width: 76ch;
-}
 
 .section-header {
   justify-content: space-between;
@@ -1274,6 +1265,7 @@ const displayedDerivedDidAddress = computed(() => formatAddress(derivedDidAddres
 
 .address-value {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 
