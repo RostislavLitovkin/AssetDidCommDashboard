@@ -3,6 +3,7 @@ import { defineStore } from "pinia"
 const SETTINGS_STORAGE_KEY = "asset-didcomm.ss58-prefix"
 const X25519_SECRET_JWK_STORAGE_KEY = "asset-didcomm.x25519-secret-jwk"
 const MESSAGE_DEBUG_STORAGE_KEY = "asset-didcomm.message-debug"
+const NOTIFICATIONS_ENABLED_STORAGE_KEY = "asset-didcomm.notifications-enabled"
 const DEFAULT_SS58_PREFIX = 42
 const MAX_SS58_PREFIX = 16383
 
@@ -105,12 +106,26 @@ function loadStoredMessageDebug(): boolean {
   return raw === "true"
 }
 
+function loadStoredNotificationsEnabled(): boolean {
+  if (!import.meta.client) {
+    return false
+  }
+
+  const raw = window.localStorage.getItem(NOTIFICATIONS_ENABLED_STORAGE_KEY)
+  if (raw === null) {
+    return false
+  }
+
+  return raw === "true"
+}
+
 export const useSettingsStore = defineStore("settings", {
   state: () => ({
     initialized: false,
     ss58Prefix: DEFAULT_SS58_PREFIX,
     x25519SecretJwk: null as X25519SecretJwk | null,
-    showMessageDebug: false
+    showMessageDebug: false,
+    notificationsEnabled: false
   }),
   actions: {
     initialize(): void {
@@ -121,6 +136,7 @@ export const useSettingsStore = defineStore("settings", {
       this.ss58Prefix = loadStoredSs58Prefix()
       this.x25519SecretJwk = loadStoredX25519SecretJwk()
       this.showMessageDebug = loadStoredMessageDebug()
+      this.notificationsEnabled = loadStoredNotificationsEnabled()
       this.initialized = true
     },
     setSs58Prefix(prefix: number): void {
@@ -160,6 +176,13 @@ export const useSettingsStore = defineStore("settings", {
 
       if (import.meta.client) {
         window.localStorage.setItem(MESSAGE_DEBUG_STORAGE_KEY, String(value))
+      }
+    },
+    setNotificationsEnabled(value: boolean): void {
+      this.notificationsEnabled = value
+
+      if (import.meta.client) {
+        window.localStorage.setItem(NOTIFICATIONS_ENABLED_STORAGE_KEY, String(value))
       }
     }
   }

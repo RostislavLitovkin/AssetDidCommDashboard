@@ -1,4 +1,5 @@
 import type { OperationStatus } from "../types/operations"
+import { useSettingsStore } from "./settings"
 
 export interface NotificationItem {
   id: string
@@ -18,6 +19,12 @@ export const useNotificationsStore = defineStore("notifications", {
   }),
   actions: {
     push(title: string, message: string, status: OperationStatus = "info"): void {
+      const settings = useSettingsStore()
+      settings.initialize()
+      if (!settings.notificationsEnabled) {
+        return
+      }
+
       const item: NotificationItem = {
         id: notificationId(),
         title,

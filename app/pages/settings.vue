@@ -14,6 +14,11 @@ const showMessageDebug = computed({
   set: (value: boolean) => settings.setShowMessageDebug(value)
 })
 
+const notificationsEnabled = computed({
+  get: () => settings.notificationsEnabled,
+  set: (value: boolean) => settings.setNotificationsEnabled(value)
+})
+
 function saveSettings(): void {
   saveError.value = ""
   saveSuccess.value = ""
@@ -62,6 +67,15 @@ function saveSettings(): void {
       </label>
       <p v-if="saveError" class="error-text">{{ saveError }}</p>
       <p v-if="saveSuccess" class="success-text">{{ saveSuccess }}</p>
+    </section>
+
+    <section class="card stack" style="gap: 10px">
+      <h4 style="margin: 0; font-size: 16px;">Notifications</h4>
+      <label class="toggle-row">
+        <input v-model="notificationsEnabled" type="checkbox" />
+        <span>Enable notifications</span>
+      </label>
+      <span class="muted" style="font-size: 13px;">Disabled by default. When off, notification popups are hidden.</span>
     </section>
 
     <section class="card stack" style="gap: 10px">

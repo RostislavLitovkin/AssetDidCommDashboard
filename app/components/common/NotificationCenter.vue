@@ -2,10 +2,17 @@
 import { X } from "lucide-vue-next"
 
 const notifications = useNotificationsStore()
+const settings = useSettingsStore()
+settings.initialize()
 </script>
 
 <template>
-  <section class="notification-center" aria-live="polite" aria-label="Notifications" v-if="notifications.items.length">
+  <section
+    class="notification-center"
+    aria-live="polite"
+    aria-label="Notifications"
+    v-if="settings.notificationsEnabled && notifications.items.length"
+  >
     <article class="card notification-item" v-for="item in notifications.items" :key="item.id">
       <div class="row notification-header" style="justify-content: space-between; align-items: center">
         <strong class="notification-title">{{ item.title }}</strong>

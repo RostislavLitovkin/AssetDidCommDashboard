@@ -414,7 +414,7 @@ onMounted(async () => {
       <div class="ib-container ib-header-inner">
         <div class="row ib-header-left">
           <div class="stack" style="gap: 2px">
-            <h3 style="margin: 0">{{ bucketDisplayName }}</h3>
+            <h3 class="ib-title">{{ bucketDisplayName }}</h3>
           </div>
         </div>
         <div class="row ib-header-actions">
@@ -555,6 +555,13 @@ onMounted(async () => {
 .app-shell-content:has(.chat-page-container.ib-custom-page) {
   padding: 0;
   overflow: hidden;
+  height: 100vh;
+  min-height: 100vh;
+}
+
+.app-shell-root:has(.chat-page-container.ib-custom-page) {
+  height: 100vh;
+  overflow: hidden;
 }
 
 .app-shell-content>.container:has(.chat-page-container.ib-custom-page) {
@@ -563,6 +570,18 @@ onMounted(async () => {
   padding: 0;
   margin: 0;
   height: 100%;
+  min-height: 0;
+}
+
+@supports (height: 100dvh) {
+  .app-shell-content:has(.chat-page-container.ib-custom-page) {
+    height: 100dvh;
+    min-height: 100dvh;
+  }
+
+  .app-shell-root:has(.chat-page-container.ib-custom-page) {
+    height: 100dvh;
+  }
 }
 
 @media (max-width: 960px) {
@@ -579,6 +598,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
   background: #f7f8fa;
   overflow: hidden;
   position: relative;
@@ -610,6 +630,10 @@ onMounted(async () => {
   align-items: center;
   gap: 12px;
   min-width: 0;
+}
+
+.ib-title {
+  margin: 10px 0;
 }
 
 .ib-subtitle-text {
@@ -792,13 +816,15 @@ onMounted(async () => {
   overflow-y: auto;
   background: transparent;
   overscroll-behavior: contain;
+  min-height: 0;
+  -webkit-overflow-scrolling: touch;
 }
 
 .ib-chat-inner {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding-top: 16px;
+  padding-top: 32px;
   padding-bottom: 24px;
   flex: 1;
 }
@@ -806,7 +832,10 @@ onMounted(async () => {
 /* Sticky Footer / Composer */
 .ib-footer-sticky {
   flex-shrink: 0;
-  padding: 10px 0 14px;
+  position: sticky;
+  bottom: 0;
+  margin-top: auto;
+  padding: 10px 0 calc(14px + env(safe-area-inset-bottom));
   background: var(--surface-card);
   border-top: 1px solid var(--border-default);
   z-index: 50;
@@ -1015,6 +1044,10 @@ onMounted(async () => {
 
 
 @media (max-width: 840px) {
+
+  .ib-container {
+    padding: 0 16px;
+  }
 
   .ib-connect-prompt,
   .ib-not-contributor {
