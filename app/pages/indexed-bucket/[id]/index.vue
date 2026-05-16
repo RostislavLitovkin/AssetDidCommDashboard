@@ -445,26 +445,30 @@ onMounted(async () => {
 
     <!-- (A) No wallet connected → Connect prompt -->
     <div v-if="!session.accountAddress" class="ib-footer-sticky">
-      <div class="ib-connect-prompt">
-        <Wallet :size="20" class="ib-connect-prompt-icon" />
-        <div class="ib-connect-prompt-text">
-          <strong>Wallet not connected</strong>
-          <span class="muted">Connect your wallet to participate in this bucket.</span>
+      <div class="ib-container">
+        <div class="ib-connect-prompt">
+          <Wallet :size="20" class="ib-connect-prompt-icon" />
+          <div class="ib-connect-prompt-text">
+            <strong>Wallet not connected</strong>
+            <span class="muted">Connect your wallet to participate in this bucket.</span>
+          </div>
+          <button class="btn btn-primary ib-connect-btn" type="button" @click="openWalletPopup">
+            <Wallet :size="16" />
+            Connect Wallet
+          </button>
         </div>
-        <button class="btn btn-primary ib-connect-btn" type="button" @click="openWalletPopup">
-          <Wallet :size="16" />
-          Connect Wallet
-        </button>
       </div>
     </div>
 
     <!-- (B) Wallet connected but not admin/contributor -->
     <div v-else-if="!loading && !connectedAdminOrContributor" class="ib-footer-sticky">
-      <div class="ib-not-contributor">
-        <ShieldAlert :size="20" class="ib-not-contributor-icon" />
-        <div class="ib-not-contributor-text">
-          <strong>Not a contributor</strong>
-          <span class="muted">Your connected wallet is not a contributor to this bucket. Ask an admin to add you.</span>
+      <div class="ib-container">
+        <div class="ib-not-contributor">
+          <ShieldAlert :size="20" class="ib-not-contributor-icon" />
+          <div class="ib-not-contributor-text">
+            <strong>Not a contributor</strong>
+            <span class="muted">Your connected wallet is not a contributor to this bucket. Ask an admin to add you.</span>
+          </div>
         </div>
       </div>
     </div>
