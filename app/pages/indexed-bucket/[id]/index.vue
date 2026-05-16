@@ -619,3 +619,20 @@ onMounted(async () => {
   .ib-header { padding: 12px; }
 }
 </style>
+.ib-attachment-chip-name {
+  flex: 1; font-size: 13px; font-weight: 500; color: var(--text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.ib-attachment-chip-remove {
+  background: none; border: none; font-size: 15px; cursor: pointer;
+  color: var(--text-secondary); padding: 2px 4px; line-height: 1;
+  border-radius: 50%; transition: color 150ms, background 150ms;
+}
+.ib-attachment-chip-remove:hover { color: var(--status-error); background: rgba(0,0,0,0.06); }
+
+@media (max-width: 840px) {
+  .ib-chat-viewport { padding: 12px 12px 24px; }
+  .ib-meta-row { grid-template-columns: 1fr; gap: 2px; }
+  .ib-header { padding: 12px; }
+}
+</style>
