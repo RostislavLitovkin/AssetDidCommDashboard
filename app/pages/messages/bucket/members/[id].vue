@@ -21,19 +21,6 @@ function toMemberRole(value: unknown): MemberRole {
   return candidate === "contributor" ? "contributor" : "admin"
 }
 
-const bucketId = computed(() => {
-  const rawId = route.params.id
-  const value = Array.isArray(rawId) ? (rawId[0] ?? "") : (rawId ?? "")
-
-  try {
-    return decodeURIComponent(String(value))
-  } catch {
-    return String(value)
-  }
-})
-
-const bucketRoutePath = computed(() => `/indexed-bucket/${encodeURIComponent(bucketId.value)}`)
-
 const role = ref<MemberRole>(toMemberRole(route.query.role))
 const namespaceId = ref("")
 const memberAddress = ref("")
@@ -232,7 +219,6 @@ async function submitAddMember(): Promise<void> {
         </p>
 
         <div class="row" style="justify-content: flex-end; gap: 12px; margin-top: 8px;">
-          <NuxtLink class="btn" :to="`${bucketRoutePath}/info`">Cancel</NuxtLink>
           <button class="btn btn-primary" type="button" :disabled="submitting || !memberAddress" @click="submitAddMember">
             {{ submitting ? "Submitting..." : "Submit Transaction" }}
           </button>
