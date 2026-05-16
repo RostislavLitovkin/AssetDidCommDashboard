@@ -1999,7 +1999,7 @@ async function submitWithWatch(
         })
       }
 
-      if (status?.isInBlock) {
+      if (status?.isInBlock && !resolved) {
         const blockHash = extractHash(status.asInBlock)
         onUpdate?.({
           stage: "inBlock",
@@ -2007,9 +2007,12 @@ async function submitWithWatch(
           txHash: latestHash,
           blockHash
         })
+        resolved = true
+        clean()
+        resolve(latestHash)
       }
 
-      if (status?.isFinalized && !resolved) {
+      if (status?.isFinalized) {
         const blockHash = extractHash(status.asFinalized)
         onUpdate?.({
           stage: "finalized",
@@ -2017,9 +2020,6 @@ async function submitWithWatch(
           txHash: latestHash,
           blockHash
         })
-        resolved = true
-        clean()
-        resolve(latestHash)
       }
 
       const dispatchError = result.dispatchError as Record<string, unknown> | undefined

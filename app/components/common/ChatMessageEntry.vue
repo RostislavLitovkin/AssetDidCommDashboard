@@ -12,16 +12,62 @@ export interface ChatMessageProps {
   timestampLabel: string
   debugEntries?: { key: string; value: string }[]
 }
+
+/** Try to parse the body as a file-attachment envelope. */
+export function parseAttachmentEnvelope(body: string): AttachmentEnvelope | null {
+  try {
+    const parsed = JSON.parse(body)
+    if (parsed && typeof parsed === "object" && parsed.type === "attachment" && typeof parsed.data === "string") {
+      return parsed as AttachmentEnvelope
+    }
+  } catch { /* not JSON */ }
+  return null
+}
+
+export interface AttachmentEnvelope {
+  type: "attachment"
+  contentType: string
+  fileName: string
+  data: string // base64
+}
 </script>
 
 <script setup lang="ts">
+import { computed } from "vue"
+import { Paperclip } from "lucide-vue-next"
 import { useSettingsStore } from "../../stores/settings"
 
-defineProps<{
+const props = defineProps<{
   message: ChatMessageProps
 }>()
 
 const settings = useSettingsStore()
+
+const attachment = computed(() => parseAttachmentEnvelope(props.message.body))
+const isImage = computed(() => attachment.value?.contentType?.startsWith("image/") ?? false)
+const isVideo = computed(() => attachment.value?.contentType?.startsWith("video/") ?? false)
+const isAudio = computed(() => attachment.value?.contentType?.startsWith("audio/") ?? false)
+const dataUrl = computed(() => {
+  const a = attachment.value
+  if (!a) return ""
+  return `data:${a.contentType};base64,${a.data}`
+})
+
+function downloadAttachment() {
+  const a = attachment.value
+  if (!a) return
+  const link = document.createElement("a")
+  link.href = dataUrl.value
+  link.download = a.fileName
+  link.click()
+}
+
+function formatFileSize(base64: string): string {
+  const bytes = Math.ceil(base64.length * 3 / 4)
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
 </script>
 
 <template>
@@ -29,7 +75,41 @@ const settings = useSettingsStore()
     <div class="chat-message">
       <p v-if="!message.outgoing" class="chat-sender">{{ message.senderLabel }}</p>
       <article class="chat-bubble" :class="message.outgoing ? 'chat-bubble-outgoing' : 'chat-bubble-incoming'">
-        <p class="chat-text">{{ message.body }}</p>
+
+        <!-- Attachment rendering -->
+        <template v-if="attachment">
+          <!-- Image -->
+          <div v-if="isImage" class="chat-attachment-media">
+            <img :src="dataUrl" :alt="attachment.fileName" class="chat-attachment-img" loading="lazy" />
+          </div>
+          <!-- Video -->
+          <div v-else-if="isVideo" class="chat-attachment-media">
+            <video :src="dataUrl" controls class="chat-attachment-video">
+              Your browser does not support the video element.
+            </video>
+          </div>
+          <!-- Audio -->
+          <div v-else-if="isAudio" class="chat-attachment-audio">
+            <audio :src="dataUrl" controls class="chat-attachment-audio-player">
+              Your browser does not support the audio element.
+            </audio>
+          </div>
+          <!-- Generic file -->
+          <div v-else class="chat-attachment-file" @click="downloadAttachment">
+            <Paperclip :size="22" class="chat-attachment-file-icon" />
+            <div class="chat-attachment-file-info">
+              <span class="chat-attachment-file-name">{{ attachment.fileName }}</span>
+              <span class="chat-attachment-file-meta">{{ attachment.contentType }} · {{ formatFileSize(attachment.data) }}</span>
+            </div>
+          </div>
+          <p class="chat-attachment-label">{{ attachment.fileName }} · {{ formatFileSize(attachment.data) }}</p>
+        </template>
+
+        <!-- Plain text message -->
+        <template v-else>
+          <p class="chat-text">{{ message.body }}</p>
+        </template>
+
         <p v-if="message.payloadError" class="chat-warning">⚠ {{ message.payloadError }}</p>
         <details v-if="settings.showMessageDebug && message.debugEntries?.length" class="chat-debug">
           <summary>Debug</summary>
@@ -79,9 +159,44 @@ const settings = useSettingsStore()
 .chat-bubble-outgoing .chat-debug-item dt,
 .chat-bubble-outgoing .chat-debug-item dd { color: rgba(255, 255, 255, 0.92); }
 .chat-bubble-outgoing .chat-warning { color: rgba(255, 255, 255, 0.9); }
+.chat-bubble-outgoing .chat-attachment-label,
+.chat-bubble-outgoing .chat-attachment-file-name,
+.chat-bubble-outgoing .chat-attachment-file-meta { color: rgba(255, 255, 255, 0.85); }
 
 .chat-text { margin: 0; white-space: pre-wrap; word-break: break-word; }
 .chat-warning { margin: 8px 0 0; font-size: 12px; color: var(--status-error); }
+
+/* Attachments */
+.chat-attachment-media { margin: 0 -2px; }
+.chat-attachment-img {
+  display: block; max-width: 100%; max-height: 320px; border-radius: 8px;
+  object-fit: contain; cursor: pointer;
+}
+.chat-attachment-img:hover { opacity: 0.92; }
+.chat-attachment-video {
+  display: block; max-width: 100%; max-height: 320px; border-radius: 8px;
+}
+.chat-attachment-audio { margin: 4px 0; }
+.chat-attachment-audio-player { width: 100%; max-width: 320px; }
+
+.chat-attachment-file {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  border: 1px solid var(--border-default); border-radius: 10px;
+  background: rgba(255,255,255,0.12); cursor: pointer;
+  transition: background 150ms ease;
+}
+.chat-attachment-file:hover { background: rgba(255,255,255,0.2); }
+.chat-attachment-file-icon { flex-shrink: 0; color: var(--text-secondary); }
+.chat-attachment-file-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.chat-attachment-file-name {
+  font-size: 13px; font-weight: 600; color: var(--text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chat-attachment-file-meta { font-size: 11px; color: var(--text-secondary); }
+.chat-attachment-label {
+  margin: 6px 0 0; font-size: 11px; color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 .chat-debug { margin-top: 10px; font-size: 12px; color: var(--text-secondary); }
 .chat-debug summary { cursor: pointer; font-weight: 600; color: var(--text-primary); }

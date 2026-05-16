@@ -2,6 +2,7 @@
 import { DidCommRepository, type BucketMessage, type BucketRecord, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
 import LoadingBar from "../../../../components/common/LoadingBar.vue"
 import ChatMessageEntry, { type ChatMessageProps } from "../../../../components/common/ChatMessageEntry.vue"
+import { Paperclip, X as XIcon, SendHorizontal } from "lucide-vue-next"
 import { useAddress } from "../../../../composables/useAddress"
 import { hexToU8a } from "@polkadot/util"
 import * as jose from "jose"
@@ -107,6 +108,8 @@ const membersError = ref("")
 const sendText = ref("")
 const sendError = ref("")
 const sending = ref(false)
+const pendingAttachment = ref<{ file: File; dataUrl: string } | null>(null)
+const fileInputRef = ref<HTMLInputElement | null>(null)
 const pendingMessages = ref<PendingChatMessage[]>([])
 const messagePayloadById = ref<Record<string, string>>({})
 const messagePayloadErrorById = ref<Record<string, string>>({})
@@ -1373,12 +1376,44 @@ function logExtrinsicUpdate(update: ExtrinsicUpdate): void {
   )
 }
 
+function openFilePicker() {
+  fileInputRef.value?.click()
+}
+
+function onFileSelected(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    pendingAttachment.value = { file, dataUrl: reader.result as string }
+    sendText.value = ""
+  }
+  reader.readAsDataURL(file)
+  input.value = ""
+}
+
+function removeAttachment() {
+  pendingAttachment.value = null
+}
+
+function buildAttachmentEnvelope(file: File, base64Data: string): string {
+  const base64 = base64Data.includes(",") ? base64Data.split(",")[1]! : base64Data
+  return JSON.stringify({
+    type: "attachment",
+    contentType: file.type || "application/octet-stream",
+    fileName: file.name,
+    data: base64,
+  })
+}
+
 async function sendMessage() {
   sendError.value = ""
-  const payload = sendText.value.trim()
+  const textPayload = sendText.value.trim()
+  const attachment = pendingAttachment.value
 
-  if (!payload) {
-    sendError.value = "Message content is required"
+  if (!textPayload && !attachment) {
+    sendError.value = "Enter a message or attach a file"
     return
   }
 
@@ -1387,21 +1422,27 @@ async function sendMessage() {
     return
   }
 
+  const displayBody = attachment ? `📎 ${attachment.file.name}` : textPayload
   const pendingId = `pending-${Date.now()}-${Math.random().toString(16).slice(2)}`
   pendingMessages.value.push({
     id: pendingId,
-    body: payload,
+    body: displayBody,
     createdAt: new Date(),
     sender: session.accountAddress,
     deliveryState: "sending"
   })
 
+  const savedText = sendText.value
   sendText.value = ""
+  pendingAttachment.value = null
   sending.value = true
   currentBucketCall.value = "buckets.write"
 
   try {
-    const encryptedPayload = await encryptOutgoingBucketMessage(payload)
+    const plaintext = attachment
+      ? buildAttachmentEnvelope(attachment.file, attachment.dataUrl)
+      : textPayload
+    const encryptedPayload = await encryptOutgoingBucketMessage(plaintext)
     const result = await didCommRepository.createMessage(
       bucketId.value,
       encryptedPayload,
@@ -1426,8 +1467,9 @@ async function sendMessage() {
 
     operations.add("bucket_write", currentBucketCall.value, "error", message)
     if (!sendText.value) {
-      sendText.value = payload
+      sendText.value = savedText
     }
+    if (attachment) pendingAttachment.value = attachment
   } finally {
     sending.value = false
   }
@@ -1496,12 +1538,30 @@ onMounted(async () => {
     </div>
 
     <div style="position: sticky; bottom: 0; z-index: 50; background: transparent; border-top: none; padding: 12px 18px; margin-top: auto;">
+      <input ref="fileInputRef" type="file" style="display:none" @change="onFileSelected" />
       <form class="chat-composer card" @submit.prevent="sendMessage" style="padding: 0; margin: 0; box-shadow: none; display: flex; flex-direction: row; gap: 10px; align-items: flex-end; background: transparent; border: none;">
-        <textarea v-model="sendText" class="input chat-input" name="message-text" placeholder="Write a message" rows="1"
-          :disabled="sending" style="flex: 1; min-height: 44px; max-height: 120px; border-radius: 22px; padding: 10px 16px; background: #f0f2f5;" />
+        <!-- Attachment mode -->
+        <template v-if="pendingAttachment">
+          <div class="chat-attachment-chip">
+            <Paperclip :size="16" class="chat-attachment-chip-icon" />
+            <span class="chat-attachment-chip-name">{{ pendingAttachment.file.name }}</span>
+            <button type="button" class="chat-attachment-chip-remove" @click="removeAttachment" title="Remove">
+              <XIcon :size="14" />
+            </button>
+          </div>
+        </template>
+        <!-- Text mode -->
+        <template v-else>
+          <button v-if="!sendText" type="button" class="chat-composer-attach" @click="openFilePicker"
+            :disabled="sending" title="Attach file">
+            <Paperclip :size="18" />
+          </button>
+          <textarea v-model="sendText" class="input chat-input" name="message-text" placeholder="Write a message" rows="1"
+            :disabled="sending" style="flex: 1; min-height: 44px; max-height: 120px; border-radius: 22px; padding: 10px 16px; background: #f0f2f5;" />
+        </template>
         <button class="btn btn-primary chat-send-btn" type="submit" :disabled="sending || messagesLoading"
           style="border-radius: 50%; width: 44px; height: 44px; padding: 0; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
-          {{ sending ? "..." : "Send" }}
+          <SendHorizontal :size="18" />
         </button>
       </form>
       <p v-if="!session.accountAddress" class="muted" style="margin: 8px 0 0; text-align: center; font-size: 13px;">
@@ -1877,6 +1937,33 @@ onMounted(async () => {
   min-height: 48px;
   border: none;
 }
+
+.chat-composer-attach {
+  background: none; border: 1px solid var(--border-default); border-radius: 50%;
+  width: 40px; height: 40px; font-size: 18px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  color: var(--text-secondary); transition: border-color 150ms, color 150ms;
+}
+.chat-composer-attach:hover:not(:disabled) { border-color: var(--color-primary); color: var(--color-primary); }
+.chat-composer-attach:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.chat-attachment-chip {
+  flex: 1; display: flex; align-items: center; gap: 10px;
+  padding: 0 14px; min-height: 44px; border-radius: 22px;
+  background: #f0f2f5; border: 1px solid var(--border-default);
+  overflow: hidden;
+}
+.chat-attachment-chip-icon { flex-shrink: 0; color: var(--text-secondary); }
+.chat-attachment-chip-name {
+  flex: 1; font-size: 13px; font-weight: 500; color: var(--text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.chat-attachment-chip-remove {
+  background: none; border: none; font-size: 15px; cursor: pointer;
+  color: var(--text-secondary); padding: 2px 4px; line-height: 1;
+  border-radius: 50%; transition: color 150ms, background 150ms;
+}
+.chat-attachment-chip-remove:hover { color: var(--status-error); background: rgba(0,0,0,0.06); }
 
 @media (max-width: 840px) {
   .chat-shell {

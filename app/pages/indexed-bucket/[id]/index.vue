@@ -3,6 +3,7 @@ import { fetchIndexedBucketDetail, fetchIndexedMessagesByTag, type IndexedBucket
 import { DidCommRepository, type ExtrinsicUpdate } from "../../../services/papi/didCommRepository"
 import LoadingBar from "../../../components/common/LoadingBar.vue"
 import ChatMessageEntry, { type ChatMessageProps } from "../../../components/common/ChatMessageEntry.vue"
+import { Paperclip, X, SendHorizontal } from "lucide-vue-next"
 import { useAddress } from "../../../composables/useAddress"
 import * as jose from "jose"
 import { computed, nextTick, onMounted, ref, watch } from "vue"
@@ -64,6 +65,8 @@ const keySharingError = ref("")
 const sendText = ref("")
 const sendError = ref("")
 const sending = ref(false)
+const pendingAttachment = ref<{ file: File; dataUrl: string } | null>(null)
+const fileInputRef = ref<HTMLInputElement | null>(null)
 
 const keySharingTag = "didcomm/key-sharing-v1"
 const bucketDisplayName = computed(() => bucket.value?.name || `Bucket ${bucketId.value}`)
@@ -268,16 +271,55 @@ function logExtrinsicUpdate(update: ExtrinsicUpdate): void {
   )
 }
 
+function openFilePicker() {
+  fileInputRef.value?.click()
+}
+
+function onFileSelected(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    const result = reader.result as string
+    pendingAttachment.value = { file, dataUrl: result }
+    sendText.value = "" // clear text — mutually exclusive
+  }
+  reader.readAsDataURL(file)
+  input.value = ""
+}
+
+function removeAttachment() {
+  pendingAttachment.value = null
+}
+
+function buildAttachmentEnvelope(file: File, base64Data: string): string {
+  const base64 = base64Data.includes(",") ? base64Data.split(",")[1]! : base64Data
+  return JSON.stringify({
+    type: "attachment",
+    contentType: file.type || "application/octet-stream",
+    fileName: file.name,
+    data: base64,
+  })
+}
+
 async function sendMessage() {
   sendError.value = ""
-  const payload = sendText.value.trim()
-  if (!payload) { sendError.value = "Message content is required"; return }
+  const textPayload = sendText.value.trim()
+  const attachment = pendingAttachment.value
+
+  if (!textPayload && !attachment) { sendError.value = "Enter a message or attach a file"; return }
   if (!session.accountAddress) { sendError.value = "Connect wallet before sending"; return }
 
   sending.value = true
+  const savedText = sendText.value
   sendText.value = ""
+  pendingAttachment.value = null
   try {
-    const encrypted = await encryptOutgoing(payload)
+    const plaintext = attachment
+      ? buildAttachmentEnvelope(attachment.file, attachment.dataUrl)
+      : textPayload
+    const encrypted = await encryptOutgoing(plaintext)
     const result = await didCommRepository.createMessage(
       bucketId.value, encrypted, session.accountAddress, logExtrinsicUpdate
     )
@@ -285,7 +327,8 @@ async function sendMessage() {
     await loadAll()
   } catch (e) {
     sendError.value = e instanceof Error ? e.message : "Unable to send"
-    if (!sendText.value) sendText.value = payload
+    if (!sendText.value) sendText.value = savedText
+    if (attachment) pendingAttachment.value = attachment
   } finally {
     sending.value = false
   }
@@ -410,12 +453,30 @@ onMounted(async () => {
 
     <!-- Message composer -->
     <div class="ib-footer">
+      <input ref="fileInputRef" type="file" style="display:none" @change="onFileSelected" />
       <form class="ib-composer" @submit.prevent="sendMessage">
-        <textarea v-model="sendText" class="input ib-composer-input" name="message-text" placeholder="Write a message"
-          rows="1" :disabled="sending" />
+        <!-- Attachment mode: show file chip instead of textarea -->
+        <template v-if="pendingAttachment">
+          <div class="ib-attachment-chip">
+            <Paperclip :size="16" class="ib-attachment-chip-icon" />
+            <span class="ib-attachment-chip-name">{{ pendingAttachment.file.name }}</span>
+            <button type="button" class="ib-attachment-chip-remove" @click="removeAttachment" title="Remove">
+              <X :size="14" />
+            </button>
+          </div>
+        </template>
+        <!-- Text mode: textarea + attach button (attach hidden when typing) -->
+        <template v-else>
+          <button v-if="!sendText" type="button" class="ib-composer-attach" @click="openFilePicker"
+            :disabled="sending || !activeSecretJwk" title="Attach file">
+            <Paperclip :size="18" />
+          </button>
+          <textarea v-model="sendText" class="input ib-composer-input" name="message-text"
+            placeholder="Write a message" rows="1" :disabled="sending" />
+        </template>
         <button class="btn btn-primary ib-composer-send" type="submit"
           :disabled="sending || loading || !activeSecretJwk">
-          {{ sending ? "..." : "Send" }}
+          <SendHorizontal :size="18" />
         </button>
       </form>
       <p v-if="!session.accountAddress" class="muted" style="margin:8px 0 0;text-align:center;font-size:13px">
@@ -524,6 +585,33 @@ onMounted(async () => {
   border-radius: 50%; width: 44px; height: 44px; padding: 0;
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
+.ib-composer-attach {
+  background: none; border: 1px solid var(--border-default); border-radius: 50%;
+  width: 40px; height: 40px; font-size: 18px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  color: var(--text-secondary); transition: border-color 150ms, color 150ms;
+}
+.ib-composer-attach:hover:not(:disabled) { border-color: var(--color-primary); color: var(--color-primary); }
+.ib-composer-attach:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Attachment chip (replaces textarea) */
+.ib-attachment-chip {
+  flex: 1; display: flex; align-items: center; gap: 10px;
+  padding: 0 14px; min-height: 44px; border-radius: 22px;
+  background: #f0f2f5; border: 1px solid var(--border-default);
+  overflow: hidden;
+}
+.ib-attachment-chip-icon { flex-shrink: 0; color: var(--text-secondary); }
+.ib-attachment-chip-name {
+  flex: 1; font-size: 13px; font-weight: 500; color: var(--text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.ib-attachment-chip-remove {
+  background: none; border: none; font-size: 15px; cursor: pointer;
+  color: var(--text-secondary); padding: 2px 4px; line-height: 1;
+  border-radius: 50%; transition: color 150ms, background 150ms;
+}
+.ib-attachment-chip-remove:hover { color: var(--status-error); background: rgba(0,0,0,0.06); }
 
 @media (max-width: 840px) {
   .ib-chat-viewport { padding: 12px 12px 24px; }
