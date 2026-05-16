@@ -39,7 +39,6 @@ const didSearchResultJson = ref("")
 const didSearchDecodedX25519Json = ref("")
 
 const didCreateDidAddress = ref("")
-const didCreateSubmitterAddress = ref("")
 const didCreateMnemonic = ref("")
 const didCreateKeyAgreementX = ref("")
 const submittingDidCreate = ref(false)
@@ -62,6 +61,144 @@ const didAddKeyAgreementTxHash = ref("")
 
 const didSignMnemonic = ref("")
 const didSignPayloadHex = ref("")
+const didSignSignature = ref("")
+const didSignError = ref<string | null>(null)
+const didSignSignatureCopied = ref(false)
+const didSignTxCounter = ref<number | null>(null)
+const didSignBlockNumber = ref<number | null>(null)
+const didSignSubmitterAddress = ref("")
+const didSignKeyRelationship = ref("Authentication")
+const didSignPayloadDebug = ref("")
+
+async function signPayload(): Promise<void> {
+  didSignError.value = null
+  didSignSignature.value = ""
+  didSignTxCounter.value = null
+  didSignBlockNumber.value = null
+
+  let provider: { disconnect: () => void } | undefined
+  let api: any | undefined
+
+  try {
+    const payloadHex = didSignPayloadHex.value.trim()
+    if (!payloadHex) {
+      throw new Error("Payload hex is required")
+    }
+
+    await cryptoWaitReady()
+    const didKeyring = new Keyring({ type: "sr25519", ss58Format: ss58Prefix.value })
+    const didAccount = didKeyring.addFromUri(didSignMnemonic.value.trim())
+
+    const endpoint = session.networkEndpoint || runtimeConfig.public.xcavateWsEndpoint
+    const { ApiPromise, WsProvider } = await import("@polkadot/api")
+
+    provider = new WsProvider(endpoint)
+    api = await ApiPromise.create({ provider })
+
+    const queryDid = api.query?.did?.did
+    if (typeof queryDid !== "function") {
+      throw new Error("did.did storage query is not available on this chain")
+    }
+
+    const result = await queryDid(didAccount.address)
+    const didInfo = result.toJSON() as Record<string, unknown> | null
+    
+    if (!didInfo) {
+      throw new Error("DID not found on chain. Please register it first.")
+    }
+
+    const txCounter = Number(didInfo.txCounter ?? didInfo.tx_counter ?? didInfo.nonce ?? 0) + 1
+
+    // Fetch the latest block number from the chain for replay protection
+    const blockNumberObj = await api.query.system.number()
+    const blockNumber = blockNumberObj.toNumber()
+
+    didSignTxCounter.value = txCounter
+    didSignBlockNumber.value = blockNumber
+
+    const submitter = didSignSubmitterAddress.value.trim() || session.accountAddress
+    if (!submitter) {
+      throw new Error("Submitter address is required")
+    }
+
+    let payloadBytes: Uint8Array
+    try {
+      // Fetch the exact type string for the first argument of `submitDidCall`
+      const operationTypeStr = api.tx.did.submitDidCall.meta.args[0].type.toString()
+      
+      // Rely on the chain's metadata to encode the operation precisely.
+      const operationObj = api.registry.createType(operationTypeStr, {
+        did: didAccount.address,
+        tx_counter: txCounter,
+        call: payloadHex,
+        block_number: blockNumber,
+        submitter: submitter
+      })
+      const operationBytes = operationObj.toU8a()
+
+      // Dynamically discover the wrapper and enum types from the chain metadata
+      const allTypes = Object.keys(api.registry.getClasses())
+      const wrapTypeName = allTypes.find(t => t.includes('DidAuthorizedCallOperationWithVerificationRelationship') || t.includes('AuthorizedCallOperationWithVerificationRelationship'))
+      const relTypeName = allTypes.find(t => t.includes('DidVerificationKeyRelationship') || t.includes('VerificationKeyRelationship'))
+
+      if (wrapTypeName) {
+        // If the wrapper type exists in metadata, use it directly for perfect encoding
+        payloadBytes = api.registry.createType(wrapTypeName, {
+          operation: operationObj,
+          verificationKeyRelationship: didSignKeyRelationship.value
+        }).toU8a()
+      } else {
+        // Otherwise, encode the enum and concatenate
+        let relationshipBytes: Uint8Array
+        if (relTypeName) {
+          relationshipBytes = api.registry.createType(relTypeName, didSignKeyRelationship.value).toU8a()
+        } else {
+          const map: Record<string, number> = {
+            'Authentication': 0,
+            'CapabilityDelegation': 1,
+            'CapabilityInvocation': 2,
+            'AssertionMethod': 3
+          }
+          relationshipBytes = new Uint8Array([map[didSignKeyRelationship.value] ?? 0])
+        }
+        payloadBytes = new Uint8Array([...operationBytes, ...relationshipBytes])
+      }
+    } catch (e) {
+      console.error("Payload encoding error:", e)
+      throw new Error(`Failed to encode payload: ${e instanceof Error ? e.message : String(e)}`)
+    }
+
+    didSignPayloadDebug.value = u8aToHex(payloadBytes)
+    const signature = didAccount.sign(payloadBytes)
+    didSignSignature.value = u8aToHex(signature)
+  } catch (error) {
+    didSignError.value = error instanceof Error ? error.message : "Failed to sign payload"
+  } finally {
+    if (api) await api.disconnect().catch(() => undefined)
+    if (provider) provider.disconnect()
+  }
+}
+
+async function copySignature(): Promise<void> {
+  if (!import.meta.client || !didSignSignature.value) return
+  try {
+    await navigator.clipboard.writeText(didSignSignature.value)
+    didSignSignatureCopied.value = true
+    setTimeout(() => {
+      didSignSignatureCopied.value = false
+    }, 1800)
+  } catch {
+    didSignError.value = "Clipboard copy failed"
+  }
+}
+
+const isDidCreateFormValid = computed(() => {
+  return (
+    didCreateDidAddress.value.trim().length > 0 &&
+    didCreateMnemonic.value.trim().length > 0 &&
+    didCreateKeyAgreementX.value.trim().length > 0
+  )
+})
 
 async function generateMnemonic(): Promise<void> {
   generatingMnemonic.value = true
@@ -578,7 +715,6 @@ async function submitDidCreateExtrinsic(): Promise<void> {
     return
   }
 
-  const submitterAddress = didCreateSubmitterAddress.value.trim() || connectedAddress
 
   let keyAgreementHex = ""
 
@@ -593,13 +729,27 @@ async function submitDidCreateExtrinsic(): Promise<void> {
 
   await cryptoWaitReady()
   const didKeyring = new Keyring({ type: "sr25519", ss58Format: ss58Prefix.value })
-  const didAccount = didKeyring.addFromUri(mnemonicInput)
-  const didAddress = didCreateDidAddress.value.trim() || didAccount.address
+  
+  let didAccount
+  try {
+    didAccount = didKeyring.addFromUri(mnemonicInput)
+  } catch (error) {
+    didCreateError.value = "Invalid mnemonic provided"
+    return
+  }
+
+  const inputDidAddress = didCreateDidAddress.value.trim()
+  if (inputDidAddress !== didAccount.address) {
+    didCreateError.value = `Mnemonic generates a different address (${didAccount.address}) than the one provided.`
+    return
+  }
+
+  const didAddress = inputDidAddress
   derivedDidAddress.value = didAddress
 
   const details = {
     did: didAddress,
-    submitter: submitterAddress,
+    submitter: connectedAddress,
     newKeyAgreementKeys: keyAgreementHex ? [{ X25519: keyAgreementHex }] : [],
     newAttestationKey: null,
     newDelegationKey: null,
@@ -897,17 +1047,14 @@ const displayedDerivedDidAddress = computed(() => formatAddress(derivedDidAddres
     </header>
 
     <section class="card stack">
-      <div class="row section-header">
-        <h2 style="margin: 0">DID seach</h2>
+      <h2 style="margin: 0">DID Search</h2>
+
+      <div class="row">
+        <input v-model="didSearchAddress" class="input address-value" style="flex: 1" type="text" placeholder="Enter SS58 Address..." :disabled="searchingDid" />
         <button class="btn btn-primary" type="button" @click="searchDidByAddress" :disabled="searchingDid">
-          {{ searchingDid ? "Searching..." : "Search DID" }}
+          {{ searchingDid ? "Searching..." : "Search" }}
         </button>
       </div>
-
-      <label class="stack field-group">
-        <span class="muted">Address (SS58)</span>
-        <input v-model="didSearchAddress" class="input address-value" type="text" placeholder="5F..." :disabled="searchingDid" />
-      </label>
 
       <p v-if="didSearchError" class="error-text">{{ didSearchError }}</p>
 
@@ -964,118 +1111,43 @@ const displayedDerivedDidAddress = computed(() => formatAddress(derivedDidAddres
 
     <section class="card stack">
       <div class="row section-header">
-        <h2 style="margin: 0">Submit did.create Extrinsic</h2>
-        <button class="btn btn-primary" type="button" @click="submitDidCreateExtrinsic" :disabled="submittingDidCreate">
-          {{ submittingDidCreate ? "Submitting..." : "Submit did.create" }}
-        </button>
+        <h2 style="margin: 0">Register DID</h2>
       </div>
 
-      <p class="muted" style="margin: 0">
-        Uses wallet signer to submit <strong>did.create(details, signature)</strong> with the same shape as polkadot.js Apps.
-      </p>
-
       <label class="stack field-group">
-        <span class="muted">did (AccountId) - defaults to connected wallet</span>
-        <input v-model="didCreateDidAddress" class="input" type="text" placeholder="5F..." :disabled="submittingDidCreate" />
+        <span class="muted">DID address</span>
+        <input v-model="didCreateDidAddress" class="input address-value" type="text" placeholder="Enter SS58 Address ..." :disabled="submittingDidCreate" />
       </label>
 
       <label class="stack field-group">
-        <span class="muted">did mnemonic (used to sign creation details)</span>
+        <span class="muted">DID mnemonic (which is used to sign creation details)</span>
         <textarea
           v-model="didCreateMnemonic"
           class="input mnemonic-input"
           rows="2"
-          placeholder="word1 word2 ..."
+          placeholder="word1 word2 word3 word4 ..."
           :disabled="submittingDidCreate"
         />
       </label>
 
       <label class="stack field-group">
-        <span class="muted">submitter (AccountId) - defaults to connected wallet</span>
-        <input v-model="didCreateSubmitterAddress" class="input" type="text" placeholder="5F..." :disabled="submittingDidCreate" />
-      </label>
-
-      <label class="stack field-group">
-        <span class="muted">newKeyAgreementKeys[0].x (optional, base64url, 32 bytes)</span>
+        <span class="muted">Encryption key</span>
         <input
           v-model="didCreateKeyAgreementX"
           class="input address-value"
           type="text"
-          placeholder="6N6fczfJx0czA1hM..."
+          placeholder="Enter your X25519 key ..."
           :disabled="submittingDidCreate"
         />
       </label>
 
+      <div class="row section-header" style="justify-content: end">
+        <button class="btn btn-primary" type="button" @click="submitDidCreateExtrinsic" :disabled="submittingDidCreate || !isDidCreateFormValid">
+          {{ submittingDidCreate ? "Submitting extrinsic ..." : "Submit did.create extrinsic" }}
+        </button>
+      </div>
+
       <p v-if="didCreateError" class="error-text">{{ didCreateError }}</p>
-      <p v-if="derivedDidAddress" class="muted" style="margin: 0">Derived DID Address: {{ displayedDerivedDidAddress }}</p>
-      <p v-if="didCreateStatus" class="muted" style="margin: 0">{{ didCreateStatus }}</p>
-      <p v-if="didCreateTxHash" class="muted" style="margin: 0">Tx Hash: {{ didCreateTxHash }}</p>
-    </section>
-
-    <section class="card stack">
-      <div class="row section-header">
-        <h2 style="margin: 0">Submit did.createFromAccount Extrinsic</h2>
-        <button
-          class="btn btn-primary"
-          type="button"
-          @click="submitDidCreateFromAccountExtrinsic"
-          :disabled="submittingDidCreateFromAccount"
-        >
-          {{ submittingDidCreateFromAccount ? "Submitting..." : "Submit did.createFromAccount" }}
-        </button>
-      </div>
-
-      <p class="muted" style="margin: 0">
-        Submits <strong>did.createFromAccount(authenticationKey)</strong>. Leave the field empty to use the connected account public key.
-      </p>
-
-      <label class="stack field-group">
-        <span class="muted">authenticationKey.Sr25519 (optional, SS58 or 0x + 32 bytes)</span>
-        <input
-          v-model="didCreateFromAccountAuthKey"
-          class="input address-value"
-          type="text"
-          placeholder="5F... or 0x..."
-          :disabled="submittingDidCreateFromAccount"
-        />
-      </label>
-
-      <p v-if="didCreateFromAccountError" class="error-text">{{ didCreateFromAccountError }}</p>
-      <p v-if="didCreateFromAccountStatus" class="muted" style="margin: 0">{{ didCreateFromAccountStatus }}</p>
-      <p v-if="didCreateFromAccountTxHash" class="muted" style="margin: 0">Tx Hash: {{ didCreateFromAccountTxHash }}</p>
-    </section>
-
-    <section class="card stack">
-      <div class="row section-header">
-        <h2 style="margin: 0">Submit did.addKeyAgreementKey Extrinsic</h2>
-        <button
-          class="btn btn-primary"
-          type="button"
-          @click="submitDidAddKeyAgreementExtrinsic"
-          :disabled="submittingDidAddKeyAgreement"
-        >
-          {{ submittingDidAddKeyAgreement ? "Submitting..." : "Submit did.addKeyAgreementKey" }}
-        </button>
-      </div>
-
-      <p class="muted" style="margin: 0">
-        Submits <strong>did.addKeyAgreementKey(newKey)</strong> using a JWK <strong>x</strong> value decoded to a 32-byte X25519 key.
-      </p>
-
-      <label class="stack field-group">
-        <span class="muted">newKey.X25519.x (required, base64url, 32 bytes)</span>
-        <input
-          v-model="didAddKeyAgreementX"
-          class="input address-value"
-          type="text"
-          placeholder="6N6fczfJx0czA1hM..."
-          :disabled="submittingDidAddKeyAgreement"
-        />
-      </label>
-
-      <p v-if="didAddKeyAgreementError" class="error-text">{{ didAddKeyAgreementError }}</p>
-      <p v-if="didAddKeyAgreementStatus" class="muted" style="margin: 0">{{ didAddKeyAgreementStatus }}</p>
-      <p v-if="didAddKeyAgreementTxHash" class="muted" style="margin: 0">Tx Hash: {{ didAddKeyAgreementTxHash }}</p>
     </section>
 
     <section v-if="settings.showMessageDebug" class="card stack">
@@ -1102,6 +1174,51 @@ const displayedDerivedDidAddress = computed(() => formatAddress(derivedDidAddres
           placeholder="0x..."
         />
       </label>
+
+      <label class="stack field-group">
+        <span class="muted">Submitter Address (defaults to connected wallet)</span>
+        <input v-model="didSignSubmitterAddress" class="input address-value" type="text" placeholder="5F..." />
+      </label>
+
+      <label class="stack field-group">
+        <span class="muted">Verification Key Relationship</span>
+        <select v-model="didSignKeyRelationship" class="input">
+          <option value="Authentication">Authentication</option>
+          <option value="CapabilityDelegation">CapabilityDelegation</option>
+          <option value="CapabilityInvocation">CapabilityInvocation</option>
+          <option value="AssertionMethod">AssertionMethod</option>
+        </select>
+      </label>
+
+      <div class="row section-header" style="justify-content: end">
+        <button class="btn btn-primary" type="button" @click="signPayload" :disabled="!didSignMnemonic || !didSignPayloadHex">
+          Sign Data
+        </button>
+      </div>
+
+      <p v-if="didSignError" class="error-text">{{ didSignError }}</p>
+
+      <div v-if="didSignSignature" class="address-card stack">
+        <div class="row section-header">
+          <p class="muted" style="margin: 0">Signature (Sr25519)</p>
+          <button class="btn" type="button" @click="copySignature">
+            {{ didSignSignatureCopied ? "Copied" : "Copy" }}
+          </button>
+        </div>
+        <div v-if="didSignTxCounter !== null || didSignBlockNumber !== null" class="row">
+          <p class="muted" style="margin: 0">
+            <strong>txCounter:</strong> {{ didSignTxCounter }}
+            <span style="margin: 0 8px">|</span>
+            <strong>blockNumber:</strong> {{ didSignBlockNumber }}
+          </p>
+        </div>
+        <p class="address-value" style="margin: 4px 0 0; word-break: break-all;">{{ didSignSignature }}</p>
+        
+        <div class="row section-header" style="margin-top: 12px">
+          <p class="muted" style="margin: 0">Payload Signed (Debug)</p>
+        </div>
+        <p class="address-value" style="margin: 4px 0 0; word-break: break-all; font-size: 0.85em; color: #888;">{{ didSignPayloadDebug }}</p>
+      </div>
     </section>
   </main>
 </template>
