@@ -158,7 +158,7 @@ async function copyX25519PublicKey() {
     <aside class="app-shell-sidebar" :class="{ 'topbar-expanded': isTopbarExpanded }">
       <div class="sidebar-header">
         <NuxtLink class="sidebar-brand" to="/">
-          <h2 style="margin: 0; font-size: 18px">Asset DIDComm</h2>
+          <h2 style="margin: 0; font-size: 18px">realXmessage</h2>
         </NuxtLink>
         <button class="btn sidebar-toggle" type="button" @click="toggleTopbar" :aria-expanded="isTopbarExpanded" aria-label="Toggle navigation">
           <X v-if="isTopbarExpanded" :size="16" />

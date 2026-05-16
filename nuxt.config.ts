@@ -6,7 +6,7 @@ export default defineNuxtConfig({
   app: {
     baseURL: process.env.NUXT_APP_BASE_URL || "/",
     head: {
-      title: "Asset DIDComm Admin Dashboard",
+      title: "realXmessage",
       meta: [{ name: "viewport", content: "width=device-width, initial-scale=1" }]
     }
   },

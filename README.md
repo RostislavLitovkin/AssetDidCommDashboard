@@ -1,6 +1,6 @@
-# Asset DIDComm Admin Dashboard
+# realXmessage Dashboard
 
-Admin dashboard for Asset DIDComm workflows on Xcavate Substrate.
+realXmessage dashboard for Asset DIDComm workflows on Xcavate Substrate.
 
 ## Stack
 - Nuxt 3 + Vue 3 + TypeScript
@@ -15,8 +15,7 @@ Admin dashboard for Asset DIDComm workflows on Xcavate Substrate.
 - `npm run dev`
 
 ## Environment
-- Set `NUXT_PUBLIC_XCAVATE_WS_ENDPOINT` in `.env` for local development.
-- In GitHub Actions, set repository secret `NUXT_PUBLIC_XCAVATE_WS_ENDPOINT` so workflows can generate `.env` during CI and deploy.
+- Set `.env` for local development.
 
 ## Quality Gates
 - `npm run lint`

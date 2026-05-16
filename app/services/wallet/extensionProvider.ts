@@ -13,7 +13,7 @@ export interface WalletAccountOption {
 
 export class WalletExtensionProvider {
   private async ensureEnabled(): Promise<void> {
-    const extensions = await web3Enable("Asset DIDComm Dashboard")
+    const extensions = await web3Enable("realXmessage Dashboard")
     if (!extensions.length) {
       throw new Error("WALLET_EXTENSION_UNAVAILABLE")
     }
