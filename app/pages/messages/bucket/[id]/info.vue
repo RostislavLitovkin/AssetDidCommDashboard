@@ -1510,6 +1510,9 @@ function isRemoving(address) {
     <section class="stack" aria-live="polite">
       <div class="row buckets-header" style="justify-content: space-between; align-items: center">
         <div class="row" style="gap: 12px; align-items: center">
+          <NuxtLink class="btn" :to="`/indexed-bucket/${encodeURIComponent(bucketId)}`" style="padding: 6px 10px;">
+            ← Back
+          </NuxtLink>
           <div class="stack" style="gap: 4px">
             <h3 style="margin: 0">{{ bucketDisplayName }}</h3>
           </div>

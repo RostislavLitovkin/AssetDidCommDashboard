@@ -86,30 +86,24 @@ onMounted(async () => {
         <div class="stack" style="gap: 4px">
           <h3 style="margin: 0">{{ namespaceDisplayName }}</h3>
         </div>
-        <div class="row" style="gap: 8px">
+        <div v-if="isWalletConnected" class="row" style="gap: 8px">
           <NuxtLink class="btn" :to="`/messages/bucket/create/${encodeURIComponent(namespaceId)}`">Add Bucket</NuxtLink>
         </div>
       </div>
 
-      <WalletConnectPrompt
-        v-if="!isWalletConnected"
-        title="Connect Your Wallet"
-        description="Connect your wallet to manage buckets in this namespace."
-      />
+      <LoadingBar v-if="bucketsLoading" label="Loading buckets..." />
 
-      <template v-else>
-        <LoadingBar v-if="bucketsLoading" label="Loading buckets..." />
-
-        <p v-if="bucketsError" style="margin: 0; color: var(--status-error)">{{ bucketsError }}</p>
-        <p v-else-if="!buckets.length && !bucketsLoading" class="muted" style="margin: 0">
+      <p v-if="bucketsError" style="margin: 0; color: var(--status-error)">{{ bucketsError }}</p>
+      <div v-else class="stack" style="gap: 12px">
+        <p v-if="!buckets.length && !bucketsLoading" class="muted" style="margin: 0">
           No buckets found for this namespace.
         </p>
 
-        <div v-else-if="buckets.length" class="stack" style="gap: 12px">
+        <div v-if="buckets.length" class="stack" style="gap: 12px">
           <NuxtLink
             v-for="bucket in buckets"
             :key="bucket.id"
-            :to="`/messages/bucket/${encodeURIComponent(bucket.id)}`"
+            :to="`/indexed-bucket/${encodeURIComponent(bucket.id)}`"
             class="card bucket-card"
             style="padding: 16px; text-decoration: none; color: inherit; display: block"
           >
@@ -121,7 +115,7 @@ onMounted(async () => {
             </div>
           </NuxtLink>
         </div>
-      </template>
+      </div>
     </section>
   </div>
 </template>

@@ -32,7 +32,7 @@ const bucketId = computed(() => {
   }
 })
 
-const bucketRoutePath = computed(() => `/messages/bucket/${encodeURIComponent(bucketId.value)}`)
+const bucketRoutePath = computed(() => `/indexed-bucket/${encodeURIComponent(bucketId.value)}`)
 
 const role = ref<MemberRole>(toMemberRole(route.query.role))
 const namespaceId = ref("")

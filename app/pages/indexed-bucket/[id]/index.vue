@@ -410,111 +410,35 @@ onMounted(async () => {
 <template>
   <div class="chat-page-container ib-custom-page">
     <!-- Header -->
-    <header class="row buckets-header ib-header-row">
-      <div class="row ib-header-left">
-        <div class="ib-source-badge">⚡ Indexed</div>
-        <div class="stack" style="gap: 2px">
-          <h3 style="margin: 0">{{ bucketDisplayName }}</h3>
-          <span v-if="bucket" class="muted ib-subtitle-text">
-            Namespace {{ bucket.namespaceId }} · Bucket #{{ bucket.bucketId }}
-          </span>
+    <header class="buckets-header ib-header-row">
+      <div class="ib-container ib-header-inner">
+        <div class="row ib-header-left">
+          <div class="stack" style="gap: 2px">
+            <h3 style="margin: 0">{{ bucketDisplayName }}</h3>
+          </div>
         </div>
-      </div>
-      <div class="row ib-header-actions">
-        <button class="btn" :disabled="loading" @click="loadAll">Reload</button>
+        <div class="row ib-header-actions">
+          <button class="btn" :disabled="loading" @click="loadAll">Reload</button>
+          <NuxtLink class="btn" :to="`/messages/bucket/${encodeURIComponent(bucketId)}/info`">Info</NuxtLink>
+        </div>
       </div>
     </header>
 
-    <LoadingBar v-if="loading" label="Querying SubQuery indexer..." style="flex-shrink:0; margin: 0 18px;" />
-    <p v-if="error" class="ib-error">{{ error }}</p>
-
-    <!-- Content Area (Scrollable if needed, but chat viewport takes priority) -->
-    <div class="ib-content-scroll">
-      <!-- Info panel -->
-      <details v-if="bucket" class="ib-panel card">
-        <summary class="ib-panel-summary">
-          <span>Bucket Info</span>
-          <span class="ib-panel-toggle">+</span>
-        </summary>
-        <div class="ib-panel-body">
-          <dl class="ib-meta">
-            <div class="ib-meta-row">
-              <dt>ID</dt>
-              <dd>{{ bucket.id }}</dd>
-            </div>
-            <div class="ib-meta-row">
-              <dt>Namespace ID</dt>
-              <dd>{{ bucket.namespaceId }}</dd>
-            </div>
-            <div class="ib-meta-row">
-              <dt>Name</dt>
-              <dd>{{ bucket.name || "—" }}</dd>
-            </div>
-            <div class="ib-meta-row">
-              <dt>Category</dt>
-              <dd>{{ bucket.category || "—" }}</dd>
-            </div>
-            <div class="ib-meta-row">
-              <dt>Creator</dt>
-              <dd>{{ bucket.creator ? formatAddress(bucket.creator) : "—" }}</dd>
-            </div>
-            <div class="ib-meta-row">
-              <dt>Writable</dt>
-              <dd>{{ bucket.isWritable ? "Yes" : "No" }}</dd>
-            </div>
-            <div class="ib-meta-row">
-              <dt>Created</dt>
-              <dd>{{ formatBlock(bucket.createdBlock) }}</dd>
-            </div>
-            <div v-if="bucket.encryptionKey" class="ib-meta-row">
-              <dt>Encryption Key</dt>
-              <dd class="mono">{{ bucket.encryptionKey }}</dd>
-            </div>
-          </dl>
-        </div>
-      </details>
-
-      <!-- Members panel -->
-      <details v-if="admins.length || contributors.length" class="ib-panel card">
-        <summary class="ib-panel-summary">
-          <span>Members ({{ admins.length }} admins · {{ contributors.length }} contributors)</span>
-          <span class="ib-panel-toggle">+</span>
-        </summary>
-        <div class="ib-panel-body">
-          <h4 class="ib-section-label" v-if="admins.length">Admins</h4>
-          <ul class="ib-member-list">
-            <li v-for="a in admins" :key="a.id" class="ib-member-item">
-              <span class="ib-member-address">{{ formatAddress(a.subjectId) }}</span>
-              <span class="ib-member-block">{{ formatBlock(a.addedBlock) }}</span>
-            </li>
-          </ul>
-          <h4 class="ib-section-label" v-if="contributors.length" style="margin-top:12px">Contributors</h4>
-          <ul class="ib-member-list">
-            <li v-for="c in contributors" :key="c.id" class="ib-member-item">
-              <span class="ib-member-address">{{ formatAddress(c.subjectId) }}</span>
-              <span class="ib-member-block">{{ formatBlock(c.addedBlock) }}</span>
-            </li>
-          </ul>
-        </div>
-      </details>
-
-      <!-- Key sharing status -->
-      <div v-if="keySharingError && !loading" class="ib-key-status">
-        🔒 {{ keySharingError }}
-      </div>
-      <div v-else-if="activeSecretJwk && !loading" class="ib-key-status ib-key-ok">
-        🔓 Bucket encryption key decrypted successfully
-      </div>
+    <div class="ib-container">
+      <LoadingBar v-if="loading" label="Querying SubQuery indexer..." style="flex-shrink:0;" />
+      <p v-if="error" class="ib-error">{{ error }}</p>
     </div>
 
     <!-- Chat viewport -->
     <div class="ib-chat-viewport chat-viewport" role="log" aria-live="polite" aria-label="Indexed bucket messages">
-      <ChatMessageEntry v-for="msg in chatMessages" :key="msg.id" :message="msg" />
-      <p v-if="!chatMessages.length && !loading" class="muted" style="text-align:center">
-        No messages found for this bucket in the indexer.
-      </p>
+      <div class="ib-container ib-chat-inner">
+        <ChatMessageEntry v-for="msg in chatMessages" :key="msg.id" :message="msg" />
+        <p v-if="!chatMessages.length && !loading" class="muted" style="text-align:center">
+          No messages found for this bucket in the indexer.
+        </p>
 
-      <div id="chat-bottom-anchor"></div>
+        <div id="chat-bottom-anchor"></div>
+      </div>
     </div>
 
     <!-- Footer: conditional on wallet / contributor status -->
@@ -547,52 +471,51 @@ onMounted(async () => {
 
     <!-- (C) Authorized → Message composer -->
     <div v-else class="ib-footer-sticky">
-      <input ref="fileInputRef" type="file" style="display:none" @change="onFileSelected" />
-      <form class="ib-composer" @submit.prevent="sendMessage">
-        <!-- Attachment mode: show file chip instead of textarea -->
-        <template v-if="pendingAttachment">
-          <div class="ib-attachment-chip">
-            <Paperclip :size="16" class="ib-attachment-chip-icon" />
-            <span class="ib-attachment-chip-name">{{ pendingAttachment.file.name }}</span>
-            <button type="button" class="ib-attachment-chip-remove" @click="removeAttachment" title="Remove">
-              <X :size="14" />
+      <div class="ib-container">
+        <input ref="fileInputRef" type="file" style="display:none" @change="onFileSelected" />
+        <form class="ib-composer" @submit.prevent="sendMessage">
+          <!-- Attachment mode: show file chip instead of textarea -->
+          <template v-if="pendingAttachment">
+            <div class="ib-attachment-chip">
+              <Paperclip :size="16" class="ib-attachment-chip-icon" />
+              <span class="ib-attachment-chip-name">{{ pendingAttachment.file.name }}</span>
+              <button type="button" class="ib-attachment-chip-remove" @click="removeAttachment" title="Remove">
+                <X :size="14" />
+              </button>
+            </div>
+          </template>
+          <!-- Text mode: textarea + attach button (attach hidden when typing) -->
+          <template v-else>
+            <button v-if="!sendText" type="button" class="ib-composer-attach" @click="openFilePicker"
+              :disabled="sending || !activeSecretJwk" title="Attach file">
+              <Paperclip :size="18" />
             </button>
-          </div>
-        </template>
-        <!-- Text mode: textarea + attach button (attach hidden when typing) -->
-        <template v-else>
-          <button v-if="!sendText" type="button" class="ib-composer-attach" @click="openFilePicker"
-            :disabled="sending || !activeSecretJwk" title="Attach file">
-            <Paperclip :size="18" />
+            <textarea v-model="sendText" class="input ib-composer-input" name="message-text"
+              placeholder="Write a message" rows="1" :disabled="sending" />
+          </template>
+          <button class="btn btn-primary ib-composer-send" type="submit"
+            :disabled="sending || loading || !activeSecretJwk">
+            <SendHorizontal :size="18" />
           </button>
-          <textarea v-model="sendText" class="input ib-composer-input" name="message-text" placeholder="Write a message"
-            rows="1" :disabled="sending" />
-        </template>
-        <button class="btn btn-primary ib-composer-send" type="submit"
-          :disabled="sending || loading || !activeSecretJwk">
-          <SendHorizontal :size="18" />
-        </button>
-      </form>
-      <div class="ib-footer-meta">
-        <p v-if="!activeSecretJwk && !loading" class="muted" style="margin:0; text-align:center; font-size:13px">
-          Decrypt the bucket key to enable sending.
-        </p>
-        <p v-if="sendError" style="margin:0; color:var(--status-error); text-align:center; font-size:13px">
-          {{ sendError }}
-        </p>
+        </form>
+        <div class="ib-footer-meta">
+          <p v-if="!activeSecretJwk && !loading" class="muted" style="margin:0; text-align:center; font-size:13px">
+            Decrypt the bucket key to enable sending.
+          </p>
+          <p v-if="sendError" style="margin:0; color:var(--status-error); text-align:center; font-size:13px">
+            {{ sendError }}
+          </p>
+        </div>
       </div>
     </div>
 
     <!-- Wallet selection popup (independent, not part of the footer chain) -->
-    <div
-      v-if="showWalletPopup"
-      class="ib-wallet-overlay"
-      @click.self="showWalletPopup = false"
-    >
+    <div v-if="showWalletPopup" class="ib-wallet-overlay" @click.self="showWalletPopup = false">
       <div class="card stack ib-wallet-popup">
         <div class="row" style="justify-content: space-between; align-items: center">
           <h3 style="margin: 0">Select Wallet</h3>
-          <button class="btn" type="button" aria-label="Close" @click="showWalletPopup = false" :disabled="selectingWallet">
+          <button class="btn" type="button" aria-label="Close" @click="showWalletPopup = false"
+            :disabled="selectingWallet">
             <X :size="14" />
           </button>
         </div>
@@ -600,21 +523,19 @@ onMounted(async () => {
         <LoadingBar v-if="loadingWalletAccounts" label="Loading wallets..." />
 
         <div v-else-if="walletAccounts.length" class="stack" style="max-height: 300px; overflow: auto; gap: 8px">
-          <button
-            v-for="account in walletAccounts"
-            :key="account.address"
-            class="btn"
-            type="button"
+          <button v-for="account in walletAccounts" :key="account.address" class="btn" type="button"
             :disabled="selectingWallet"
             style="display: flex; justify-content: space-between; align-items: center; text-align: left"
-            @click="selectWalletAccount(account.address)"
-          >
+            @click="selectWalletAccount(account.address)">
             <LoadingBar v-if="selectingWallet" label="" style="min-width: 0" />
             <span v-else class="stack" style="gap: 2px; min-width: 0; flex: 1">
               <strong>{{ account.name }}</strong>
-              <span class="muted" style="font-size: 12px">{{ account.address.slice(0, 10) }}...{{ account.address.slice(-10) }}</span>
+              <span class="muted" style="font-size: 12px">{{ account.address.slice(0, 10) }}...{{
+                account.address.slice(-10)
+                }}</span>
             </span>
-            <span class="muted" style="font-size: 12px; white-space: nowrap; margin-left: 8px">{{ account.source }}</span>
+            <span class="muted" style="font-size: 12px; white-space: nowrap; margin-left: 8px">{{ account.source
+              }}</span>
           </button>
         </div>
 
@@ -625,25 +546,59 @@ onMounted(async () => {
 </template>
 
 
+<!-- Unscoped: override parent layout constraints when this page is active -->
+<style>
+.app-shell-content:has(.chat-page-container.ib-custom-page) {
+  padding: 0;
+  overflow: hidden;
+}
+
+.app-shell-content>.container:has(.chat-page-container.ib-custom-page) {
+  width: 100%;
+  max-width: none;
+  padding: 0;
+  margin: 0;
+  height: 100%;
+}
+
+@media (max-width: 960px) {
+  .app-shell-content:has(.chat-page-container.ib-custom-page) {
+    padding-top: 56px;
+    /* leave room for fixed topbar */
+  }
+}
+</style>
+
 <style scoped>
 /* Main Full-Height Container */
 .ib-custom-page {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 48px); /* Adjust based on AppShell padding */
-  margin: -24px; /* Counteract AppShell padding to fill space */
+  height: 100%;
   background: #f7f8fa;
   overflow: hidden;
   position: relative;
 }
 
+.ib-container {
+  max-width: 1000px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 0 48px;
+}
+
 .ib-header-row {
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 18px;
   background: transparent;
   flex-shrink: 0;
   border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.ib-header-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 16px;
+  padding-bottom: 16px;
 }
 
 .ib-header-left {
@@ -682,7 +637,6 @@ onMounted(async () => {
 }
 
 .ib-error {
-  margin: 8px 18px;
   color: var(--status-error);
   font-size: 14px;
 }
@@ -698,7 +652,7 @@ onMounted(async () => {
 
 /* Panels */
 .ib-panel {
-  margin: 0 18px 8px;
+  margin: 0 0 8px;
   padding: 0;
   border-radius: 12px;
   box-shadow: none;
@@ -810,7 +764,7 @@ onMounted(async () => {
 
 /* Key status */
 .ib-key-status {
-  margin: 4px 18px 8px;
+  margin: 4px 0 8px;
   padding: 8px 14px;
   border-radius: 8px;
   font-size: 13px;
@@ -829,19 +783,26 @@ onMounted(async () => {
 /* Chat Viewport: Matches reference chat-viewport */
 .ib-chat-viewport {
   flex: 1;
-  padding: 16px 18px 24px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
   overflow-y: auto;
   background: transparent;
   overscroll-behavior: contain;
 }
 
+.ib-chat-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 16px;
+  padding-bottom: 24px;
+  flex: 1;
+}
+
 /* Sticky Footer / Composer */
 .ib-footer-sticky {
   flex-shrink: 0;
-  padding: 10px 18px 14px;
+  padding: 10px 0 14px;
   background: var(--surface-card);
   border-top: 1px solid var(--border-default);
   z-index: 50;
@@ -918,7 +879,7 @@ onMounted(async () => {
   flex: 1;
   min-height: 40px;
   max-height: 120px;
-  border-radius: 10px;
+  border-radius: 999px;
   padding: 8px 14px;
   background: var(--surface-bg);
   border: 1px solid var(--border-default);
@@ -935,7 +896,7 @@ onMounted(async () => {
 }
 
 .ib-composer-send {
-  border-radius: 10px;
+  border-radius: 50%;
   width: 40px;
   height: 40px;
   padding: 0;
@@ -948,7 +909,7 @@ onMounted(async () => {
 .ib-composer-attach {
   background: none;
   border: 1px solid var(--border-default);
-  border-radius: 10px;
+  border-radius: 50%;
   width: 40px;
   height: 40px;
   font-size: 18px;
@@ -973,7 +934,7 @@ onMounted(async () => {
   gap: 10px;
   padding: 0 14px;
   min-height: 40px;
-  border-radius: 10px;
+  border-radius: 999px;
   background: var(--surface-bg);
   border: 1px solid var(--border-default);
   overflow: hidden;
@@ -1047,11 +1008,9 @@ onMounted(async () => {
   width: min(560px, 92vw);
 }
 
+
+
 @media (max-width: 840px) {
-  .ib-custom-page {
-    height: calc(100vh - 56px); /* Mobile topbar height */
-    margin: -16px;
-  }
 
   .ib-connect-prompt,
   .ib-not-contributor {

@@ -1542,7 +1542,7 @@ onMounted(async () => {
       <form class="chat-composer card" @submit.prevent="sendMessage" style="padding: 0; margin: 0; box-shadow: none; display: flex; flex-direction: row; gap: 10px; align-items: flex-end; background: transparent; border: none;">
         <!-- Attachment mode -->
         <template v-if="pendingAttachment">
-          <div class="chat-attachment-chip">
+          <div class="chat-attachment-chip" style="border-radius: 999px;">
             <Paperclip :size="16" class="chat-attachment-chip-icon" />
             <span class="chat-attachment-chip-name">{{ pendingAttachment.file.name }}</span>
             <button type="button" class="chat-attachment-chip-remove" @click="removeAttachment" title="Remove">
@@ -1557,7 +1557,7 @@ onMounted(async () => {
             <Paperclip :size="18" />
           </button>
           <textarea v-model="sendText" class="input chat-input" name="message-text" placeholder="Write a message" rows="1"
-            :disabled="sending" style="flex: 1; min-height: 44px; max-height: 120px; border-radius: 22px; padding: 10px 16px; background: #f0f2f5;" />
+            :disabled="sending" style="flex: 1; min-height: 44px; max-height: 120px; border-radius: 999px; padding: 10px 16px; background: #f0f2f5;" />
         </template>
         <button class="btn btn-primary chat-send-btn" type="submit" :disabled="sending || messagesLoading"
           style="border-radius: 50%; width: 44px; height: 44px; padding: 0; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
@@ -1949,7 +1949,7 @@ onMounted(async () => {
 
 .chat-attachment-chip {
   flex: 1; display: flex; align-items: center; gap: 10px;
-  padding: 0 14px; min-height: 44px; border-radius: 22px;
+  padding: 0 14px; min-height: 44px; border-radius: 999px;
   background: #f0f2f5; border: 1px solid var(--border-default);
   overflow: hidden;
 }

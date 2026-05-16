@@ -1,17 +1,20 @@
 <script setup lang="ts">
 import { DidCommRepository, type BucketNamespace } from "../../services/papi/didCommRepository"
 import LoadingBar from "../../components/common/LoadingBar.vue"
-import { onMounted, ref } from "vue"
 import { useNuxtApp } from "nuxt/app"
 import { useKeys } from "../../composables/useKeys"
 import { useOperationsStore } from "../../stores/operations"
+import { useSessionStore } from "../../stores/session"
+import { computed, onMounted, ref } from "vue"
 
 const { $papiClient } = useNuxtApp()
 const keys = useKeys()
 const operations = useOperationsStore()
+const session = useSessionStore()
 const didCommRepository = new DidCommRepository(
   $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string }
 )
+const isWalletConnected = computed(() => session.walletStatus === "connected" && Boolean(session.accountAddress))
 const namespaces = ref<BucketNamespace[]>([])
 const namespaceError = ref("")
 const namespacesLoading = ref(false)
@@ -62,7 +65,7 @@ onMounted(async () => {
       <div class="row buckets-header" style="justify-content: space-between; align-items: center">
         <h3 style="margin: 0">Namespaces</h3>
         <div class="row" style="gap: 8px">
-          <NuxtLink class="btn" to="/messages/namespaces/new">Add Namespace</NuxtLink>
+          <NuxtLink v-if="isWalletConnected" class="btn" to="/messages/namespaces/new">Add Namespace</NuxtLink>
           <button class="btn" type="button" :disabled="namespacesLoading" @click="loadNamespaces">
             {{ namespacesLoading ? "Loading..." : "Reload" }}
           </button>

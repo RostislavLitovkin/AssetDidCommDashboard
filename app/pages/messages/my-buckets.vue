@@ -338,7 +338,7 @@ onMounted(() => {
         <NuxtLink
           v-for="bucket in buckets"
           :key="bucket.id"
-          :to="`/messages/bucket/${encodeURIComponent(bucket.id)}`"
+          :to="`/indexed-bucket/${encodeURIComponent(bucket.id)}`"
           class="card bucket-card"
           style="padding: 16px; text-decoration: none; color: inherit; display: block"
         >
