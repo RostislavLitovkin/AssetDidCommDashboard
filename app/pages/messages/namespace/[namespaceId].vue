@@ -2,6 +2,8 @@
 import { DidCommRepository, type BucketRecord } from "../../../services/papi/didCommRepository"
 import LoadingBar from "../../../components/common/LoadingBar.vue"
 import WalletConnectPrompt from "../../../components/common/WalletConnectPrompt.vue"
+import { Trash2, UserPlus, Users } from "lucide-vue-next"
+import { useAddress } from "../../../composables/useAddress"
 import { computed, onMounted, ref } from "vue"
 import { useNuxtApp, useRoute } from "nuxt/app"
 import { useSessionStore } from "../../../stores/session"
@@ -9,6 +11,7 @@ import { useSessionStore } from "../../../stores/session"
 const route = useRoute()
 const { $papiClient } = useNuxtApp()
 const session = useSessionStore()
+const { formatAddress, addressesEqual } = useAddress()
 const didCommRepository = new DidCommRepository(
   $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string }
 )
@@ -28,6 +31,10 @@ const buckets = ref<BucketRecord[]>([])
 const bucketsLoading = ref(true)
 const bucketsError = ref("")
 const namespaceName = ref("")
+const managers = ref<string[]>([])
+const managersLoading = ref(true)
+const managersError = ref("")
+const removingManagerAddress = ref("")
 
 const namespaceDisplayName = computed(() => namespaceName.value || `Namespace id: ${namespaceId.value}`)
 const isWalletConnected = computed(() => session.walletStatus === "connected" && Boolean(session.accountAddress))
@@ -73,9 +80,45 @@ async function loadNamespaceName() {
   }
 }
 
+async function loadManagers() {
+  managersError.value = ""
+  managersLoading.value = true
+
+  try {
+    managers.value = await didCommRepository.fetchNamespaceManagers(namespaceId.value)
+  } catch (error) {
+    managersError.value = error instanceof Error ? error.message : "Unable to load managers"
+  } finally {
+    managersLoading.value = false
+  }
+}
+
+async function removeManager(address: string) {
+  managersError.value = ""
+  if (!session.accountAddress) {
+    managersError.value = "Connect wallet before removing managers"
+    return
+  }
+
+  removingManagerAddress.value = address
+  try {
+    await didCommRepository.removeNamespaceManager(
+      namespaceId.value,
+      address,
+      session.accountAddress
+    )
+    await loadManagers()
+  } catch (error) {
+    managersError.value = error instanceof Error ? error.message : "Unable to remove manager"
+  } finally {
+    removingManagerAddress.value = ""
+  }
+}
+
 onMounted(async () => {
   await loadNamespaceName()
   await loadBuckets()
+  await loadManagers()
 })
 </script>
 
@@ -113,5 +156,98 @@ onMounted(async () => {
         </div>
       </div>
     </section>
+
+    <section class="stack" style="margin-top: 32px">
+      <div class="row" style="justify-content: space-between; align-items: center">
+        <div class="row" style="gap: 12px; align-items: center">
+          <Users :size="20" class="muted" />
+          <h3 style="margin: 0">Managers</h3>
+        </div>
+        <NuxtLink 
+          v-if="isWalletConnected"
+          class="btn btn-secondary row" 
+          style="gap: 8px; align-items: center"
+          :to="`/messages/namespace/managers/${encodeURIComponent(namespaceId)}`"
+        >
+          <UserPlus :size="16" />
+          Add Manager
+        </NuxtLink>
+      </div>
+
+      <LoadingBar v-if="managersLoading" label="Loading managers..." />
+      <p v-if="managersError" style="margin: 0; color: var(--status-error)">{{ managersError }}</p>
+      
+      <div v-else class="stack" style="gap: 12px">
+        <p v-if="!managers.length && !managersLoading" class="muted" style="margin: 0">
+          No managers found for this namespace.
+        </p>
+
+        <div v-if="managers.length" class="stack" style="gap: 8px">
+          <div v-for="address in managers" :key="address" class="card" style="padding: 12px 16px">
+            <div class="row" style="justify-content: space-between; align-items: center; gap: 16px">
+              <div class="stack" style="gap: 2px">
+                <strong style="font-size: 14px; font-family: monospace">{{ formatAddress(address) }}</strong>
+                <span v-if="addressesEqual(address, session.accountAddress)" class="badge" style="width: fit-content; font-size: 10px; padding: 2px 6px">You</span>
+              </div>
+              <button 
+                v-if="isWalletConnected"
+                class="btn-icon btn-danger-soft" 
+                title="Remove Manager"
+                :disabled="removingManagerAddress === address"
+                @click="removeManager(address)"
+              >
+                <Trash2 v-if="removingManagerAddress !== address" :size="18" />
+                <span v-else class="spinner-small"></span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
   </div>
 </template>
+
+<style scoped>
+.badge {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.btn-danger-soft {
+  background: transparent;
+  color: var(--status-error);
+  border: 1px solid transparent;
+  padding: 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-danger-soft:hover:not(:disabled) {
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+.btn-danger-soft:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.spinner-small {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(239, 68, 68, 0.3);
+  border-top-color: #ef4444;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+</style>

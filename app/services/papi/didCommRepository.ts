@@ -92,6 +92,14 @@ type NamespaceStorageReader = (endpoint: string) => Promise<unknown>
 type BucketsStorageReader = (endpoint: string) => Promise<unknown>
 type MessagesStorageReader = (endpoint: string) => Promise<unknown>
 
+type NamespaceMemberExtrinsicSubmitter = (
+  endpoint: string,
+  namespaceId: string,
+  memberAddress: string,
+  ownerAddress: string,
+  onUpdate?: ExtrinsicUpdateHandler
+) => Promise<string>
+
 type SubmittableTx = {
   signAndSend(address: string, options: { signer: unknown; tip?: string }): Promise<{ toHex: () => string } | string>
   signAndSend(
@@ -165,6 +173,8 @@ export class DidCommRepository {
   private submitRemoveContributorExtrinsic: BucketMemberExtrinsicSubmitter
   private submitSetBucketPublicKeyExtrinsic: BucketPublicKeyExtrinsicSubmitter
   private submitCreateTagExtrinsic: BucketTagExtrinsicSubmitter
+  private submitAddNamespaceManagerExtrinsic: NamespaceMemberExtrinsicSubmitter
+  private submitRemoveNamespaceManagerExtrinsic: NamespaceMemberExtrinsicSubmitter
   private submitBucketKeyRotationBatchExtrinsic: BucketKeyRotationBatchExtrinsicSubmitter
   private pinataConfig?: PinataConfig
 
@@ -183,7 +193,9 @@ export class DidCommRepository {
     submitSetBucketPublicKeyExtrinsic: BucketPublicKeyExtrinsicSubmitter = submitBucketsSetPublicKeyExtrinsic,
     submitCreateTagExtrinsic: BucketTagExtrinsicSubmitter = submitBucketsCreateTagExtrinsic,
     pinataConfig?: PinataConfig,
-    submitBucketKeyRotationBatchExtrinsic: BucketKeyRotationBatchExtrinsicSubmitter = submitBucketsBatchKeyRotationExtrinsic
+    submitBucketKeyRotationBatchExtrinsic: BucketKeyRotationBatchExtrinsicSubmitter = submitBucketsBatchKeyRotationExtrinsic,
+    submitAddNamespaceManagerExtrinsic: NamespaceMemberExtrinsicSubmitter = submitBucketsAddNamespaceManagerExtrinsic,
+    submitRemoveNamespaceManagerExtrinsic: NamespaceMemberExtrinsicSubmitter = submitBucketsRemoveNamespaceManagerExtrinsic
   ) {
     this.client = client
     this.submitExtrinsic = submitExtrinsic
@@ -198,6 +210,8 @@ export class DidCommRepository {
     this.submitRemoveContributorExtrinsic = submitRemoveContributorExtrinsic
     this.submitSetBucketPublicKeyExtrinsic = submitSetBucketPublicKeyExtrinsic
     this.submitCreateTagExtrinsic = submitCreateTagExtrinsic
+    this.submitAddNamespaceManagerExtrinsic = submitAddNamespaceManagerExtrinsic
+    this.submitRemoveNamespaceManagerExtrinsic = submitRemoveNamespaceManagerExtrinsic
     this.submitBucketKeyRotationBatchExtrinsic = submitBucketKeyRotationBatchExtrinsic
     this.pinataConfig = sanitizePinataConfig(pinataConfig)
   }
@@ -268,6 +282,20 @@ export class DidCommRepository {
     }
 
     return await queryBucketMemberAddressesStorage(endpoint, ["contributors"], trimmedBucketId)
+  }
+
+  async fetchNamespaceManagers(namespaceId: string): Promise<string[]> {
+    const trimmedNamespaceId = namespaceId.trim()
+    if (!trimmedNamespaceId) {
+      throw new Error("Namespace id is required to query buckets.managers storage")
+    }
+
+    const endpoint = this.client.getEndpoint?.()
+    if (!endpoint) {
+      throw new Error("Unable to resolve chain endpoint for buckets.managers storage query")
+    }
+
+    return await queryBucketMemberAddressesStorage(endpoint, ["managers", "namespaceManagers"], trimmedNamespaceId)
   }
 
   private normalizeNamespaces(response: unknown): BucketNamespace[] {
@@ -841,6 +869,83 @@ export class DidCommRepository {
       method: "buckets.removeContributor"
     }
   }
+
+  async addNamespaceManager(
+    namespaceId: string,
+    memberAddress: string,
+    ownerAddress?: string,
+    onUpdate?: ExtrinsicUpdateHandler
+  ): Promise<AddBucketMemberResult> {
+    const trimmedNamespaceId = namespaceId.trim()
+    if (!trimmedNamespaceId) {
+      throw new Error("Namespace id is required")
+    }
+
+    const trimmedMemberAddress = memberAddress.trim()
+    if (!trimmedMemberAddress) {
+      throw new Error("Member address is required")
+    }
+
+    if (!ownerAddress) {
+      throw new Error("Wallet must be connected to submit buckets.addNamespaceManager extrinsic")
+    }
+
+    const endpoint = this.client.getEndpoint?.()
+    if (!endpoint) {
+      throw new Error("Unable to resolve chain endpoint for extrinsic submission")
+    }
+
+    const txHash = await this.submitAddNamespaceManagerExtrinsic(
+      endpoint,
+      trimmedNamespaceId,
+      trimmedMemberAddress,
+      ownerAddress,
+      onUpdate
+    )
+    return {
+      txHash,
+      method: "buckets.addNamespaceManager"
+    }
+  }
+
+  async removeNamespaceManager(
+    namespaceId: string,
+    memberAddress: string,
+    ownerAddress?: string,
+    onUpdate?: ExtrinsicUpdateHandler
+  ): Promise<AddBucketMemberResult> {
+    const trimmedNamespaceId = namespaceId.trim()
+    if (!trimmedNamespaceId) {
+      throw new Error("Namespace id is required")
+    }
+
+    const trimmedMemberAddress = memberAddress.trim()
+    if (!trimmedMemberAddress) {
+      throw new Error("Member address is required")
+    }
+
+    if (!ownerAddress) {
+      throw new Error("Wallet must be connected to submit buckets.removeNamespaceManager extrinsic")
+    }
+
+    const endpoint = this.client.getEndpoint?.()
+    if (!endpoint) {
+      throw new Error("Unable to resolve chain endpoint for extrinsic submission")
+    }
+
+    const txHash = await this.submitRemoveNamespaceManagerExtrinsic(
+      endpoint,
+      trimmedNamespaceId,
+      trimmedMemberAddress,
+      ownerAddress,
+      onUpdate
+    )
+
+    return {
+      txHash,
+      method: "buckets.removeNamespaceManager"
+    }
+  }
 }
 
 async function submitBucketsCreateNamespaceExtrinsic(
@@ -1343,6 +1448,102 @@ async function submitBucketsRemoveContributorExtrinsic(
     "buckets.removeContributor",
     onUpdate
   )
+}
+
+async function submitBucketsAddNamespaceManagerExtrinsic(
+  endpoint: string,
+  namespaceId: string,
+  memberAddress: string,
+  ownerAddress: string,
+  onUpdate?: ExtrinsicUpdateHandler
+): Promise<string> {
+  return await submitBucketsAddNamespaceMemberExtrinsic(
+    endpoint,
+    namespaceId,
+    memberAddress,
+    ownerAddress,
+    ["addNamespaceManager", "addManager"],
+    "buckets.addNamespaceManager",
+    onUpdate
+  )
+}
+
+async function submitBucketsRemoveNamespaceManagerExtrinsic(
+  endpoint: string,
+  namespaceId: string,
+  memberAddress: string,
+  ownerAddress: string,
+  onUpdate?: ExtrinsicUpdateHandler
+): Promise<string> {
+  return await submitBucketsAddNamespaceMemberExtrinsic(
+    endpoint,
+    namespaceId,
+    memberAddress,
+    ownerAddress,
+    ["removeNamespaceManager", "removeManager"],
+    "buckets.removeNamespaceManager",
+    onUpdate
+  )
+}
+
+async function submitBucketsAddNamespaceMemberExtrinsic(
+  endpoint: string,
+  namespaceId: string,
+  memberAddress: string,
+  ownerAddress: string,
+  candidateMethodNames: string[],
+  fallbackMethodLabel: string,
+  onUpdate?: ExtrinsicUpdateHandler
+): Promise<string> {
+  const [{ ApiPromise, WsProvider }, { web3FromAddress }] = await Promise.all([
+    import("@polkadot/api"),
+    import("@polkadot/extension-dapp")
+  ])
+
+  const provider = new WsProvider(endpoint)
+  const api = await ApiPromise.create({ provider })
+
+  try {
+    const buckets = (api.tx as Record<string, unknown>).buckets as Record<string, unknown> | undefined
+    const addMember = resolveBucketsArbitraryTxMethod(buckets, candidateMethodNames)
+
+    if (!addMember) {
+      throw new Error(`${fallbackMethodLabel} extrinsic is not available on this chain`)
+    }
+
+    const injector = await web3FromAddress(ownerAddress)
+    const tx = addMember(namespaceId, memberAddress) as SubmittableTx
+    logEncodedCallBytes(fallbackMethodLabel, tx)
+
+    const attemptTips = ["0", "1000000", "2000000"]
+    let lastError: Error | null = null
+
+    for (let attempt = 0; attempt < attemptTips.length; attempt += 1) {
+      const tip = attemptTips[attempt]!
+
+      try {
+        if (attempt > 0) {
+          onUpdate?.({
+            stage: "submitted",
+            message: `Retrying extrinsic with higher priority fee (tip=${tip})`
+          })
+        }
+
+        return await submitWithTip(tx, ownerAddress, injector.signer, tip, onUpdate, api)
+      } catch (error) {
+        const normalized = error instanceof Error ? error : new Error("Extrinsic submission failed")
+        lastError = normalized
+
+        if (!isLowPriorityTransactionError(normalized) || attempt === attemptTips.length - 1) {
+          throw normalized
+        }
+      }
+    }
+
+    throw lastError ?? new Error("Extrinsic submission failed")
+  } finally {
+    await api.disconnect()
+  }
 }
 
 async function submitBucketsAddMemberExtrinsic(
