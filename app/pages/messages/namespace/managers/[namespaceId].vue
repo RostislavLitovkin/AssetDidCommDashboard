@@ -95,37 +95,18 @@ async function submitAddManager(): Promise<void> {
       <section class="stack" aria-live="polite">
         <div class="row buckets-header" style="justify-content: space-between; align-items: center">
           <div class="row" style="gap: 12px; align-items: center">
-            <ShieldCheck :size="24" class="muted" />
-            <h3 style="margin: 0">Add Namespace Manager</h3>
+            <h3 style="margin: 0">Add Manager</h3>
           </div>
         </div>
 
-        <WalletConnectPrompt
-          v-if="!session.accountAddress"
-          title="Connect Wallet to Manage Namespace"
-          description="You must connect your wallet to submit manager management extrinsics."
-        />
-        
+        <WalletConnectPrompt v-if="!session.accountAddress" title="Connect Wallet to Manage Namespace"
+          description="You must connect your wallet to submit manager management extrinsics." />
+
         <div v-else class="card stack" style="gap: 16px;">
-          <div class="row" style="gap: 12px; align-items: center">
-            <UserPlus :size="18" class="muted" />
-            <h4 style="margin: 0; font-size: 16px;">Grant Manager Permissions</h4>
-          </div>
-
-          <p class="muted" style="margin: 0; font-size: 14px;">
-            Adding a manager allows them to create buckets and manage members within this namespace.
-          </p>
-
           <label class="stack" style="gap: 8px">
             <span style="font-weight: 600; font-size: 14px;">Manager Address</span>
-            <input
-              v-model="managerAddress"
-              class="input"
-              type="text"
-              name="manager-address"
-              placeholder="Enter SS58 address"
-              :disabled="submitting"
-            />
+            <input v-model="managerAddress" class="input" type="text" name="manager-address"
+              placeholder="Enter SS58 address" :disabled="submitting" />
           </label>
 
           <label class="stack" style="gap: 8px">
@@ -140,7 +121,8 @@ async function submitAddManager(): Promise<void> {
 
           <div class="row" style="justify-content: flex-end; gap: 12px; margin-top: 8px;">
             <NuxtLink class="btn" :to="namespaceRoutePath">Cancel</NuxtLink>
-            <button class="btn btn-primary" type="button" :disabled="submitting || !managerAddress" @click="submitAddManager">
+            <button class="btn btn-primary" type="button" :disabled="submitting || !managerAddress"
+              @click="submitAddManager">
               {{ submitting ? "Submitting..." : "Add Manager" }}
             </button>
           </div>
@@ -172,6 +154,7 @@ async function submitAddManager(): Promise<void> {
     height: calc(100vh - 56px);
     margin: -16px;
   }
+
   .info-content-scroll {
     padding: 16px;
   }

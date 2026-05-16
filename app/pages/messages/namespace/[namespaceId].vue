@@ -130,6 +130,8 @@ onMounted(async () => {
           <h3 style="margin: 0">{{ namespaceDisplayName }}</h3>
         </div>
         <div class="row" style="gap: 8px">
+          <NuxtLink class="btn" :to="`/messages/namespace/managers/${encodeURIComponent(namespaceId)}`">Add
+            Manager</NuxtLink>
           <NuxtLink class="btn" :to="`/messages/bucket/create/${encodeURIComponent(namespaceId)}`">Add Bucket</NuxtLink>
         </div>
       </div>
@@ -157,97 +159,124 @@ onMounted(async () => {
       </div>
     </section>
 
-    <section class="stack" style="margin-top: 32px">
-      <div class="row" style="justify-content: space-between; align-items: center">
-        <div class="row" style="gap: 12px; align-items: center">
-          <Users :size="20" class="muted" />
-          <h3 style="margin: 0">Managers</h3>
-        </div>
-        <NuxtLink 
-          v-if="isWalletConnected"
-          class="btn btn-secondary row" 
-          style="gap: 8px; align-items: center"
-          :to="`/messages/namespace/managers/${encodeURIComponent(namespaceId)}`"
-        >
-          <UserPlus :size="16" />
+    <div class="card stack" style="gap: 16px; margin-top: 24px;">
+      <div class="row" style="justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+        <h4 style="margin: 0; font-size: 16px;">Managers</h4>
+        <NuxtLink v-if="isWalletConnected" class="btn"
+          :to="`/messages/namespace/managers/${encodeURIComponent(namespaceId)}`">
           Add Manager
         </NuxtLink>
       </div>
 
       <LoadingBar v-if="managersLoading" label="Loading managers..." />
       <p v-if="managersError" style="margin: 0; color: var(--status-error)">{{ managersError }}</p>
-      
-      <div v-else class="stack" style="gap: 12px">
-        <p v-if="!managers.length && !managersLoading" class="muted" style="margin: 0">
-          No managers found for this namespace.
-        </p>
 
-        <div v-if="managers.length" class="stack" style="gap: 8px">
-          <div v-for="address in managers" :key="address" class="card" style="padding: 12px 16px">
-            <div class="row" style="justify-content: space-between; align-items: center; gap: 16px">
-              <div class="stack" style="gap: 2px">
-                <strong style="font-size: 14px; font-family: monospace">{{ formatAddress(address) }}</strong>
-                <span v-if="addressesEqual(address, session.accountAddress)" class="badge" style="width: fit-content; font-size: 10px; padding: 2px 6px">You</span>
+      <ul v-if="managers.length && !managersLoading" class="bucket-members-list"
+        style="display: flex; flex-direction: column; gap: 8px; list-style: none; padding: 0; margin: 0;">
+        <li v-for="address in managers" :key="address" class="bucket-member-item card"
+          style="padding: 12px 16px; background: #f6f7f9; margin: 0; border: 1px solid var(--border-default);">
+          <div class="row"
+            style="justify-content: space-between; align-items: center; width: 100%; flex-wrap: wrap; gap: 12px;">
+            <div class="stack" style="gap: 4px;">
+              <div class="row" style="align-items: center; gap: 8px;">
+                <strong style="font-size: 14px;">{{ formatAddress(address) }}</strong>
+                <span
+                  style="padding: 4px 8px; border-radius: 999px; font-size: 11px; color: white; font-weight: 600; text-transform: capitalize; background: var(--color-primary);">
+                  Manager
+                </span>
               </div>
-              <button 
-                v-if="isWalletConnected"
-                class="btn-icon btn-danger-soft" 
-                title="Remove Manager"
-                :disabled="removingManagerAddress === address"
-                @click="removeManager(address)"
-              >
-                <Trash2 v-if="removingManagerAddress !== address" :size="18" />
+            </div>
+
+            <div class="row" style="gap: 8px;">
+              <button class="btn member-remove-btn" type="button" title="Remove Manager"
+                :disabled="Boolean(removingManagerAddress) || !session.accountAddress"
+                @click="removeManager(address)" style="background: var(--color-white);">
+                <Trash2 v-if="removingManagerAddress !== address" :size="16" aria-hidden="true" />
                 <span v-else class="spinner-small"></span>
+                <span>{{ removingManagerAddress === address ? "Removing..." : "Remove Manager" }}</span>
               </button>
             </div>
           </div>
-        </div>
-      </div>
-    </section>
+        </li>
+      </ul>
+      <p v-else-if="!managersLoading && !managersError" class="muted" style="margin: 0">
+        No managers found for this namespace.
+      </p>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.badge {
-  background: var(--color-primary-soft);
-  color: var(--color-primary);
-  border-radius: 4px;
-  font-weight: 600;
-}
-
-.btn-danger-soft {
-  background: transparent;
-  color: var(--status-error);
-  border: 1px solid transparent;
-  padding: 6px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.2s;
+.chat-custom-page {
   display: flex;
+  flex-direction: column;
+  height: calc(100vh - 48px);
+  margin: -24px;
+  background: #f7f8fa;
+  overflow: hidden;
+}
+
+.info-content-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 960px) {
+  .chat-custom-page {
+    height: calc(100vh - 56px);
+    margin: -16px;
+  }
+
+  .info-content-scroll {
+    padding: 16px;
+  }
+}
+
+.bucket-card-item:hover {
+  border-color: var(--color-primary) !important;
+}
+
+.bucket-members-list {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.bucket-member-item {
+  display: flex;
+  justify-content: space-between;
   align-items: center;
-  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.7);
 }
 
-.btn-danger-soft:hover:not(:disabled) {
-  background: #fee2e2;
-  border-color: #fca5a5;
-}
-
-.btn-danger-soft:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.member-remove-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--status-error);
+  border-color: color-mix(in srgb, var(--status-error) 50%, var(--border-default));
 }
 
 .spinner-small {
-  width: 16px;
-  height: 16px;
-  border: 2px solid rgba(239, 68, 68, 0.3);
-  border-top-color: #ef4444;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(0, 0, 0, 0.1);
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

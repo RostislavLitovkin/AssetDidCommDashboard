@@ -432,7 +432,7 @@ async function loadBucket() {
     }
 
     bucket.value = record
-    
+
     // Fetch timestamp for createdAt if present
     const rawRecord = toRecord(record.raw)
     const rawMetadata = rawRecord?.metadata ? toRecord(rawRecord.metadata) : null
@@ -446,7 +446,7 @@ async function loadBucket() {
               month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit"
             })
           }
-        }).catch(() => {})
+        }).catch(() => { })
       }
     }
   } catch (error) {
@@ -1483,11 +1483,11 @@ onMounted(async () => {
 
 const allMembers = computed(() => {
   const membersMap = new Map()
-  
+
   for (const admin of bucketAdmins.value) {
     membersMap.set(admin, { address: admin, roles: ['admin'] })
   }
-  
+
   for (const contributor of bucketContributors.value) {
     if (membersMap.has(contributor)) {
       membersMap.get(contributor).roles.push('contributor')
@@ -1495,7 +1495,7 @@ const allMembers = computed(() => {
       membersMap.set(contributor, { address: contributor, roles: ['contributor'] })
     }
   }
-  
+
   return Array.from(membersMap.values())
 })
 
@@ -1507,153 +1507,148 @@ function isRemoving(address) {
 <template>
   <div class="chat-custom-page">
     <div class="info-content-scroll stack">
-    <section class="stack" aria-live="polite">
-      <div class="row buckets-header" style="justify-content: space-between; align-items: center">
-        <div class="row" style="gap: 12px; align-items: center">
-          <NuxtLink class="btn" :to="`/indexed-bucket/${encodeURIComponent(bucketId)}`" style="padding: 6px 10px;">
-            ← Back
-          </NuxtLink>
-          <div class="stack" style="gap: 4px">
-            <h3 style="margin: 0">{{ bucketDisplayName }}</h3>
-          </div>
-        </div>
-      </div>
-
-      <div class="card stack" style="gap: 16px;">
-        <div class="row" style="justify-content: space-between; align-items: center">
-          <h4 style="margin: 0; font-size: 16px;">Metadata</h4>
-          <button class="btn" type="button" :disabled="bucketLoading" @click="loadBucketPage">
-            Reload
-          </button>
-        </div>
-        <LoadingBar v-if="bucketLoading" label="Loading metadata..." />
-        <p v-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
-        
-        <dl v-if="!bucketLoading && !bucketError && bucketMetadata.length" class="bucket-metadata" style="background: none; border: none; padding: 0;">
-          <div v-for="entry in bucketMetadata" :key="`bucket-${entry.key}`" class="bucket-metadata-item" style="border-bottom: 1px solid var(--border-default); padding-bottom: 8px;">
-            <dt style="font-weight: 600;">{{ entry.key.replace('metadata.', '').replace('status.', '') }}</dt>
-            <dd v-if="entry.key.includes('createdAt') && bucketCreatedAtTimestampString">
-              {{ bucketCreatedAtTimestampString }}
-              <span v-if="showDebug" class="muted" style="font-size: 11px; margin-left: 6px;">(Block: {{ entry.value }})</span>
-            </dd>
-            <dd v-else-if="entry.key.toLowerCase().includes('category') && entry.value.trim() === '0x'">None</dd>
-            <dd v-else>{{ entry.value }}</dd>
-          </div>
-        </dl>
-        <p v-if="!bucketLoading && !bucketError && !bucketMetadata.length" class="muted" style="margin: 0">
-          No metadata found for this bucket.
-        </p>
-      </div>
-
-      <div class="card stack" style="gap: 16px;">
-        <div class="row" style="justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
-          <h4 style="margin: 0; font-size: 16px;">Members</h4>
-          <div class="row" style="gap: 8px">
-            <NuxtLink class="btn" :to="`/messages/bucket/members/${encodeURIComponent(bucketId)}?role=admin&namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`">
-              Add Admin
-            </NuxtLink>
-            <NuxtLink class="btn" :to="`/messages/bucket/members/${encodeURIComponent(bucketId)}?role=contributor&namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`">
-              Add Contributor
-            </NuxtLink>
+      <section class="stack" aria-live="polite">
+        <div class="row buckets-header" style="justify-content: space-between; align-items: center">
+          <div class="row" style="gap: 12px; align-items: center">
+            <div class="stack" style="gap: 4px">
+              <h3 style="margin: 0">{{ bucketDisplayName }}</h3>
+            </div>
           </div>
         </div>
 
-        <LoadingBar v-if="bucketLoading" label="Loading members..." />
-        <p v-if="membersError" style="margin: 0; color: var(--status-error)">{{ membersError }}</p>
+        <div class="card stack" style="gap: 16px;">
+          <div class="row" style="justify-content: space-between; align-items: center">
+            <h4 style="margin: 0; font-size: 16px;">Metadata</h4>
+            <button class="btn" type="button" :disabled="bucketLoading" @click="loadBucketPage">
+              Reload
+            </button>
+          </div>
+          <LoadingBar v-if="bucketLoading" label="Loading metadata..." />
+          <p v-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
 
-        <ul v-if="allMembers.length" class="bucket-members-list" style="display: flex; flex-direction: column; gap: 8px;">
-          <li v-for="member in allMembers" :key="member.address" class="bucket-member-item card" style="padding: 12px 16px; background: #f6f7f9; margin: 0; border: 1px solid var(--border-default);">
-            <div class="row" style="justify-content: space-between; align-items: center; width: 100%; flex-wrap: wrap; gap: 12px;">
-              <div class="stack" style="gap: 4px;">
-                <div class="row" style="align-items: center; gap: 8px;">
-                  <strong style="font-size: 14px;">{{ formatAddress(member.address) }}</strong>
-                  <span v-for="role in member.roles" :key="role" style="padding: 4px 8px; border-radius: 999px; font-size: 11px; color: white; font-weight: 600; text-transform: capitalize; background: var(--color-primary);">
-                    {{ role }}
+          <dl v-if="!bucketLoading && !bucketError && bucketMetadata.length" class="bucket-metadata"
+            style="background: none; border: none; padding: 0;">
+            <div v-for="entry in bucketMetadata" :key="`bucket-${entry.key}`" class="bucket-metadata-item"
+              style="border-bottom: 1px solid var(--border-default); padding-bottom: 8px;">
+              <dt style="font-weight: 600;">{{ entry.key.replace('metadata.', '').replace('status.', '') }}</dt>
+              <dd v-if="entry.key.includes('createdAt') && bucketCreatedAtTimestampString">
+                {{ bucketCreatedAtTimestampString }}
+                <span v-if="showDebug" class="muted" style="font-size: 11px; margin-left: 6px;">(Block: {{ entry.value
+                  }})</span>
+              </dd>
+              <dd v-else-if="entry.key.toLowerCase().includes('category') && entry.value.trim() === '0x'">None</dd>
+              <dd v-else>{{ entry.value }}</dd>
+            </div>
+          </dl>
+          <p v-if="!bucketLoading && !bucketError && !bucketMetadata.length" class="muted" style="margin: 0">
+            No metadata found for this bucket.
+          </p>
+        </div>
+
+        <div class="card stack" style="gap: 16px;">
+          <div class="row" style="justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+            <h4 style="margin: 0; font-size: 16px;">Members</h4>
+            <div class="row" style="gap: 8px">
+              <NuxtLink class="btn"
+                :to="`/messages/bucket/members/${encodeURIComponent(bucketId)}?role=admin&namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`">
+                Add Admin
+              </NuxtLink>
+              <NuxtLink class="btn"
+                :to="`/messages/bucket/members/${encodeURIComponent(bucketId)}?role=contributor&namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`">
+                Add Contributor
+              </NuxtLink>
+            </div>
+          </div>
+
+          <LoadingBar v-if="bucketLoading" label="Loading members..." />
+          <p v-if="membersError" style="margin: 0; color: var(--status-error)">{{ membersError }}</p>
+
+          <ul v-if="allMembers.length" class="bucket-members-list"
+            style="display: flex; flex-direction: column; gap: 8px;">
+            <li v-for="member in allMembers" :key="member.address" class="bucket-member-item card"
+              style="padding: 12px 16px; background: #f6f7f9; margin: 0; border: 1px solid var(--border-default);">
+              <div class="row"
+                style="justify-content: space-between; align-items: center; width: 100%; flex-wrap: wrap; gap: 12px;">
+                <div class="stack" style="gap: 4px;">
+                  <div class="row" style="align-items: center; gap: 8px;">
+                    <strong style="font-size: 14px;">{{ formatAddress(member.address) }}</strong>
+                    <span v-for="role in member.roles" :key="role"
+                      style="padding: 4px 8px; border-radius: 999px; font-size: 11px; color: white; font-weight: 600; text-transform: capitalize; background: var(--color-primary);">
+                      {{ role }}
+                    </span>
+                  </div>
+                  <span v-if="member.roles.includes('contributor')" class="muted contributor-key"
+                    style="font-size: 11px;">
+                    X25519: {{ contributorX25519Keys[member.address] || (loadingContributorKeys ? "Loading..." :
+                      "Not found") }}
                   </span>
                 </div>
-                <span v-if="member.roles.includes('contributor')" class="muted contributor-key" style="font-size: 11px;">
-                  X25519: {{ contributorX25519Keys[member.address] || (loadingContributorKeys ? "Loading..." : "Not found") }}
-                </span>
-              </div>
-              
-              <div class="row" style="gap: 8px;">
-                <button
-                  v-if="member.roles.includes('admin')"
-                  class="btn member-remove-btn"
-                  type="button"
-                  :disabled="Boolean(removingAdminAddress) || Boolean(removingContributorAddress) || !session.accountAddress"
-                  @click="removeAdmin(member.address)"
-                  style="background: var(--color-white);"
-                >
-                  <Trash2 :size="16" aria-hidden="true" />
-                  <span>{{ removingAdminAddress === member.address ? "Removing..." : "Remove Admin" }}</span>
-                </button>
-                <button
-                  v-if="member.roles.includes('contributor')"
-                  class="btn member-remove-btn"
-                  type="button"
-                  :disabled="Boolean(removingAdminAddress) || Boolean(removingContributorAddress) || !session.accountAddress"
-                  @click="removeContributor(member.address)"
-                  style="background: var(--color-white);"
-                >
-                  <Trash2 :size="16" aria-hidden="true" />
-                  <span>{{ removingContributorAddress === member.address ? "Removing..." : "Remove Contributor" }}</span>
-                </button>
-              </div>
-            </div>
-          </li>
-        </ul>
-        <p v-else-if="!bucketLoading && !membersError" class="muted" style="margin: 0">
-          No members found for this bucket.
-        </p>
-      </div>
 
-      <div class="card stack" style="gap: 16px;">
-         <div class="row" style="justify-content: space-between; align-items: center">
-          <h4 style="margin: 0; font-size: 16px;">Communication Encryption Key</h4>
-          <button
-            class="btn btn-primary"
-            type="button"
-            :disabled="
-              generatingEncryptionKey ||
+                <div class="row" style="gap: 8px;">
+                  <button v-if="member.roles.includes('admin')" class="btn member-remove-btn" type="button"
+                    :disabled="Boolean(removingAdminAddress) || Boolean(removingContributorAddress) || !session.accountAddress"
+                    @click="removeAdmin(member.address)" style="background: var(--color-white);">
+                    <Trash2 :size="16" aria-hidden="true" />
+                    <span>{{ removingAdminAddress === member.address ? "Removing..." : "Remove Admin" }}</span>
+                  </button>
+                  <button v-if="member.roles.includes('contributor')" class="btn member-remove-btn" type="button"
+                    :disabled="Boolean(removingAdminAddress) || Boolean(removingContributorAddress) || !session.accountAddress"
+                    @click="removeContributor(member.address)" style="background: var(--color-white);">
+                    <Trash2 :size="16" aria-hidden="true" />
+                    <span>{{ removingContributorAddress === member.address ? "Removing..." : "Remove Contributor"
+                      }}</span>
+                  </button>
+                </div>
+              </div>
+            </li>
+          </ul>
+          <p v-else-if="!bucketLoading && !membersError" class="muted" style="margin: 0">
+            No members found for this bucket.
+          </p>
+        </div>
+
+        <div class="card stack" style="gap: 16px;">
+          <div class="row" style="justify-content: space-between; align-items: center">
+            <h4 style="margin: 0; font-size: 16px;">Communication Encryption Key</h4>
+            <button class="btn btn-primary" type="button" :disabled="generatingEncryptionKey ||
               !session.accountAddress ||
               !connectedAdmin ||
               loadingContributorKeys ||
               !contributorRecipients.length
-            "
-            @click="generateAndShareEncryptionKey"
-          >
-            {{ generatingEncryptionKey ? "Generating..." : "Generate & Share New Key" }}
-          </button>
+              " @click="generateAndShareEncryptionKey">
+              {{ generatingEncryptionKey ? "Generating..." : "Generate & Share New Key" }}
+            </button>
+          </div>
+
+          <p class="muted" style="margin: 0">
+            Generates a fresh X25519 encryption keypair, stores the public key ID on-chain, ensures the key-sharing tag
+            exists,
+            then encrypts and shares the new secret key for contributors using their loaded X25519 keys.
+          </p>
+
+          <ul class="key-rotation-checks"
+            style="background: #f6f7f9; padding: 12px 12px 12px 32px; border-radius: 8px;">
+            <li>Contributors with X25519: {{ contributorRecipients.length }} / {{ bucketContributors.length }}</li>
+            <li v-if="latestGeneratedKeyId">Last generated key ID: {{ latestGeneratedKeyId }}</li>
+          </ul>
+
+          <p v-if="!connectedAdmin" class="muted" style="margin: 0">
+            Only bucket admins can generate and distribute encryption keys.
+          </p>
+
+          <p v-if="encryptionKeyError" style="margin: 0; color: var(--status-error)">
+            {{ encryptionKeyError }}
+          </p>
+          <p v-if="encryptionKeySuccess" class="status-success" style="margin: 0; color: var(--status-success);">
+            {{ encryptionKeySuccess }}
+          </p>
+
+          <div v-if="latestGeneratedPublicJwk" class="key-preview-wrap">
+            <p class="muted" style="margin: 0">Latest generated bucket public JWK</p>
+            <pre class="key-preview" style="background: #f6f7f9;">{{ latestGeneratedPublicJwk }}</pre>
+          </div>
         </div>
-
-        <p class="muted" style="margin: 0">
-          Generates a fresh X25519 encryption keypair, stores the public key ID on-chain, ensures the key-sharing tag exists,
-          then encrypts and shares the new secret key for contributors using their loaded X25519 keys.
-        </p>
-
-        <ul class="key-rotation-checks" style="background: #f6f7f9; padding: 12px 12px 12px 32px; border-radius: 8px;">
-          <li>Contributors with X25519: {{ contributorRecipients.length }} / {{ bucketContributors.length }}</li>
-          <li v-if="latestGeneratedKeyId">Last generated key ID: {{ latestGeneratedKeyId }}</li>
-        </ul>
-
-        <p v-if="!connectedAdmin" class="muted" style="margin: 0">
-          Only bucket admins can generate and distribute encryption keys.
-        </p>
-
-        <p v-if="encryptionKeyError" style="margin: 0; color: var(--status-error)">
-          {{ encryptionKeyError }}
-        </p>
-        <p v-if="encryptionKeySuccess" class="status-success" style="margin: 0; color: var(--status-success);">
-          {{ encryptionKeySuccess }}
-        </p>
-
-        <div v-if="latestGeneratedPublicJwk" class="key-preview-wrap">
-          <p class="muted" style="margin: 0">Latest generated bucket public JWK</p>
-          <pre class="key-preview" style="background: #f6f7f9;">{{ latestGeneratedPublicJwk }}</pre>
-        </div>
-      </div>
-    </section>
+      </section>
     </div>
   </div>
 </template>
@@ -1680,6 +1675,7 @@ function isRemoving(address) {
     height: calc(100vh - 56px);
     margin: -16px;
   }
+
   .info-content-scroll {
     padding: 16px;
   }
