@@ -76,8 +76,11 @@ const connectedAdmin = computed(() => {
 })
 
 // ── Chat message rendering ─────────────────────────────────────────
-const chatMessages = computed<ChatMessageProps[]>(() =>
-  messages.value.map(m => {
+const chatMessages = computed<ChatMessageProps[]>(() => {
+  // Sort messages chronologically so oldest is at the top, newest at the bottom
+  const sortedMessages = [...messages.value].sort((a, b) => a.createdBlock - b.createdBlock)
+
+  return sortedMessages.map(m => {
     const payload = decryptedById.value[m.id] ?? payloadById.value[m.id]
     const payloadBody = payload ? summarize(payload) ?? payload : undefined
     const body = payloadBody ?? m.description ?? m.ipfsContent ?? `Message #${m.messageId}`
@@ -102,7 +105,7 @@ const chatMessages = computed<ChatMessageProps[]>(() =>
       debugEntries,
     }
   })
-)
+})
 
 // ── Load everything via GraphQL ────────────────────────────────────
 async function loadAll() {
@@ -372,18 +375,19 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="ib-page">
+  <div class="chat-page-container ib-custom-page">
     <!-- Header -->
-    <header class="ib-header">
-      <div class="ib-header-left">
+    <header class="row buckets-header ib-header-row">
+      <div class="row ib-header-left">
         <div class="ib-source-badge">⚡ Indexed</div>
-        <h3 class="ib-title">{{ bucketDisplayName }}</h3>
-        <span v-if="bucket" class="ib-subtitle">
-          Namespace {{ bucket.namespaceId }} · Bucket #{{ bucket.bucketId }}
-          <template v-if="bucket.creator"> · by {{ formatAddress(bucket.creator) }}</template>
-        </span>
+        <div class="stack" style="gap: 2px">
+          <h3 style="margin: 0">{{ bucketDisplayName }}</h3>
+          <span v-if="bucket" class="muted ib-subtitle-text">
+            Namespace {{ bucket.namespaceId }} · Bucket #{{ bucket.bucketId }}
+          </span>
+        </div>
       </div>
-      <div class="ib-header-actions">
+      <div class="row ib-header-actions">
         <button class="btn" :disabled="loading" @click="loadAll">Reload</button>
       </div>
     </header>
@@ -391,68 +395,97 @@ onMounted(async () => {
     <LoadingBar v-if="loading" label="Querying SubQuery indexer..." style="flex-shrink:0; margin: 0 18px;" />
     <p v-if="error" class="ib-error">{{ error }}</p>
 
-    <!-- Info panel -->
-    <details v-if="bucket" class="ib-panel">
-      <summary class="ib-panel-summary">
-        <span>Bucket Info</span>
-        <span class="ib-panel-toggle">+</span>
-      </summary>
-      <div class="ib-panel-body">
-        <dl class="ib-meta">
-          <div class="ib-meta-row"><dt>ID</dt><dd>{{ bucket.id }}</dd></div>
-          <div class="ib-meta-row"><dt>Namespace ID</dt><dd>{{ bucket.namespaceId }}</dd></div>
-          <div class="ib-meta-row"><dt>Name</dt><dd>{{ bucket.name || "—" }}</dd></div>
-          <div class="ib-meta-row"><dt>Category</dt><dd>{{ bucket.category || "—" }}</dd></div>
-          <div class="ib-meta-row"><dt>Creator</dt><dd>{{ bucket.creator ? formatAddress(bucket.creator) : "—" }}</dd></div>
-          <div class="ib-meta-row"><dt>Writable</dt><dd>{{ bucket.isWritable ? "Yes" : "No" }}</dd></div>
-          <div class="ib-meta-row"><dt>Created</dt><dd>{{ formatBlock(bucket.createdBlock) }}</dd></div>
-          <div v-if="bucket.encryptionKey" class="ib-meta-row"><dt>Encryption Key</dt><dd class="mono">{{ bucket.encryptionKey }}</dd></div>
-        </dl>
-      </div>
-    </details>
+    <!-- Content Area (Scrollable if needed, but chat viewport takes priority) -->
+    <div class="ib-content-scroll">
+      <!-- Info panel -->
+      <details v-if="bucket" class="ib-panel card">
+        <summary class="ib-panel-summary">
+          <span>Bucket Info</span>
+          <span class="ib-panel-toggle">+</span>
+        </summary>
+        <div class="ib-panel-body">
+          <dl class="ib-meta">
+            <div class="ib-meta-row">
+              <dt>ID</dt>
+              <dd>{{ bucket.id }}</dd>
+            </div>
+            <div class="ib-meta-row">
+              <dt>Namespace ID</dt>
+              <dd>{{ bucket.namespaceId }}</dd>
+            </div>
+            <div class="ib-meta-row">
+              <dt>Name</dt>
+              <dd>{{ bucket.name || "—" }}</dd>
+            </div>
+            <div class="ib-meta-row">
+              <dt>Category</dt>
+              <dd>{{ bucket.category || "—" }}</dd>
+            </div>
+            <div class="ib-meta-row">
+              <dt>Creator</dt>
+              <dd>{{ bucket.creator ? formatAddress(bucket.creator) : "—" }}</dd>
+            </div>
+            <div class="ib-meta-row">
+              <dt>Writable</dt>
+              <dd>{{ bucket.isWritable ? "Yes" : "No" }}</dd>
+            </div>
+            <div class="ib-meta-row">
+              <dt>Created</dt>
+              <dd>{{ formatBlock(bucket.createdBlock) }}</dd>
+            </div>
+            <div v-if="bucket.encryptionKey" class="ib-meta-row">
+              <dt>Encryption Key</dt>
+              <dd class="mono">{{ bucket.encryptionKey }}</dd>
+            </div>
+          </dl>
+        </div>
+      </details>
 
-    <!-- Members panel -->
-    <details v-if="admins.length || contributors.length" class="ib-panel">
-      <summary class="ib-panel-summary">
-        <span>Members ({{ admins.length }} admins · {{ contributors.length }} contributors)</span>
-        <span class="ib-panel-toggle">+</span>
-      </summary>
-      <div class="ib-panel-body">
-        <h4 class="ib-section-label" v-if="admins.length">Admins</h4>
-        <ul class="ib-member-list">
-          <li v-for="a in admins" :key="a.id" class="ib-member-item">
-            <span class="ib-member-address">{{ formatAddress(a.subjectId) }}</span>
-            <span class="ib-member-block">{{ formatBlock(a.addedBlock) }}</span>
-          </li>
-        </ul>
-        <h4 class="ib-section-label" v-if="contributors.length" style="margin-top:12px">Contributors</h4>
-        <ul class="ib-member-list">
-          <li v-for="c in contributors" :key="c.id" class="ib-member-item">
-            <span class="ib-member-address">{{ formatAddress(c.subjectId) }}</span>
-            <span class="ib-member-block">{{ formatBlock(c.addedBlock) }}</span>
-          </li>
-        </ul>
-      </div>
-    </details>
+      <!-- Members panel -->
+      <details v-if="admins.length || contributors.length" class="ib-panel card">
+        <summary class="ib-panel-summary">
+          <span>Members ({{ admins.length }} admins · {{ contributors.length }} contributors)</span>
+          <span class="ib-panel-toggle">+</span>
+        </summary>
+        <div class="ib-panel-body">
+          <h4 class="ib-section-label" v-if="admins.length">Admins</h4>
+          <ul class="ib-member-list">
+            <li v-for="a in admins" :key="a.id" class="ib-member-item">
+              <span class="ib-member-address">{{ formatAddress(a.subjectId) }}</span>
+              <span class="ib-member-block">{{ formatBlock(a.addedBlock) }}</span>
+            </li>
+          </ul>
+          <h4 class="ib-section-label" v-if="contributors.length" style="margin-top:12px">Contributors</h4>
+          <ul class="ib-member-list">
+            <li v-for="c in contributors" :key="c.id" class="ib-member-item">
+              <span class="ib-member-address">{{ formatAddress(c.subjectId) }}</span>
+              <span class="ib-member-block">{{ formatBlock(c.addedBlock) }}</span>
+            </li>
+          </ul>
+        </div>
+      </details>
 
-    <!-- Key sharing status -->
-    <div v-if="keySharingError && !loading" class="ib-key-status">
-      🔒 {{ keySharingError }}
-    </div>
-    <div v-else-if="activeSecretJwk && !loading" class="ib-key-status ib-key-ok">
-      🔓 Bucket encryption key decrypted successfully
+      <!-- Key sharing status -->
+      <div v-if="keySharingError && !loading" class="ib-key-status">
+        🔒 {{ keySharingError }}
+      </div>
+      <div v-else-if="activeSecretJwk && !loading" class="ib-key-status ib-key-ok">
+        🔓 Bucket encryption key decrypted successfully
+      </div>
     </div>
 
     <!-- Chat viewport -->
-    <div class="ib-chat-viewport" role="log" aria-live="polite" aria-label="Indexed bucket messages">
+    <div class="ib-chat-viewport chat-viewport" role="log" aria-live="polite" aria-label="Indexed bucket messages">
       <ChatMessageEntry v-for="msg in chatMessages" :key="msg.id" :message="msg" />
       <p v-if="!chatMessages.length && !loading" class="muted" style="text-align:center">
         No messages found for this bucket in the indexer.
       </p>
+
+      <div id="chat-bottom-anchor"></div>
     </div>
 
     <!-- Message composer -->
-    <div class="ib-footer">
+    <div class="ib-footer-sticky">
       <input ref="fileInputRef" type="file" style="display:none" @change="onFileSelected" />
       <form class="ib-composer" @submit.prevent="sendMessage">
         <!-- Attachment mode: show file chip instead of textarea -->
@@ -471,153 +504,358 @@ onMounted(async () => {
             :disabled="sending || !activeSecretJwk" title="Attach file">
             <Paperclip :size="18" />
           </button>
-          <textarea v-model="sendText" class="input ib-composer-input" name="message-text"
-            placeholder="Write a message" rows="1" :disabled="sending" />
+          <textarea v-model="sendText" class="input ib-composer-input" name="message-text" placeholder="Write a message"
+            rows="1" :disabled="sending" />
         </template>
         <button class="btn btn-primary ib-composer-send" type="submit"
           :disabled="sending || loading || !activeSecretJwk">
           <SendHorizontal :size="18" />
         </button>
       </form>
-      <p v-if="!session.accountAddress" class="muted" style="margin:8px 0 0;text-align:center;font-size:13px">
-        Connect wallet to send messages.
-      </p>
-      <p v-else-if="!activeSecretJwk && !loading" class="muted" style="margin:8px 0 0;text-align:center;font-size:13px">
-        Decrypt the bucket key to enable sending.
-      </p>
-      <p v-if="sendError" style="margin:8px 0 0;color:var(--status-error);text-align:center;font-size:13px">{{ sendError }}</p>
+      <div class="ib-footer-meta">
+        <p v-if="!session.accountAddress" class="muted" style="margin:0; text-align:center; font-size:13px">
+          Connect wallet to send messages.
+        </p>
+        <p v-else-if="!activeSecretJwk && !loading" class="muted" style="margin:0; text-align:center; font-size:13px">
+          Decrypt the bucket key to enable sending.
+        </p>
+        <p v-if="sendError" style="margin:0; color:var(--status-error); text-align:center; font-size:13px">
+          {{ sendError }}
+        </p>
+      </div>
     </div>
-
-    <div id="chat-bottom-anchor"></div>
   </div>
 </template>
 
+
 <style scoped>
-.ib-page {
-  display: flex; flex-direction: column; height: 100%; flex: 1;
-  background: #f7f8fa; font-family: inherit;
+/* Main Full-Height Container */
+.ib-custom-page {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 48px); /* Adjust based on AppShell padding */
+  margin: -24px; /* Counteract AppShell padding to fill space */
+  background: #f7f8fa;
+  overflow: hidden;
+  position: relative;
 }
 
-.ib-header {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 16px 18px; flex-shrink: 0; gap: 12px; flex-wrap: wrap;
+.ib-header-row {
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 18px;
+  background: transparent;
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
 }
-.ib-header-left { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+
+.ib-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ib-subtitle-text {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .ib-source-badge {
-  display: inline-flex; align-items: center; gap: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-  color: #fff; font-size: 11px; font-weight: 700; letter-spacing: 0.05em;
-  padding: 3px 10px; border-radius: 999px; width: fit-content;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
   text-transform: uppercase;
 }
-.ib-title { margin: 0; font-size: 18px; font-weight: 700; color: var(--text-primary); }
-.ib-subtitle { font-size: 12px; color: var(--text-secondary); }
-.ib-header-actions { display: flex; gap: 8px; flex-shrink: 0; }
 
-.ib-error { margin: 8px 18px; color: var(--status-error); font-size: 14px; }
+.ib-header-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.ib-error {
+  margin: 8px 18px;
+  color: var(--status-error);
+  font-size: 14px;
+}
+
+/* Scrollable area for metadata panels */
+.ib-content-scroll {
+  flex-shrink: 0;
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 8px 0;
+}
 
 /* Panels */
 .ib-panel {
-  margin: 0 18px 8px; border: 1px solid var(--border-default);
-  border-radius: 10px; background: var(--surface-card); overflow: hidden;
+  margin: 0 18px 8px;
+  padding: 0;
+  border-radius: 12px;
+  box-shadow: none;
 }
+
 .ib-panel-summary {
-  list-style: none; cursor: pointer; padding: 12px 16px;
-  font-weight: 600; font-size: 14px; display: flex;
-  justify-content: space-between; align-items: center;
-  user-select: none; color: var(--text-primary);
+  list-style: none;
+  cursor: pointer;
+  padding: 12px 16px;
+  font-weight: 600;
+  font-size: 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  user-select: none;
+  color: var(--text-primary);
 }
-.ib-panel-summary::-webkit-details-marker { display: none; }
-.ib-panel-toggle { font-size: 16px; color: var(--text-secondary); transition: transform 200ms; }
-.ib-panel[open] .ib-panel-toggle { transform: rotate(45deg); }
-.ib-panel-body { padding: 0 16px 16px; }
 
-.ib-meta { margin: 0; display: grid; gap: 6px; }
+.ib-panel-summary::-webkit-details-marker {
+  display: none;
+}
+
+.ib-panel-toggle {
+  font-size: 16px;
+  color: var(--text-secondary);
+  transition: transform 200ms;
+}
+
+.ib-panel[open] .ib-panel-toggle {
+  transform: rotate(45deg);
+}
+
+.ib-panel-body {
+  padding: 0 16px 16px;
+}
+
+.ib-meta {
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+
 .ib-meta-row {
-  display: grid; grid-template-columns: minmax(110px, 180px) 1fr;
-  gap: 8px; font-size: 13px; align-items: baseline;
+  display: grid;
+  grid-template-columns: minmax(110px, 180px) 1fr;
+  gap: 8px;
+  font-size: 13px;
+  align-items: baseline;
 }
-.ib-meta-row dt { color: var(--text-secondary); font-weight: 600; margin: 0; }
-.ib-meta-row dd { color: var(--text-primary); margin: 0; word-break: break-all; }
-.mono { font-family: monospace; font-size: 12px; }
 
-.ib-section-label { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; }
-.ib-member-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
-.ib-member-item {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 8px 10px; border: 1px solid var(--border-default);
-  border-radius: 8px; background: rgba(255,255,255,0.7); font-size: 13px;
+.ib-meta-row dt {
+  color: var(--text-secondary);
+  font-weight: 600;
+  margin: 0;
 }
-.ib-member-address { font-weight: 500; color: var(--text-primary); word-break: break-all; min-width: 0; }
-.ib-member-block { color: var(--text-secondary); font-size: 12px; flex-shrink: 0; margin-left: 8px; }
+
+.ib-meta-row dd {
+  color: var(--text-primary);
+  margin: 0;
+  word-break: break-all;
+}
+
+.mono {
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.ib-section-label {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ib-member-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.ib-member-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+}
+
+.ib-member-address {
+  font-weight: 500;
+  color: var(--text-primary);
+  word-break: break-all;
+  min-width: 0;
+}
+
+.ib-member-block {
+  color: var(--text-secondary);
+  font-size: 12px;
+  flex-shrink: 0;
+  margin-left: 8px;
+}
 
 /* Key status */
 .ib-key-status {
-  margin: 4px 18px 8px; padding: 8px 14px; border-radius: 8px; font-size: 13px;
+  margin: 4px 18px 8px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  flex-shrink: 0;
   background: color-mix(in srgb, var(--status-warning) 8%, transparent);
-  color: var(--status-warning); border: 1px solid color-mix(in srgb, var(--status-warning) 25%, transparent);
+  color: var(--status-warning);
+  border: 1px solid color-mix(in srgb, var(--status-warning) 25%, transparent);
 }
+
 .ib-key-ok {
   background: color-mix(in srgb, var(--status-success) 8%, transparent);
   color: var(--status-success);
   border-color: color-mix(in srgb, var(--status-success) 25%, transparent);
 }
 
-/* Chat */
+/* Chat Viewport: Matches reference chat-viewport */
 .ib-chat-viewport {
-  flex: 1; padding: 16px 18px 24px; display: flex; flex-direction: column; gap: 14px;
+  flex: 1;
+  padding: 16px 18px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  background: transparent;
 }
 
-/* Footer / Composer */
-.ib-footer {
-  position: sticky; bottom: 0; z-index: 50; padding: 12px 18px;
-  background: rgba(247,248,250,0.95); backdrop-filter: blur(6px);
-  border-top: 1px solid var(--border-default);
+/* Sticky Footer / Composer */
+.ib-footer-sticky {
+  flex-shrink: 0;
+  padding: 12px 18px;
+  background: transparent;
+  margin-top: auto;
+  z-index: 50;
 }
+
 .ib-composer {
-  display: flex; gap: 10px; align-items: flex-end;
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
 }
-.ib-composer-input {
-  flex: 1; min-height: 44px; max-height: 120px; border-radius: 22px;
-  padding: 10px 16px; background: #f0f2f5; resize: none;
-}
-.ib-composer-send {
-  border-radius: 50%; width: 44px; height: 44px; padding: 0;
-  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
-}
-.ib-composer-attach {
-  background: none; border: 1px solid var(--border-default); border-radius: 50%;
-  width: 40px; height: 40px; font-size: 18px; cursor: pointer;
-  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
-  color: var(--text-secondary); transition: border-color 150ms, color 150ms;
-}
-.ib-composer-attach:hover:not(:disabled) { border-color: var(--color-primary); color: var(--color-primary); }
-.ib-composer-attach:disabled { opacity: 0.4; cursor: not-allowed; }
 
-/* Attachment chip (replaces textarea) */
+.ib-composer-input {
+  flex: 1;
+  min-height: 44px;
+  max-height: 120px;
+  border-radius: 22px;
+  padding: 10px 16px;
+  background: #f0f2f5;
+  border: none;
+  resize: none;
+  line-height: 24px;
+}
+
+.ib-composer-send {
+  border-radius: 50%;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.ib-composer-attach {
+  background: none;
+  border: 1px solid var(--border-default);
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  transition: border-color 150ms, color 150ms;
+}
+
+.ib-composer-attach:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
 .ib-attachment-chip {
-  flex: 1; display: flex; align-items: center; gap: 10px;
-  padding: 0 14px; min-height: 44px; border-radius: 22px;
-  background: #f0f2f5; border: 1px solid var(--border-default);
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  min-height: 44px;
+  border-radius: 22px;
+  background: #f0f2f5;
+  border: 1px solid var(--border-default);
   overflow: hidden;
 }
-.ib-attachment-chip-icon { flex-shrink: 0; color: var(--text-secondary); }
+
+.ib-attachment-chip-icon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
 .ib-attachment-chip-name {
-  flex: 1; font-size: 13px; font-weight: 500; color: var(--text-primary);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
+
 .ib-attachment-chip-remove {
-  background: none; border: none; font-size: 15px; cursor: pointer;
-  color: var(--text-secondary); padding: 2px 4px; line-height: 1;
-  border-radius: 50%; transition: color 150ms, background 150ms;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: color 150ms, background 150ms;
 }
-.ib-attachment-chip-remove:hover { color: var(--status-error); background: rgba(0,0,0,0.06); }
+
+.ib-attachment-chip-remove:hover {
+  color: var(--status-error);
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.ib-footer-meta {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
 
 @media (max-width: 840px) {
-  .ib-chat-viewport { padding: 12px 12px 24px; }
-  .ib-meta-row { grid-template-columns: 1fr; gap: 2px; }
-  .ib-header { padding: 12px; }
+  .ib-custom-page {
+    height: calc(100vh - 56px); /* Mobile topbar height */
+    margin: -16px;
+  }
 }
-
 </style>
-
