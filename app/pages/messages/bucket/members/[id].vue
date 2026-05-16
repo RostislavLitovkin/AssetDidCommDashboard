@@ -173,8 +173,6 @@ async function submitAddMember(): Promise<void> {
       />
       
       <div v-else class="card stack" style="gap: 16px;">
-        <h4 style="margin: 0; font-size: 16px;">Assign Permissions</h4>
-
         <label class="stack" style="gap: 8px">
           <span style="font-weight: 600; font-size: 14px;">Member Address</span>
           <input
