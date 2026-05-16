@@ -7,11 +7,13 @@
   box-sizing: border-box;
 }
 
+html,
 body {
   margin: 0;
   font-family: "Xcavate", Inter, Arial, sans-serif;
   background: var(--surface-bg);
   color: var(--text-primary);
+  overscroll-behavior: none;
 }
 
 a {

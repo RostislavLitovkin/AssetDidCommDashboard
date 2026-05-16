@@ -3,8 +3,9 @@ import { fetchIndexedBucketDetail, fetchIndexedMessagesByTag, type IndexedBucket
 import { DidCommRepository, type ExtrinsicUpdate } from "../../../services/papi/didCommRepository"
 import LoadingBar from "../../../components/common/LoadingBar.vue"
 import ChatMessageEntry, { type ChatMessageProps } from "../../../components/common/ChatMessageEntry.vue"
-import { Paperclip, X, SendHorizontal } from "lucide-vue-next"
+import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert } from "lucide-vue-next"
 import { useAddress } from "../../../composables/useAddress"
+import { useWallet } from "../../../composables/useWallet"
 import * as jose from "jose"
 import { computed, nextTick, onMounted, ref, watch } from "vue"
 import { useNuxtApp, useRoute, useRuntimeConfig } from "nuxt/app"
@@ -19,6 +20,33 @@ const session = useSessionStore()
 const settings = useSettingsStore()
 const operations = useOperationsStore()
 const { formatAddress, addressesEqual } = useAddress()
+const wallet = useWallet()
+
+// Wallet popup state
+const showWalletPopup = ref(false)
+const walletAccounts = ref<Array<{ address: string; name: string; source: string }>>([])
+const loadingWalletAccounts = ref(false)
+const selectingWallet = ref(false)
+
+async function openWalletPopup(): Promise<void> {
+  showWalletPopup.value = true
+  loadingWalletAccounts.value = true
+  try {
+    walletAccounts.value = await wallet.listAccounts()
+  } finally {
+    loadingWalletAccounts.value = false
+  }
+}
+
+async function selectWalletAccount(address: string): Promise<void> {
+  selectingWallet.value = true
+  try {
+    await wallet.connectToAddress(address)
+    showWalletPopup.value = false
+  } finally {
+    selectingWallet.value = false
+  }
+}
 
 const asOptionalString = (value: unknown): string | undefined => {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
@@ -74,6 +102,11 @@ const connectedAdmin = computed(() => {
   if (!session.accountAddress) return false
   return admins.value.some(a => addressesEqual(a.subjectId, session.accountAddress!))
 })
+const connectedContributor = computed(() => {
+  if (!session.accountAddress) return false
+  return contributors.value.some(c => addressesEqual(c.subjectId, session.accountAddress!))
+})
+const connectedAdminOrContributor = computed(() => connectedAdmin.value || connectedContributor.value)
 
 // ── Chat message rendering ─────────────────────────────────────────
 const chatMessages = computed<ChatMessageProps[]>(() => {
@@ -484,8 +517,36 @@ onMounted(async () => {
       <div id="chat-bottom-anchor"></div>
     </div>
 
-    <!-- Message composer -->
-    <div class="ib-footer-sticky">
+    <!-- Footer: conditional on wallet / contributor status -->
+
+    <!-- (A) No wallet connected → Connect prompt -->
+    <div v-if="!session.accountAddress" class="ib-footer-sticky">
+      <div class="ib-connect-prompt">
+        <Wallet :size="20" class="ib-connect-prompt-icon" />
+        <div class="ib-connect-prompt-text">
+          <strong>Wallet not connected</strong>
+          <span class="muted">Connect your wallet to participate in this bucket.</span>
+        </div>
+        <button class="btn btn-primary ib-connect-btn" type="button" @click="openWalletPopup">
+          <Wallet :size="16" />
+          Connect Wallet
+        </button>
+      </div>
+    </div>
+
+    <!-- (B) Wallet connected but not admin/contributor -->
+    <div v-else-if="!loading && !connectedAdminOrContributor" class="ib-footer-sticky">
+      <div class="ib-not-contributor">
+        <ShieldAlert :size="20" class="ib-not-contributor-icon" />
+        <div class="ib-not-contributor-text">
+          <strong>Not a contributor</strong>
+          <span class="muted">Your connected wallet is not a contributor to this bucket. Ask an admin to add you.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- (C) Authorized → Message composer -->
+    <div v-else class="ib-footer-sticky">
       <input ref="fileInputRef" type="file" style="display:none" @change="onFileSelected" />
       <form class="ib-composer" @submit.prevent="sendMessage">
         <!-- Attachment mode: show file chip instead of textarea -->
@@ -513,15 +574,51 @@ onMounted(async () => {
         </button>
       </form>
       <div class="ib-footer-meta">
-        <p v-if="!session.accountAddress" class="muted" style="margin:0; text-align:center; font-size:13px">
-          Connect wallet to send messages.
-        </p>
-        <p v-else-if="!activeSecretJwk && !loading" class="muted" style="margin:0; text-align:center; font-size:13px">
+        <p v-if="!activeSecretJwk && !loading" class="muted" style="margin:0; text-align:center; font-size:13px">
           Decrypt the bucket key to enable sending.
         </p>
         <p v-if="sendError" style="margin:0; color:var(--status-error); text-align:center; font-size:13px">
           {{ sendError }}
         </p>
+      </div>
+    </div>
+
+    <!-- Wallet selection popup (independent, not part of the footer chain) -->
+    <div
+      v-if="showWalletPopup"
+      class="ib-wallet-overlay"
+      @click.self="showWalletPopup = false"
+    >
+      <div class="card stack ib-wallet-popup">
+        <div class="row" style="justify-content: space-between; align-items: center">
+          <h3 style="margin: 0">Select Wallet</h3>
+          <button class="btn" type="button" aria-label="Close" @click="showWalletPopup = false" :disabled="selectingWallet">
+            <X :size="14" />
+          </button>
+        </div>
+
+        <LoadingBar v-if="loadingWalletAccounts" label="Loading wallets..." />
+
+        <div v-else-if="walletAccounts.length" class="stack" style="max-height: 300px; overflow: auto; gap: 8px">
+          <button
+            v-for="account in walletAccounts"
+            :key="account.address"
+            class="btn"
+            type="button"
+            :disabled="selectingWallet"
+            style="display: flex; justify-content: space-between; align-items: center; text-align: left"
+            @click="selectWalletAccount(account.address)"
+          >
+            <LoadingBar v-if="selectingWallet" label="" style="min-width: 0" />
+            <span v-else class="stack" style="gap: 2px; min-width: 0; flex: 1">
+              <strong>{{ account.name }}</strong>
+              <span class="muted" style="font-size: 12px">{{ account.address.slice(0, 10) }}...{{ account.address.slice(-10) }}</span>
+            </span>
+            <span class="muted" style="font-size: 12px; white-space: nowrap; margin-left: 8px">{{ account.source }}</span>
+          </button>
+        </div>
+
+        <p v-else class="muted" style="margin: 0">No wallets found.</p>
       </div>
     </div>
   </div>
@@ -596,6 +693,7 @@ onMounted(async () => {
   max-height: 40vh;
   overflow-y: auto;
   padding: 8px 0;
+  overscroll-behavior: contain;
 }
 
 /* Panels */
@@ -737,39 +835,109 @@ onMounted(async () => {
   gap: 14px;
   overflow-y: auto;
   background: transparent;
+  overscroll-behavior: contain;
 }
 
 /* Sticky Footer / Composer */
 .ib-footer-sticky {
   flex-shrink: 0;
-  padding: 12px 18px;
-  background: transparent;
-  margin-top: auto;
+  padding: 10px 18px 14px;
+  background: var(--surface-card);
+  border-top: 1px solid var(--border-default);
   z-index: 50;
 }
 
+/* ── Connect-wallet prompt (variant A) ────────────────────────── */
+.ib-connect-prompt {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-primary) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 20%, transparent);
+}
+
+.ib-connect-prompt-icon {
+  flex-shrink: 0;
+  color: var(--color-primary);
+}
+
+.ib-connect-prompt-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.ib-connect-prompt-text strong {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+/* ── Not-contributor notice (variant B) ───────────────────────── */
+.ib-not-contributor {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--status-warning) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--status-warning) 25%, transparent);
+}
+
+.ib-not-contributor-icon {
+  flex-shrink: 0;
+  color: var(--status-warning);
+}
+
+.ib-not-contributor-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.ib-not-contributor-text strong {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+/* ── Composer (variant C) ─────────────────────────────────────── */
 .ib-composer {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   align-items: flex-end;
 }
 
 .ib-composer-input {
   flex: 1;
-  min-height: 44px;
+  min-height: 40px;
   max-height: 120px;
-  border-radius: 22px;
-  padding: 10px 16px;
-  background: #f0f2f5;
-  border: none;
+  border-radius: 10px;
+  padding: 8px 14px;
+  background: var(--surface-bg);
+  border: 1px solid var(--border-default);
   resize: none;
-  line-height: 24px;
+  line-height: 22px;
+  font-size: 14px;
+  transition: border-color 150ms;
+}
+
+.ib-composer-input:focus {
+  border-color: var(--color-primary);
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 20%, transparent);
 }
 
 .ib-composer-send {
-  border-radius: 50%;
-  width: 44px;
-  height: 44px;
+  border-radius: 10px;
+  width: 40px;
+  height: 40px;
   padding: 0;
   display: flex;
   align-items: center;
@@ -780,7 +948,7 @@ onMounted(async () => {
 .ib-composer-attach {
   background: none;
   border: 1px solid var(--border-default);
-  border-radius: 50%;
+  border-radius: 10px;
   width: 40px;
   height: 40px;
   font-size: 18px;
@@ -804,9 +972,9 @@ onMounted(async () => {
   align-items: center;
   gap: 10px;
   padding: 0 14px;
-  min-height: 44px;
-  border-radius: 22px;
-  background: #f0f2f5;
+  min-height: 40px;
+  border-radius: 10px;
+  background: var(--surface-bg);
   border: 1px solid var(--border-default);
   overflow: hidden;
 }
@@ -846,16 +1014,50 @@ onMounted(async () => {
 }
 
 .ib-footer-meta {
-  margin-top: 8px;
+  margin-top: 6px;
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* ── Connect button ─────────────────────────────────────────────── */
+.ib-connect-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ── Wallet popup overlay ───────────────────────────────────────── */
+.ib-wallet-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.25);
+  display: grid;
+  place-items: center;
+  z-index: 100;
+}
+
+.ib-wallet-popup {
+  width: min(560px, 92vw);
 }
 
 @media (max-width: 840px) {
   .ib-custom-page {
     height: calc(100vh - 56px); /* Mobile topbar height */
     margin: -16px;
+  }
+
+  .ib-connect-prompt,
+  .ib-not-contributor {
+    flex-direction: column;
+    text-align: center;
+    padding: 16px;
   }
 }
 </style>

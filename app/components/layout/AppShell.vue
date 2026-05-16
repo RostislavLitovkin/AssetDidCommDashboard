@@ -336,6 +336,7 @@ async function copyX25519PublicKey() {
   padding: 20px 14px;
   overflow-y: auto;
   flex-shrink: 0;
+  overscroll-behavior: contain;
 }
 
 .app-shell-content {
@@ -344,6 +345,7 @@ async function copyX25519PublicKey() {
   padding: 24px;
   overflow: auto;
   overflow-x: hidden;
+  overscroll-behavior: contain;
 }
 
 @media (max-width: 960px) {
@@ -464,6 +466,7 @@ async function copyX25519PublicKey() {
     align-items: flex-start;
     overflow-y: auto;
     padding-bottom: 24px;
+    overscroll-behavior: contain;
   }
 
   .app-shell-sidebar.topbar-expanded .sidebar-nav,

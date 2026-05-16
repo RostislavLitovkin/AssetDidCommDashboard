@@ -89,7 +89,8 @@ async function submitCreateBucket(): Promise<void> {
 </script>
 
 <template>
-  <div class="stack">
+  <div class="chat-custom-page">
+    <div class="info-content-scroll stack">
     <header class="card">
       <h2 style="margin: 0">Add Bucket</h2>
       <p class="muted" style="margin: 8px 0 0">
@@ -133,5 +134,33 @@ async function submitCreateBucket(): Promise<void> {
         Submitted via {{ submittedMethod }} with hash {{ submittedTxHash }}
       </p>
     </section>
+    </div>
   </div>
 </template>
+<style scoped>
+.chat-custom-page {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 48px);
+  margin: -24px;
+  background: #f7f8fa;
+  overflow: hidden;
+}
+
+.info-content-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 960px) {
+  .chat-custom-page {
+    height: calc(100vh - 56px);
+    margin: -16px;
+  }
+  .info-content-scroll {
+    padding: 16px;
+  }
+}
+</style>

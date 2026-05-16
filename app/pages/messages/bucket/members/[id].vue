@@ -155,7 +155,8 @@ async function submitAddMember(): Promise<void> {
 </script>
 
 <template>
-  <div class="stack">
+  <div class="chat-custom-page">
+    <div class="info-content-scroll stack">
     <section class="stack" aria-live="polite">
       <div class="row buckets-header" style="justify-content: space-between; align-items: center">
         <div class="row" style="gap: 12px; align-items: center">
@@ -240,5 +241,33 @@ async function submitAddMember(): Promise<void> {
         </div>
       </div>
     </section>
+    </div>
   </div>
 </template>
+<style scoped>
+.chat-custom-page {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 48px);
+  margin: -24px;
+  background: #f7f8fa;
+  overflow: hidden;
+}
+
+.info-content-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 960px) {
+  .chat-custom-page {
+    height: calc(100vh - 56px);
+    margin: -16px;
+  }
+  .info-content-scroll {
+    padding: 16px;
+  }
+}
+</style>
