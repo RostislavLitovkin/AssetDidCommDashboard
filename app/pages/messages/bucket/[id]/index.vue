@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { DidCommRepository, type BucketMessage, type BucketRecord, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
 import LoadingBar from "../../../../components/common/LoadingBar.vue"
+import ChatMessageEntry, { type ChatMessageProps } from "../../../../components/common/ChatMessageEntry.vue"
 import { useAddress } from "../../../../composables/useAddress"
 import { hexToU8a } from "@polkadot/util"
 import * as jose from "jose"
@@ -158,18 +159,29 @@ const contributorsMissingEncryptionKey = computed(() => {
 
 const bucketMetadata = computed<MetadataEntry[]>(() => extractBucketMetadataEntries(bucket.value))
 
-const chatMessages = computed<ChatMessage[]>(() => {
-  const chainMessages = messages.value.map((message) => toChatMessage(message))
+const chatMessages = computed<ChatMessageProps[]>(() => {
+  const chainMessages = messages.value.map((message) => {
+    const cm = toChatMessage(message)
+    return toChatMessageProps(cm)
+  })
   const pending = pendingMessages.value.map((message) => ({
     id: message.id,
     body: message.body,
-    createdAt: message.createdAt,
     outgoing: true,
     senderLabel: "You",
-    deliveryState: message.deliveryState
+    timestampLabel: formatMessageMeta({ ...message, outgoing: true, senderLabel: "You", createdAt: message.createdAt, deliveryState: message.deliveryState } as ChatMessage),
+    debugEntries: [] as { key: string; value: string }[],
   }))
 
-  return [...chainMessages, ...pending].sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime())
+  const allChain = chainMessages.sort((left, right) => {
+    const lm = messages.value.find(m => m.id === left.id)
+    const rm = messages.value.find(m => m.id === right.id)
+    const lt = lm ? toChatMessage(lm).createdAt.getTime() : 0
+    const rt = rm ? toChatMessage(rm).createdAt.getTime() : 0
+    return lt - rt
+  })
+
+  return [...allChain, ...pending]
 })
 
 const latestKeySharingChatMessage = computed(() => {
@@ -1313,6 +1325,22 @@ function buildMessageDebugEntries(message: ChatMessage): MetadataEntry[] {
   return entries
 }
 
+function toChatMessageProps(message: ChatMessage): ChatMessageProps {
+  return {
+    id: message.id,
+    body: message.body,
+    outgoing: message.outgoing,
+    senderLabel: message.senderLabel,
+    senderAddress: message.senderAddress,
+    tag: message.tag,
+    contentType: message.contentType,
+    reference: message.reference,
+    payloadError: message.payloadError,
+    timestampLabel: formatMessageMeta(message),
+    debugEntries: buildMessageDebugEntries(message),
+  }
+}
+
 async function loadBucketPage() {
   await Promise.all([loadBucket(), loadBucketMembers(), loadMessages()])
 }
@@ -1407,11 +1435,12 @@ async function sendMessage() {
 
 async function scrollToBottom(): Promise<void> {
   await nextTick()
-  if (!chatViewport.value) {
-    return
+  const anchor = document.getElementById("chat-bottom-anchor")
+  if (anchor) {
+    anchor.scrollIntoView({ behavior: "auto", block: "end" })
+  } else if (typeof window !== "undefined") {
+    window.scrollTo({ top: document.body.scrollHeight })
   }
-
-  chatViewport.value.scrollTop = chatViewport.value.scrollHeight
 }
 
 watch(
@@ -1438,70 +1467,50 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="stack">
-    <section class="stack" aria-live="polite">
-      <div class="row buckets-header" style="justify-content: space-between; align-items: center">
-        <div class="row" style="gap: 12px; align-items: center">
-          <div class="stack" style="gap: 4px">
-            <h3 style="margin: 0">{{ bucketDisplayName }}</h3>
-          </div>
-        </div>
-        <div class="row" style="gap: 8px">
-          <button class="btn" type="button" :disabled="messagesLoading || bucketLoading" @click="loadBucketPage">
-            Reload
-          </button>
-          <NuxtLink class="btn btn-primary" :to="`/messages/bucket/${encodeURIComponent(bucketId)}/info`">
-            Info
-          </NuxtLink>
+  <div class="chat-page-container" style="display: flex; flex-direction: column; height: 100%; flex: 1; background: #f7f8fa;">
+    <div class="row buckets-header" style="justify-content: space-between; align-items: center; flex-shrink: 0; padding: 16px 18px; background: transparent; border-bottom: none;">
+      <div class="row" style="gap: 12px; align-items: center">
+        <div class="stack" style="gap: 4px">
+          <h3 style="margin: 0">{{ bucketDisplayName }}</h3>
         </div>
       </div>
-
-      <LoadingBar v-if="messagesLoading || bucketLoading" label="Loading..." />
-      <p v-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
-      <p v-if="messagesError" style="margin: 0; color: var(--status-error)">{{ messagesError }}</p>
-
-      <div ref="chatViewport" class="chat-viewport card" role="log" aria-live="polite" aria-label="Bucket conversation"
-        style="margin-top: 12px;">
-        <p v-if="!chatMessages.length && !messagesLoading" class="muted" style="margin: 0">
-          No messages found for this bucket.
-        </p>
-        <div v-for="message in chatMessages" :key="message.id" class="chat-row"
-          :class="message.outgoing ? 'chat-row-outgoing' : 'chat-row-incoming'">
-          <div class="chat-message">
-            <p v-if="!message.outgoing" class="chat-sender">{{ message.senderLabel }}</p>
-            <article class="chat-bubble" :class="message.outgoing ? 'chat-bubble-outgoing' : 'chat-bubble-incoming'">
-              <p class="chat-text">{{ message.body }}</p>
-              <p v-if="message.payloadError" class="chat-warning">Payload unavailable: {{ message.payloadError }}</p>
-
-              <details v-if="settings.showMessageDebug" class="chat-debug">
-                <summary>Debug data</summary>
-                <dl v-if="buildMessageDebugEntries(message).length" class="chat-debug-grid">
-                  <div v-for="entry in buildMessageDebugEntries(message)" :key="`${message.id}-${entry.key}`"
-                    class="chat-debug-item">
-                    <dt>{{ entry.key }}</dt>
-                    <dd>{{ entry.value }}</dd>
-                  </div>
-                </dl>
-              </details>
-            </article>
-            <p class="chat-timestamp">{{ formatMessageMeta(message) }}</p>
-          </div>
-        </div>
+      <div class="row" style="gap: 8px">
+        <button class="btn" type="button" :disabled="messagesLoading || bucketLoading" @click="loadBucketPage">
+          Reload
+        </button>
+        <NuxtLink class="btn" :to="`/messages/bucket/${encodeURIComponent(bucketId)}/info`">
+          Info
+        </NuxtLink>
       </div>
+    </div>
 
-      <form class="chat-composer card" @submit.prevent="sendMessage" style="padding: 12px; margin-top: 8px;">
-        <textarea v-model="sendText" class="input chat-input" name="message-text" placeholder="Write a message" rows="2"
-          :disabled="sending" style="flex: 1;" />
+    <LoadingBar v-if="messagesLoading || bucketLoading" label="Loading..." style="flex-shrink: 0;" />
+    <p v-if="bucketError" style="margin: 12px 18px 0; color: var(--status-error); flex-shrink: 0;">{{ bucketError }}</p>
+    <p v-if="messagesError" style="margin: 12px 18px 0; color: var(--status-error); flex-shrink: 0;">{{ messagesError }}</p>
+
+    <div ref="chatViewport" class="chat-viewport" role="log" aria-live="polite" aria-label="Bucket conversation">
+      <ChatMessageEntry v-for="message in chatMessages" :key="message.id" :message="message" />
+      <p v-if="!chatMessages.length && !messagesLoading" class="muted" style="margin: 0; text-align: center;">
+        No messages found for this bucket.
+      </p>
+    </div>
+
+    <div style="position: sticky; bottom: 0; z-index: 50; background: transparent; border-top: none; padding: 12px 18px; margin-top: auto;">
+      <form class="chat-composer card" @submit.prevent="sendMessage" style="padding: 0; margin: 0; box-shadow: none; display: flex; flex-direction: row; gap: 10px; align-items: flex-end; background: transparent; border: none;">
+        <textarea v-model="sendText" class="input chat-input" name="message-text" placeholder="Write a message" rows="1"
+          :disabled="sending" style="flex: 1; min-height: 44px; max-height: 120px; border-radius: 22px; padding: 10px 16px; background: #f0f2f5;" />
         <button class="btn btn-primary chat-send-btn" type="submit" :disabled="sending || messagesLoading"
-          style="align-self: center;">
-          {{ sending ? "Sending..." : "Send" }}
+          style="border-radius: 50%; width: 44px; height: 44px; padding: 0; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+          {{ sending ? "..." : "Send" }}
         </button>
       </form>
-      <p v-if="!session.accountAddress" class="muted" style="margin: 0">
+      <p v-if="!session.accountAddress" class="muted" style="margin: 8px 0 0; text-align: center; font-size: 13px;">
         Connect wallet on the dashboard first to sign and send bucket messages.
       </p>
-      <p v-if="sendError" style="margin: 0; color: var(--status-error)">{{ sendError }}</p>
-    </section>
+      <p v-if="sendError" style="margin: 8px 0 0; color: var(--status-error); text-align: center; font-size: 13px;">{{ sendError }}</p>
+    </div>
+
+    <div id="chat-bottom-anchor"></div>
   </div>
 </template>
 
@@ -1613,11 +1622,8 @@ onMounted(async () => {
 
 .chat-viewport {
   flex: 1;
-  min-height: 380px;
-  max-height: none;
-  overflow-y: auto;
   padding: 16px 18px 24px;
-  background: #f7f8fa;
+  background: transparent;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -1878,18 +1884,11 @@ onMounted(async () => {
   }
 
   .chat-viewport {
-    min-height: 320px;
-    max-height: none;
-    padding: 12px 12px 20px;
+    padding: 12px 12px 24px;
   }
 
   .chat-message {
     max-width: 100%;
-  }
-
-  .chat-composer {
-    flex-direction: column;
-    align-items: stretch;
   }
 
   .chat-debug-item {
