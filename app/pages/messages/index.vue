@@ -17,7 +17,7 @@ const didCommRepository = new DidCommRepository(
 const isWalletConnected = computed(() => session.walletStatus === "connected" && Boolean(session.accountAddress))
 const namespaces = ref<BucketNamespace[]>([])
 const namespaceError = ref("")
-const namespacesLoading = ref(false)
+const namespacesLoading = ref(true)
 
 async function loadNamespaces() {
   namespaceError.value = ""

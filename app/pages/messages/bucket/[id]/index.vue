@@ -99,10 +99,10 @@ const bucketId = computed(() => {
 })
 
 const messages = ref<BucketMessage[]>([])
-const messagesLoading = ref(false)
+const messagesLoading = ref(true)
 const messagesError = ref("")
 const bucket = ref<BucketRecord | null>(null)
-const bucketLoading = ref(false)
+const bucketLoading = ref(true)
 const bucketError = ref("")
 const membersError = ref("")
 const sendText = ref("")

@@ -25,7 +25,7 @@ const namespaceId = computed(() => {
 })
 
 const buckets = ref<BucketRecord[]>([])
-const bucketsLoading = ref(false)
+const bucketsLoading = ref(true)
 const bucketsError = ref("")
 const namespaceName = ref("")
 
@@ -86,7 +86,7 @@ onMounted(async () => {
         <div class="stack" style="gap: 4px">
           <h3 style="margin: 0">{{ namespaceDisplayName }}</h3>
         </div>
-        <div v-if="isWalletConnected" class="row" style="gap: 8px">
+        <div class="row" style="gap: 8px">
           <NuxtLink class="btn" :to="`/messages/bucket/create/${encodeURIComponent(namespaceId)}`">Add Bucket</NuxtLink>
         </div>
       </div>
@@ -100,14 +100,10 @@ onMounted(async () => {
         </p>
 
         <div v-if="buckets.length" class="stack" style="gap: 12px">
-          <NuxtLink
-            v-for="bucket in buckets"
-            :key="bucket.id"
-            :to="`/indexed-bucket/${encodeURIComponent(bucket.id)}`"
-            class="card bucket-card"
-            style="padding: 16px; text-decoration: none; color: inherit; display: block"
-          >
-            <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap">
+          <NuxtLink v-for="bucket in buckets" :key="bucket.id" :to="`/indexed-bucket/${encodeURIComponent(bucket.id)}`"
+            class="card bucket-card" style="padding: 16px; text-decoration: none; color: inherit; display: block">
+            <div class="row"
+              style="justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap">
               <div class="stack" style="gap: 6px">
                 <strong style="font-size: 16px">{{ resolveDisplayName(bucket) }}</strong>
                 <p class="muted" style="margin: 0">Bucket ID: {{ bucket.id }}</p>

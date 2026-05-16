@@ -91,49 +91,39 @@ async function submitCreateBucket(): Promise<void> {
 <template>
   <div class="chat-custom-page">
     <div class="info-content-scroll stack">
-    <header class="card">
-      <h2 style="margin: 0">Add Bucket</h2>
-      <p class="muted" style="margin: 8px 0 0">
-        Submit a create-bucket extrinsic to the Xcavate blockchain.
-      </p>
-    </header>
-
-    <WalletConnectPrompt
-      v-if="!isWalletConnected"
-      title="Connect Your Wallet"
-      description="Connect your wallet to create a bucket in this namespace."
-    />
-
-    <section v-else class="card stack" aria-live="polite">
-      <label class="stack" style="gap: 6px">
-        <span>Namespace</span>
-        <input class="input" type="text" :value="namespaceId" disabled />
-      </label>
-
-      <label class="stack" style="gap: 6px">
-        <span>Bucket Name</span>
-        <input
-          v-model="bucketName"
-          class="input"
-          type="text"
-          name="bucket-name"
-          placeholder="e.g. primary-bucket"
-          :disabled="submitting"
-        />
-      </label>
-
-      <div class="row" style="justify-content: flex-end; gap: 8px">
-        <NuxtLink class="btn" :to="namespaceRoutePath">Cancel</NuxtLink>
-        <button class="btn" type="button" :disabled="submitting" @click="submitCreateBucket">
-          {{ submitting ? "Submitting..." : "Submit Extrinsic" }}
-        </button>
+      <div class="row buckets-header" style="justify-content: space-between; align-items: center">
+        <div class="stack" style="gap: 4px">
+          <h3 style="margin: 0">Add Bucket</h3>
+        </div>
       </div>
 
-      <p v-if="submitError" style="margin: 0; color: var(--status-error)">{{ submitError }}</p>
-      <p v-if="submittedTxHash" style="margin: 0; color: var(--status-success)">
-        Submitted via {{ submittedMethod }} with hash {{ submittedTxHash }}
-      </p>
-    </section>
+      <WalletConnectPrompt v-if="!isWalletConnected" title="Connect Your Wallet"
+        description="Connect your wallet to create a bucket in this namespace." />
+
+      <section v-else class="card stack" aria-live="polite">
+        <label class="stack" style="gap: 6px">
+          <span>Namespace</span>
+          <input class="input" type="text" :value="namespaceId" disabled />
+        </label>
+
+        <label class="stack" style="gap: 6px">
+          <span>Bucket Name</span>
+          <input v-model="bucketName" class="input" type="text" name="bucket-name" placeholder="e.g. primary-bucket"
+            :disabled="submitting" />
+        </label>
+
+        <div class="row" style="justify-content: flex-end; gap: 8px">
+          <NuxtLink class="btn" :to="namespaceRoutePath">Cancel</NuxtLink>
+          <button class="btn" type="button" :disabled="submitting" @click="submitCreateBucket">
+            {{ submitting ? "Submitting..." : "Submit Extrinsic" }}
+          </button>
+        </div>
+
+        <p v-if="submitError" style="margin: 0; color: var(--status-error)">{{ submitError }}</p>
+        <p v-if="submittedTxHash" style="margin: 0; color: var(--status-success)">
+          Submitted via {{ submittedMethod }} successfully.
+        </p>
+      </section>
     </div>
   </div>
 </template>
@@ -159,6 +149,7 @@ async function submitCreateBucket(): Promise<void> {
     height: calc(100vh - 56px);
     margin: -16px;
   }
+
   .info-content-scroll {
     padding: 16px;
   }

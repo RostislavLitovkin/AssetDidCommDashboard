@@ -16,6 +16,7 @@ const didCommRepository = new DidCommRepository(
 const isWalletConnected = computed(() => session.walletStatus === "connected" && Boolean(session.accountAddress))
 
 const namespaceName = ref("")
+const namespaceCategory = ref("")
 const submitting = ref(false)
 const submitError = ref("")
 const submittedTxHash = ref("")
@@ -51,11 +52,17 @@ async function submitCreateNamespace(): Promise<void> {
   submitting.value = true
 
   try {
-    const result = await didCommRepository.createNamespace(namespaceName.value, session.accountAddress, logExtrinsicUpdate)
+    const result = await didCommRepository.createNamespace(
+      namespaceName.value,
+      session.accountAddress,
+      logExtrinsicUpdate,
+      namespaceCategory.value
+    )
     submittedTxHash.value = result.txHash
     submittedMethod.value = result.method
     operations.add("bucket_write", namespaceName.value.trim(), "success", `Namespace extrinsic submitted: ${result.txHash}`)
     namespaceName.value = ""
+    namespaceCategory.value = ""
   } catch (error) {
     submitError.value = error instanceof Error ? error.message : "Unable to submit namespace extrinsic"
     operations.add("bucket_write", "namespace", "error", submitError.value)
@@ -79,25 +86,37 @@ async function submitCreateNamespace(): Promise<void> {
     <section v-else class="card stack" style="gap: 10px" aria-live="polite">
       <label class="stack" style="gap: 6px">
         <span>Namespace name</span>
-        <div class="namespace-actions">
-          <input
-            v-model="namespaceName"
-            class="input"
-            type="text"
-            name="namespace-name"
-            placeholder="e.g. asset-messages"
-            :disabled="submitting"
-            style="flex: 1"
-          />
-          <button class="btn btn-primary" type="button" :disabled="submitting" @click="submitCreateNamespace" style="white-space: nowrap">
-            {{ submitting ? "Submitting..." : "Create" }}
-          </button>
-        </div>
+        <input
+          v-model="namespaceName"
+          class="input"
+          type="text"
+          name="namespace-name"
+          placeholder="e.g. asset-messages"
+          :disabled="submitting"
+        />
       </label>
+
+      <label class="stack" style="gap: 6px">
+        <span>Category</span>
+        <input
+          v-model="namespaceCategory"
+          class="input"
+          type="text"
+          name="namespace-category"
+          placeholder="e.g. communication"
+          :disabled="submitting"
+        />
+      </label>
+
+      <div class="row" style="justify-content: flex-end">
+        <button class="btn btn-primary" type="button" :disabled="submitting" @click="submitCreateNamespace">
+          {{ submitting ? "Submitting..." : "Create" }}
+        </button>
+      </div>
 
       <p v-if="submitError" class="error-text">{{ submitError }}</p>
       <p v-if="submittedTxHash" class="success-text">
-        Submitted via {{ submittedMethod }} with hash {{ submittedTxHash }}
+        Submitted via {{ submittedMethod }} successfully.
       </p>
     </section>
   </main>

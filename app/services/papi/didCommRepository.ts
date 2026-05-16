@@ -21,7 +21,8 @@ type ExtrinsicSubmitter = (
   endpoint: string,
   namespaceName: string,
   ownerAddress: string,
-  onUpdate?: ExtrinsicUpdateHandler
+  onUpdate?: ExtrinsicUpdateHandler,
+  category?: string
 ) => Promise<string>
 
 type BucketExtrinsicSubmitter = (
@@ -29,7 +30,8 @@ type BucketExtrinsicSubmitter = (
   namespaceId: string,
   bucketName: string,
   ownerAddress: string,
-  onUpdate?: ExtrinsicUpdateHandler
+  onUpdate?: ExtrinsicUpdateHandler,
+  category?: string
 ) => Promise<string>
 
 type MessageExtrinsicSubmitter = (
@@ -503,7 +505,8 @@ export class DidCommRepository {
   async createNamespace(
     namespaceName: string,
     ownerAddress?: string,
-    onUpdate?: ExtrinsicUpdateHandler
+    onUpdate?: ExtrinsicUpdateHandler,
+    category?: string
   ): Promise<CreateNamespaceResult> {
     const trimmedName = namespaceName.trim()
     if (!trimmedName) {
@@ -519,7 +522,7 @@ export class DidCommRepository {
       throw new Error("Unable to resolve chain endpoint for extrinsic submission")
     }
 
-    const txHash = await this.submitExtrinsic(endpoint, trimmedName, ownerAddress, onUpdate)
+    const txHash = await this.submitExtrinsic(endpoint, trimmedName, ownerAddress, onUpdate, category?.trim())
     return {
       txHash,
       method: "buckets.createNamespace"
@@ -530,7 +533,8 @@ export class DidCommRepository {
     namespaceId: string,
     bucketName: string,
     ownerAddress?: string,
-    onUpdate?: ExtrinsicUpdateHandler
+    onUpdate?: ExtrinsicUpdateHandler,
+    category?: string
   ): Promise<CreateBucketResult> {
     const trimmedNamespaceId = namespaceId.trim()
     if (!trimmedNamespaceId) {
@@ -551,7 +555,7 @@ export class DidCommRepository {
       throw new Error("Unable to resolve chain endpoint for extrinsic submission")
     }
 
-    const txHash = await this.submitBucketExtrinsic(endpoint, trimmedNamespaceId, trimmedBucketName, ownerAddress, onUpdate)
+    const txHash = await this.submitBucketExtrinsic(endpoint, trimmedNamespaceId, trimmedBucketName, ownerAddress, onUpdate, category?.trim())
     return {
       txHash,
       method: "buckets.createBucket"
@@ -845,7 +849,8 @@ async function submitBucketsCreateNamespaceExtrinsic(
   endpoint: string,
   namespaceName: string,
   ownerAddress: string,
-  onUpdate?: ExtrinsicUpdateHandler
+  onUpdate?: ExtrinsicUpdateHandler,
+  category?: string
 ): Promise<string> {
   const [{ ApiPromise, WsProvider }, { web3FromAddress }] = await Promise.all([
     import("@polkadot/api"),
@@ -866,6 +871,7 @@ async function submitBucketsCreateNamespaceExtrinsic(
     const injector = await web3FromAddress(ownerAddress)
     const metadataInput = {
       name: utf8ToHexBytes(namespaceName),
+      category: category ? utf8ToHexBytes(category) : null,
       schemaUri: null,
       properties: {}
     }
@@ -909,7 +915,8 @@ async function submitBucketsCreateBucketExtrinsic(
   namespaceId: string,
   bucketName: string,
   ownerAddress: string,
-  onUpdate?: ExtrinsicUpdateHandler
+  onUpdate?: ExtrinsicUpdateHandler,
+  category?: string
 ): Promise<string> {
   const [{ ApiPromise, WsProvider }, { web3FromAddress }] = await Promise.all([
     import("@polkadot/api"),
@@ -930,6 +937,7 @@ async function submitBucketsCreateBucketExtrinsic(
     const injector = await web3FromAddress(ownerAddress)
     const metadataInput = {
       name: utf8ToHexBytes(bucketName),
+      category: category ? utf8ToHexBytes(category) : null,
       schemaUri: null,
       properties: {}
     }
