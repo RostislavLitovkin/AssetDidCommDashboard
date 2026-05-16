@@ -29,6 +29,7 @@ const namespaceRoutePath = computed(() => `/messages/namespace/${encodeURICompon
 const isWalletConnected = computed(() => session.walletStatus === "connected" && Boolean(session.accountAddress))
 
 const bucketName = ref("")
+const category = ref("")
 const submitting = ref(false)
 const submitError = ref("")
 const submittedTxHash = ref("")
@@ -73,12 +74,14 @@ async function submitCreateBucket(): Promise<void> {
       namespaceId.value,
       bucketName.value,
       session.accountAddress,
-      logExtrinsicUpdate
+      logExtrinsicUpdate,
+      category.value
     )
     submittedTxHash.value = result.txHash
     submittedMethod.value = result.method
     operations.add("bucket_write", bucketName.value.trim(), "success", `Bucket extrinsic submitted: ${result.txHash}`)
     bucketName.value = ""
+    category.value = ""
   } catch (error) {
     submitError.value = error instanceof Error ? error.message : "Unable to submit bucket extrinsic"
     operations.add("bucket_write", "bucket", "error", submitError.value)
@@ -109,6 +112,12 @@ async function submitCreateBucket(): Promise<void> {
         <label class="stack" style="gap: 6px">
           <span>Bucket Name</span>
           <input v-model="bucketName" class="input" type="text" name="bucket-name" placeholder="e.g. primary-bucket"
+            :disabled="submitting" />
+        </label>
+
+        <label class="stack" style="gap: 6px">
+          <span>Category (Optional)</span>
+          <input v-model="category" class="input" type="text" name="category" placeholder="e.g. communication"
             :disabled="submitting" />
         </label>
 

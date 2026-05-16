@@ -21,8 +21,7 @@ type ExtrinsicSubmitter = (
   endpoint: string,
   namespaceName: string,
   ownerAddress: string,
-  onUpdate?: ExtrinsicUpdateHandler,
-  category?: string
+  onUpdate?: ExtrinsicUpdateHandler
 ) => Promise<string>
 
 type BucketExtrinsicSubmitter = (
@@ -505,8 +504,7 @@ export class DidCommRepository {
   async createNamespace(
     namespaceName: string,
     ownerAddress?: string,
-    onUpdate?: ExtrinsicUpdateHandler,
-    category?: string
+    onUpdate?: ExtrinsicUpdateHandler
   ): Promise<CreateNamespaceResult> {
     const trimmedName = namespaceName.trim()
     if (!trimmedName) {
@@ -522,7 +520,7 @@ export class DidCommRepository {
       throw new Error("Unable to resolve chain endpoint for extrinsic submission")
     }
 
-    const txHash = await this.submitExtrinsic(endpoint, trimmedName, ownerAddress, onUpdate, category?.trim())
+    const txHash = await this.submitExtrinsic(endpoint, trimmedName, ownerAddress, onUpdate)
     return {
       txHash,
       method: "buckets.createNamespace"
@@ -849,8 +847,7 @@ async function submitBucketsCreateNamespaceExtrinsic(
   endpoint: string,
   namespaceName: string,
   ownerAddress: string,
-  onUpdate?: ExtrinsicUpdateHandler,
-  category?: string
+  onUpdate?: ExtrinsicUpdateHandler
 ): Promise<string> {
   const [{ ApiPromise, WsProvider }, { web3FromAddress }] = await Promise.all([
     import("@polkadot/api"),
@@ -871,7 +868,7 @@ async function submitBucketsCreateNamespaceExtrinsic(
     const injector = await web3FromAddress(ownerAddress)
     const metadataInput = {
       name: utf8ToHexBytes(namespaceName),
-      category: category ? utf8ToHexBytes(category) : null,
+      category: null,
       schemaUri: null,
       properties: {}
     }
