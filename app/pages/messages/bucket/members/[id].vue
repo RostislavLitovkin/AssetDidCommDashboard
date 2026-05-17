@@ -21,6 +21,18 @@ function toMemberRole(value: unknown): MemberRole {
   return candidate === "contributor" ? "contributor" : "admin"
 }
 
+const bucketId = computed(() => {
+  const rawParam = route.params.id
+  const rawQuery = route.query.bucketId
+  const raw = Array.isArray(rawParam) ? (rawParam[0] ?? "") : (rawParam ?? rawQuery ?? "")
+
+  try {
+    return decodeURIComponent(String(raw)).trim()
+  } catch {
+    return String(raw).trim()
+  }
+})
+
 const role = ref<MemberRole>(toMemberRole(route.query.role))
 const namespaceId = ref("")
 const memberAddress = ref("")
