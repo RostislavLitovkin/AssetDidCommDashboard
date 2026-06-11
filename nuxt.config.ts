@@ -20,8 +20,7 @@ export default defineNuxtConfig({
         "wss://xcavate-paseo.api.onfinality.io/public-ws",
       subqueryIndexerUrl:
         process.env.NUXT_PUBLIC_SUBQUERY_INDEXER_URL ||
-        "https://index-api.onfinality.io/sq/7396860564255539200/xcavate-indexer",
-      subquerySchemaCid: process.env.NUXT_PUBLIC_SUBQUERY_SCHEMA_CID || "QmSJWayuSumbFwM6UyCN6zJ8mHRFqy3YTsotg18gaz86NX",
+        "https://indexer.realxmarket.io/",
       pinataJwt: process.env.NUXT_PUBLIC_PINATA_JWT || "",
       pinataApiKey: process.env.NUXT_PUBLIC_PINATA_API_KEY || "",
       pinataApiSecret: process.env.NUXT_PUBLIC_PINATA_API_SECRET || "",
