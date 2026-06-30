@@ -1,4 +1,4 @@
-const DEFAULT_ENDPOINT = "wss://xcavate-paseo.api.onfinality.io/public-ws"
+const DEFAULT_ENDPOINT = "wss://xcavate-solochain.api.onfinality.io/public-ws"
 
 type JsonRpcSuccess<T> = {
   jsonrpc: "2.0"

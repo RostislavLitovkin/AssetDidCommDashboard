@@ -54,7 +54,7 @@ export const useSessionStore = defineStore("session", {
       walletStatus: (stored ? "connected" : "disconnected") as WalletStatus,
       accountAddress: stored?.address ?? "",
       providerName: stored?.provider ?? "",
-      networkEndpoint: "wss://xcavate-paseo.api.onfinality.io/public-ws"
+      networkEndpoint: "wss://xcavate-solochain.api.onfinality.io/public-ws"
     }
   },
   actions: {
