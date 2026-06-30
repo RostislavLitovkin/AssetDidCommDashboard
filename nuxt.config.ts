@@ -17,7 +17,7 @@ export default defineNuxtConfig({
     public: {
       xcavateWsEndpoint:
         process.env.NUXT_PUBLIC_XCAVATE_WS_ENDPOINT ||
-        "wss://xcavate-paseo.api.onfinality.io/public-ws",
+        "wss://xcavate-solochain.api.onfinality.io/public-ws",
       subqueryIndexerUrl:
         process.env.NUXT_PUBLIC_SUBQUERY_INDEXER_URL ||
         "https://indexer.realxmarket.io/",
