@@ -1,7 +1,7 @@
 import { ApiPromise, WsProvider } from '@polkadot/api';
 
 async function main() {
-  const provider = new WsProvider('wss://xcavate-paseo.api.onfinality.io/public-ws');
+  const provider = new WsProvider('wss://xcavate-solochain.api.onfinality.io/public-ws');
   const api = await ApiPromise.create({ provider });
 
   const submitCallArgs = api.tx.did.submitDidCall.meta.args;
