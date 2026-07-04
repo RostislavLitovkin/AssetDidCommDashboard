@@ -60,7 +60,12 @@ const didCommRepository = new DidCommRepository(
     apiKey: asOptionalString(config.public.pinataApiKey),
     apiSecret: asOptionalString(config.public.pinataApiSecret),
     publicGateway: asOptionalString(config.public.pinataGateway)
-  }
+  },
+  undefined,
+  undefined,
+  undefined,
+  String(config.public.subqueryIndexerUrl || "")
+)
 )
 
 const indexerUrl = computed(() => String(config.public.subqueryIndexerUrl || ""))

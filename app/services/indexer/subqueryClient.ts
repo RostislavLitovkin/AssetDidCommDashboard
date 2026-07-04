@@ -5,7 +5,7 @@
  * so the UI never needs to touch raw RPC storage reads.
  */
 
-// ── Response shapes ────────────────────────────────────────────────
+// -- Response shapes --
 
 export interface IndexedBucket {
   id: string
@@ -47,7 +47,36 @@ export interface IndexedBucketDetail {
   messages: IndexedMessage[]
 }
 
-// ── GraphQL helper ─────────────────────────────────────────────────
+export interface IndexedNamespace {
+  id: string
+  name: string | null
+  owner: string | null
+  manager: string | null
+  createdBlock: number
+}
+
+export interface IndexedNamespaceManager {
+  id: string
+  namespaceId: string
+  managerAddress: string
+  addedBlock: number
+}
+
+export interface IndexedBucketWithCounts {
+  id: string
+  namespaceId: number
+  bucketId: number
+  creator: string | null
+  name: string | null
+  category: string | null
+  isWritable: boolean
+  encryptionKey: string | null
+  createdBlock: number
+  adminCount: number
+  contributorCount: number
+}
+
+// -- GraphQL helper --
 
 async function gql<T>(endpoint: string, query: string, variables?: Record<string, unknown>): Promise<T> {
   const res = await fetch(endpoint, {
@@ -73,7 +102,7 @@ async function gql<T>(endpoint: string, query: string, variables?: Record<string
   return json.data
 }
 
-// ── Public queries ─────────────────────────────────────────────────
+// -- Public queries --
 
 const BUCKET_DETAIL_QUERY = `
 query BucketDetail($id: String!) {
@@ -195,6 +224,224 @@ export async function fetchIndexedMessagesByTag(
 
     if (!data.messages.pageInfo.hasNextPage) break
     after = data.messages.pageInfo.endCursor ?? null
+    if (!after) break
+  }
+
+  return all
+}
+
+// -- Namespace queries --
+
+const NAMESPACES_QUERY = `
+query Namespaces($after: Cursor, $first: Int, $orderBy: NamespaceOrdering) {
+  namespaces(orderBy: $orderBy, after: $after, first: $first) {
+    nodes { id name owner manager createdBlock }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+`
+
+export async function fetchIndexedNamespaces(
+  endpoint: string,
+  orderBy?: string
+): Promise<IndexedNamespace[]> {
+  const all: IndexedNamespace[] = []
+  let after: string | null = null
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    interface Raw {
+      namespaces: {
+        nodes: IndexedNamespace[]
+        pageInfo: { hasNextPage: boolean; endCursor: string | null }
+      }
+    }
+
+    const vars: Record<string, unknown> = {}
+    if (orderBy) vars.orderBy = orderBy
+    if (after) vars.after = after
+
+    const data = await gql<Raw>(endpoint, NAMESPACES_QUERY, vars)
+    all.push(...data.namespaces.nodes)
+
+    if (!data.namespaces.pageInfo.hasNextPage) break
+    after = data.namespaces.pageInfo.endCursor ?? null
+    if (!after) break
+  }
+
+  return all
+}
+
+const NAMESPACE_BY_ID_QUERY = `
+query NamespaceById($id: String!) {
+  namespace(id: $id) {
+    id name owner manager createdBlock
+  }
+}
+`
+
+export async function fetchIndexedNamespaceById(
+  endpoint: string,
+  namespaceId: string
+): Promise<IndexedNamespace | null> {
+  interface Raw {
+    namespace: IndexedNamespace | null
+  }
+
+  const data = await gql<Raw>(endpoint, NAMESPACE_BY_ID_QUERY, { id: namespaceId })
+  return data.namespace
+}
+
+const NAMESPACE_MANAGERS_QUERY = `
+query NamespaceManagers($namespaceId: String!, $after: Cursor, $first: Int) {
+  namespaceManagers(filter: { namespaceId: { equalTo: $namespaceId } }, orderBy: ADDED_BLOCK_ASC, after: $after, first: $first) {
+    nodes { id namespaceId managerAddress addedBlock }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+`
+
+export async function fetchIndexedNamespaceManagers(
+  endpoint: string,
+  namespaceId: string
+): Promise<IndexedNamespaceManager[]> {
+  const all: IndexedNamespaceManager[] = []
+  let after: string | null = null
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    interface Raw {
+      namespaceManagers: {
+        nodes: IndexedNamespaceManager[]
+        pageInfo: { hasNextPage: boolean; endCursor: string | null }
+      }
+    }
+
+    const vars: Record<string, unknown> = { namespaceId }
+    if (after) vars.after = after
+
+    const data = await gql<Raw>(endpoint, NAMESPACE_MANAGERS_QUERY, vars)
+    all.push(...data.namespaceManagers.nodes)
+
+    if (!data.namespaceManagers.pageInfo.hasNextPage) break
+    after = data.namespaceManagers.pageInfo.endCursor ?? null
+    if (!after) break
+  }
+
+  return all
+}
+
+const BUCKETS_BY_NAMESPACE_QUERY = `
+query BucketsByNamespace($namespaceId: String!, $after: Cursor, $first: Int) {
+  buckets(filter: { namespaceId: { equalTo: $namespaceId } }, orderBy: CREATED_BLOCK_ASC, after: $after, first: $first) {
+    nodes { id namespaceId bucketId creator name category isWritable encryptionKey createdBlock adminCount contributorCount }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+`
+
+export async function fetchIndexedBucketsByNamespace(
+  endpoint: string,
+  namespaceId: string
+): Promise<IndexedBucketWithCounts[]> {
+  const all: IndexedBucketWithCounts[] = []
+  let after: string | null = null
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    interface Raw {
+      buckets: {
+        nodes: IndexedBucketWithCounts[]
+        pageInfo: { hasNextPage: boolean; endCursor: string | null }
+      }
+    }
+
+    const vars: Record<string, unknown> = { namespaceId }
+    if (after) vars.after = after
+
+    const data = await gql<Raw>(endpoint, BUCKETS_BY_NAMESPACE_QUERY, vars)
+    all.push(...data.buckets.nodes)
+
+    if (!data.buckets.pageInfo.hasNextPage) break
+    after = data.buckets.pageInfo.endCursor ?? null
+    if (!after) break
+  }
+
+  return all
+}
+
+const BUCKETS_FILTERED_QUERY = `
+query BucketsFiltered($filter: BucketFilter!, $after: Cursor, $first: Int) {
+  buckets(filter: $filter, orderBy: CREATED_BLOCK_ASC, after: $after, first: $first) {
+    nodes { id namespaceId bucketId creator name category isWritable encryptionKey createdBlock adminCount contributorCount }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+`
+
+export async function fetchIndexedBucketsFiltered(
+  endpoint: string,
+  filter: Record<string, unknown>
+): Promise<IndexedBucketWithCounts[]> {
+  const all: IndexedBucketWithCounts[] = []
+  let after: string | null = null
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    interface Raw {
+      buckets: {
+        nodes: IndexedBucketWithCounts[]
+        pageInfo: { hasNextPage: boolean; endCursor: string | null }
+      }
+    }
+
+    const vars: Record<string, unknown> = { filter }
+    if (after) vars.after = after
+
+    const data = await gql<Raw>(endpoint, BUCKETS_FILTERED_QUERY, vars)
+    all.push(...data.buckets.nodes)
+
+    if (!data.buckets.pageInfo.hasNextPage) break
+    after = data.buckets.pageInfo.endCursor ?? null
+    if (!after) break
+  }
+
+  return all
+}
+
+const NAMESPACES_BY_ADDRESS_QUERY = `
+query NamespacesByAddress($address: String!, $after: Cursor, $first: Int) {
+  namespaces(filter: { owner: { equalTo: $address } }, orderBy: CREATED_BLOCK_ASC, after: $after, first: $first) {
+    nodes { id name owner manager createdBlock }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+`
+
+export async function fetchIndexedNamespacesByAddress(
+  endpoint: string,
+  address: string
+): Promise<IndexedNamespace[]> {
+  const all: IndexedNamespace[] = []
+  let after: string | null = null
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    interface Raw {
+      namespaces: {
+        nodes: IndexedNamespace[]
+        pageInfo: { hasNextPage: boolean; endCursor: string | null }
+      }
+    }
+
+    const vars: Record<string, unknown> = { address }
+    if (after) vars.after = after
+
+    const data = await gql<Raw>(endpoint, NAMESPACES_BY_ADDRESS_QUERY, vars)
+    all.push(...data.namespaces.nodes)
+
+    if (!data.namespaces.pageInfo.hasNextPage) break
+    after = data.namespaces.pageInfo.endCursor ?? null
     if (!after) break
   }
 

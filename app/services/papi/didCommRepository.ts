@@ -1,5 +1,20 @@
 import { PapiClient } from "./client"
 import { PinataStorageAdapter } from "../storage/pinataStorageAdapter"
+import {
+  fetchIndexedNamespaces,
+  fetchIndexedNamespaceById,
+  fetchIndexedNamespaceManagers,
+  fetchIndexedBucketsByNamespace,
+  fetchIndexedBucketsFiltered,
+  fetchIndexedMessages,
+  fetchIndexedBucketDetail,
+  fetchIndexedNamespacesByAddress,
+  type IndexedNamespace,
+  type IndexedBucketWithCounts,
+  type IndexedMessage,
+  type IndexedNamespaceManager,
+  type IndexedBucketMember
+} from "../indexer/subqueryClient"
 
 type PapiRpcClient = {
   rpc(method: string, params?: unknown[]): Promise<unknown>
@@ -177,6 +192,7 @@ export class DidCommRepository {
   private submitRemoveNamespaceManagerExtrinsic: NamespaceMemberExtrinsicSubmitter
   private submitBucketKeyRotationBatchExtrinsic: BucketKeyRotationBatchExtrinsicSubmitter
   private pinataConfig?: PinataConfig
+  private indexerUrl?: string
 
   constructor(
     client: PapiRpcClient = new PapiClient(),
@@ -195,7 +211,8 @@ export class DidCommRepository {
     pinataConfig?: PinataConfig,
     submitBucketKeyRotationBatchExtrinsic: BucketKeyRotationBatchExtrinsicSubmitter = submitBucketsBatchKeyRotationExtrinsic,
     submitAddNamespaceManagerExtrinsic: NamespaceMemberExtrinsicSubmitter = submitBucketsAddNamespaceManagerExtrinsic,
-    submitRemoveNamespaceManagerExtrinsic: NamespaceMemberExtrinsicSubmitter = submitBucketsRemoveNamespaceManagerExtrinsic
+    submitRemoveNamespaceManagerExtrinsic: NamespaceMemberExtrinsicSubmitter = submitBucketsRemoveNamespaceManagerExtrinsic,
+    indexerUrl?: string
   ) {
     this.client = client
     this.submitExtrinsic = submitExtrinsic
@@ -214,9 +231,26 @@ export class DidCommRepository {
     this.submitRemoveNamespaceManagerExtrinsic = submitRemoveNamespaceManagerExtrinsic
     this.submitBucketKeyRotationBatchExtrinsic = submitBucketKeyRotationBatchExtrinsic
     this.pinataConfig = sanitizePinataConfig(pinataConfig)
+    this.indexerUrl = indexerUrl
   }
 
   async fetchNamespaces(): Promise<BucketNamespace[]> {
+    // Try indexer first
+    if (this.indexerUrl) {
+      try {
+        const indexed = await fetchIndexedNamespaces(this.indexerUrl)
+        if (indexed.length > 0) {
+          return indexed.map((n) => ({
+            id: n.id,
+            name: n.name ?? `Namespace ${n.id}`,
+            raw: n
+          }))
+        }
+      } catch {
+        // Fallback to RPC
+      }
+    }
+
     const endpoint = this.client.getEndpoint?.()
     if (!endpoint) {
       throw new Error("Unable to resolve chain endpoint for buckets.namespaces storage query")
@@ -230,6 +264,23 @@ export class DidCommRepository {
     const trimmedNamespaceId = namespaceId.trim()
     if (!trimmedNamespaceId) {
       throw new Error("Namespace id is required to query buckets.buckets storage")
+    }
+
+    // Try indexer first
+    if (this.indexerUrl) {
+      try {
+        const indexed = await fetchIndexedBucketsByNamespace(this.indexerUrl, trimmedNamespaceId)
+        if (indexed.length > 0) {
+          return indexed.map((b) => ({
+            id: b.id,
+            name: b.name ?? `Bucket ${b.bucketId}`,
+            namespaceId: String(b.namespaceId),
+            raw: b
+          }))
+        }
+      } catch {
+        // Fallback to RPC
+      }
     }
 
     const endpoint = this.client.getEndpoint?.()
@@ -247,6 +298,23 @@ export class DidCommRepository {
       throw new Error("Bucket id is required to query buckets.messages storage")
     }
 
+    // Try indexer first
+    if (this.indexerUrl) {
+      try {
+        const indexed = await fetchIndexedMessages(this.indexerUrl, trimmedBucketId)
+        if (indexed.length > 0) {
+          return indexed.map((m) => ({
+            id: m.id,
+            bucketId: m.bucketId,
+            summary: m.description ?? m.reference ?? `Message ${m.messageId}`,
+            raw: m
+          }))
+        }
+      } catch {
+        // Fallback to RPC
+      }
+    }
+
     const endpoint = this.client.getEndpoint?.()
     if (!endpoint) {
       throw new Error("Unable to resolve chain endpoint for buckets.messages storage query")
@@ -260,6 +328,18 @@ export class DidCommRepository {
     const trimmedBucketId = bucketId.trim()
     if (!trimmedBucketId) {
       throw new Error("Bucket id is required to query buckets.admins storage")
+    }
+
+    // Try indexer first
+    if (this.indexerUrl) {
+      try {
+        const detail = await fetchIndexedBucketDetail(this.indexerUrl, trimmedBucketId)
+        if (detail && detail.admins.length > 0) {
+          return detail.admins.map((a) => a.subjectId)
+        }
+      } catch {
+        // Fallback to RPC
+      }
     }
 
     const endpoint = this.client.getEndpoint?.()
@@ -276,6 +356,18 @@ export class DidCommRepository {
       throw new Error("Bucket id is required to query buckets.contributors storage")
     }
 
+    // Try indexer first
+    if (this.indexerUrl) {
+      try {
+        const detail = await fetchIndexedBucketDetail(this.indexerUrl, trimmedBucketId)
+        if (detail && detail.contributors.length > 0) {
+          return detail.contributors.map((c) => c.subjectId)
+        }
+      } catch {
+        // Fallback to RPC
+      }
+    }
+
     const endpoint = this.client.getEndpoint?.()
     if (!endpoint) {
       throw new Error("Unable to resolve chain endpoint for buckets.contributors storage query")
@@ -288,6 +380,18 @@ export class DidCommRepository {
     const trimmedNamespaceId = namespaceId.trim()
     if (!trimmedNamespaceId) {
       throw new Error("Namespace id is required to query buckets.managers storage")
+    }
+
+    // Try indexer first
+    if (this.indexerUrl) {
+      try {
+        const indexed = await fetchIndexedNamespaceManagers(this.indexerUrl, trimmedNamespaceId)
+        if (indexed.length > 0) {
+          return indexed.map((m) => m.managerAddress)
+        }
+      } catch {
+        // Fallback to RPC
+      }
     }
 
     const endpoint = this.client.getEndpoint?.()
@@ -372,6 +476,24 @@ export class DidCommRepository {
     const trimmedBucketId = bucketId.trim()
     if (!trimmedBucketId) {
       throw new Error("Bucket id is required to query buckets.buckets storage")
+    }
+
+    // Try indexer first
+    if (this.indexerUrl) {
+      try {
+        const filter = { bucketId: { equalTo: trimmedBucketId } }
+        const indexed = await fetchIndexedBucketsFiltered(this.indexerUrl, filter)
+        if (indexed.length > 0) {
+          return indexed.map((b) => ({
+            id: b.id,
+            name: b.name ?? `Bucket ${b.bucketId}`,
+            namespaceId: String(b.namespaceId),
+            raw: b
+          }))[0]
+        }
+      } catch {
+        // Fallback to RPC
+      }
     }
 
     const endpoint = this.client.getEndpoint?.()

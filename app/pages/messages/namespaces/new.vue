@@ -2,15 +2,40 @@
 import { DidCommRepository, type ExtrinsicUpdate } from "../../../services/papi/didCommRepository"
 import WalletConnectPrompt from "../../../components/common/WalletConnectPrompt.vue"
 import { computed, ref } from "vue"
-import { useNuxtApp } from "nuxt/app"
+import { useNuxtApp, useRuntimeConfig } from "nuxt/app"
 import { useOperationsStore } from "../../../stores/operations"
 import { useSessionStore } from "../../../stores/session"
 
 const { $papiClient } = useNuxtApp()
+const config = useRuntimeConfig()
 const session = useSessionStore()
+const asOptionalString = (value: unknown): string | undefined => {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined
+}
 const operations = useOperationsStore()
 const didCommRepository = new DidCommRepository(
-  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string }
+  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string },
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  {
+    jwt: asOptionalString(config.public.pinataJwt),
+    apiKey: asOptionalString(config.public.pinataApiKey),
+    apiSecret: asOptionalString(config.public.pinataApiSecret),
+    publicGateway: asOptionalString(config.public.pinataGateway)
+  },
+  undefined,
+  undefined,
+  undefined,
+  String(config.public.subqueryIndexerUrl || "")
 )
 
 const isWalletConnected = computed(() => session.walletStatus === "connected" && Boolean(session.accountAddress))
