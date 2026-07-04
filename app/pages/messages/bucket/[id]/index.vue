@@ -43,7 +43,12 @@ const didCommRepository = new DidCommRepository(
     apiKey: asOptionalString(runtimeConfig.public.pinataApiKey),
     apiSecret: asOptionalString(runtimeConfig.public.pinataApiSecret),
     publicGateway: asOptionalString(runtimeConfig.public.pinataGateway)
-  }
+  },
+  undefined,
+  undefined,
+  undefined,
+  String(runtimeConfig.public.subqueryIndexerUrl || "")
+)
 )
 
 type DeliveryState = "sending" | "sent" | "failed"

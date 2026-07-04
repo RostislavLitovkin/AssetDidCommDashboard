@@ -1,18 +1,43 @@
 <script setup lang="ts">
 import { DidCommRepository, type BucketNamespace } from "../../services/papi/didCommRepository"
 import LoadingBar from "../../components/common/LoadingBar.vue"
-import { useNuxtApp } from "nuxt/app"
+import { useNuxtApp, useRuntimeConfig } from "nuxt/app"
 import { useKeys } from "../../composables/useKeys"
 import { useOperationsStore } from "../../stores/operations"
 import { useSessionStore } from "../../stores/session"
 import { computed, onMounted, ref } from "vue"
 
 const { $papiClient } = useNuxtApp()
+const config = useRuntimeConfig()
 const keys = useKeys()
 const operations = useOperationsStore()
 const session = useSessionStore()
+const asOptionalString = (value: unknown): string | undefined => {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined
+}
 const didCommRepository = new DidCommRepository(
-  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string }
+  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string },
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  {
+    jwt: asOptionalString(config.public.pinataJwt),
+    apiKey: asOptionalString(config.public.pinataApiKey),
+    apiSecret: asOptionalString(config.public.pinataApiSecret),
+    publicGateway: asOptionalString(config.public.pinataGateway)
+  },
+  undefined,
+  undefined,
+  undefined,
+  String(config.public.subqueryIndexerUrl || "")
 )
 const isWalletConnected = computed(() => session.walletStatus === "connected" && Boolean(session.accountAddress))
 const namespaces = ref<BucketNamespace[]>([])

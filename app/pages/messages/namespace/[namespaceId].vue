@@ -10,10 +10,35 @@ import { useSessionStore } from "../../../stores/session"
 
 const route = useRoute()
 const { $papiClient } = useNuxtApp()
+const config = useRuntimeConfig()
 const session = useSessionStore()
+const asOptionalString = (value: unknown): string | undefined => {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined
+}
 const { formatAddress, addressesEqual } = useAddress()
 const didCommRepository = new DidCommRepository(
-  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string }
+  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string },
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  {
+    jwt: asOptionalString(config.public.pinataJwt),
+    apiKey: asOptionalString(config.public.pinataApiKey),
+    apiSecret: asOptionalString(config.public.pinataApiSecret),
+    publicGateway: asOptionalString(config.public.pinataGateway)
+  },
+  undefined,
+  undefined,
+  undefined,
+  String(config.public.subqueryIndexerUrl || "")
 )
 
 const namespaceId = computed(() => {

@@ -9,10 +9,35 @@ import { ShieldCheck, UserPlus } from "lucide-vue-next"
 
 const route = useRoute()
 const { $papiClient } = useNuxtApp()
+const runtimeConfig = useRuntimeConfig()
 const session = useSessionStore()
+const asOptionalString = (value: unknown): string | undefined => {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined
+}
 const operations = useOperationsStore()
 const didCommRepository = new DidCommRepository(
-  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string }
+  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string },
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  {
+    jwt: asOptionalString(runtimeConfig.public.pinataJwt),
+    apiKey: asOptionalString(runtimeConfig.public.pinataApiKey),
+    apiSecret: asOptionalString(runtimeConfig.public.pinataApiSecret),
+    publicGateway: asOptionalString(runtimeConfig.public.pinataGateway)
+  },
+  undefined,
+  undefined,
+  undefined,
+  String(runtimeConfig.public.subqueryIndexerUrl || "")
 )
 
 const namespaceId = computed(() => {
