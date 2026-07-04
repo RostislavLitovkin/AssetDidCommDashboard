@@ -24,6 +24,12 @@ realXmessage dashboard for Asset DIDComm workflows on Xcavate Substrate.
 ## Environment
 - Set `.env` for local development.
 
+## Native host key injection
+Native shells (e.g. .NET MAUI `HybridWebView`) can inject the user's X25519
+secret JWK via `window.assetDidComm.injectX25519Key(...)` instead of manual
+entry. See [csharp-injection-guide.md](./csharp-injection-guide.md) for the
+full C# integration guide.
+
 ## Quality Gates
 - `npm run lint`
 - `npm run typecheck`
