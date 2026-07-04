@@ -66,7 +66,6 @@ const didCommRepository = new DidCommRepository(
   undefined,
   String(config.public.subqueryIndexerUrl || "")
 )
-)
 
 const indexerUrl = computed(() => String(config.public.subqueryIndexerUrl || ""))
 const pinataGateway = computed(() => {
