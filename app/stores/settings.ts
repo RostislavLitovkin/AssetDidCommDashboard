@@ -151,7 +151,7 @@ export const useSettingsStore = defineStore("settings", {
         window.localStorage.setItem(SETTINGS_STORAGE_KEY, String(nextPrefix))
       }
     },
-    setX25519SecretJwk(value: unknown): void {
+    setX25519SecretJwk(value: unknown, persist: boolean = true): void {
       const normalized = normalizeX25519SecretJwk(value)
 
       if (!normalized) {
@@ -161,7 +161,11 @@ export const useSettingsStore = defineStore("settings", {
       this.x25519SecretJwk = normalized
 
       if (import.meta.client) {
-        window.localStorage.setItem(X25519_SECRET_JWK_STORAGE_KEY, JSON.stringify(normalized))
+        if (persist) {
+          window.localStorage.setItem(X25519_SECRET_JWK_STORAGE_KEY, JSON.stringify(normalized))
+        } else {
+          window.localStorage.removeItem(X25519_SECRET_JWK_STORAGE_KEY)
+        }
       }
     },
     clearX25519SecretJwk(): void {

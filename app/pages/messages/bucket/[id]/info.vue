@@ -50,7 +50,6 @@ const didCommRepository = new DidCommRepository(
   undefined,
   String(runtimeConfig.public.subqueryIndexerUrl || "")
 )
-)
 
 type DeliveryState = "sending" | "sent" | "failed"
 
