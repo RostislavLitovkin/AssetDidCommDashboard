@@ -53,4 +53,36 @@ export class WalletExtensionProvider {
       provider: selected.source
     }
   }
+
+  /**
+   * Auto-connect: restore the previously connected address from storedSession,
+   * or fall back to the first available account. Never shows a popup.
+   */
+  async autoConnect(storedSession: { address: string; provider: string } | null): Promise<WalletSession | null> {
+    try {
+      await this.ensureEnabled()
+    } catch {
+      return null
+    }
+
+    // 1) Try to restore the previously connected address
+    if (storedSession && storedSession.address) {
+      try {
+        return await this.connectToAddress(storedSession.address)
+      } catch {
+        // Address no longer available — fall through to first account
+      }
+    }
+
+    // 2) Fall back to the first available account
+    const options = await this.listAccounts()
+    if (!options.length) {
+      return null
+    }
+
+    return {
+      address: options[0].address,
+      provider: options[0].source
+    }
+  }
 }
