@@ -11,20 +11,26 @@ export default defineNuxtPlugin(async () => {
   const session = useSessionStore()
   const operations = useOperationsStore()
 
-  // Only auto-connect when the wallet is not already connected
-  if (session.walletStatus !== "connected") {
-    const storedSession = session.accountAddress
-      ? { address: session.accountAddress, provider: session.providerName }
-      : null
+  // Always attempt auto-connect on page load.
+  // - Returning user: restores the previously connected address
+  // - First-time user: connects to the first available account
+  const storedSession = session.accountAddress
+    ? { address: session.accountAddress, provider: session.providerName }
+    : null
 
-    try {
-      const walletSession = await provider.autoConnect(storedSession)
-      if (walletSession) {
-        session.setConnected(walletSession.address, walletSession.provider)
-        operations.add("wallet", walletSession.address, "success", "Wallet auto-connected")
-      }
-    } catch {
-      // Auto-connect failed silently — user can still connect manually
+  try {
+    const walletSession = await provider.autoConnect(storedSession)
+    if (walletSession) {
+      session.setConnected(walletSession.address, walletSession.provider)
+      operations.add("wallet", walletSession.address, "success", "Wallet auto-connected")
+    } else {
+      // Extension unavailable or no accounts — reset stale session
+      session.disconnect()
+      operations.add("wallet", "session", "error", "Wallet extension unavailable")
     }
+  } catch {
+    // Auto-connect failed — reset stale session
+    session.disconnect()
+    operations.add("wallet", "session", "error", "Wallet connection failed")
   }
 })
