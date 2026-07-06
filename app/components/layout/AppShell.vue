@@ -9,6 +9,7 @@ import { useSettingsStore } from "../../stores/settings"
 const wallet = useWallet()
 const { formatAddress } = useAddress()
 const settings = useSettingsStore()
+const route = useRoute()
 
 settings.initialize()
 
@@ -30,6 +31,12 @@ const connectedAddressLabel = computed(() => formatAddress(wallet.accountAddress
 const activeX25519KeyKid = computed(() => settings.x25519SecretJwk?.kid || "")
 const activeX25519PublicX = computed(() => settings.x25519SecretJwk?.x || "")
 const hasActiveX25519Key = computed(() => Boolean(settings.x25519SecretJwk))
+const isHeaderVisible = computed(() => {
+  const value = route.query.isHeaderVisible
+  const normalizedValue = Array.isArray(value) ? value[0] : value
+
+  return normalizedValue !== "false"
+})
 const formattedAccounts = computed(() =>
   accounts.value.map((account) => ({
     ...account,
@@ -155,7 +162,7 @@ async function copyX25519PublicKey() {
 
 <template>
   <main class="app-shell-root">
-    <aside class="app-shell-sidebar" :class="{ 'topbar-expanded': isTopbarExpanded }">
+    <aside v-if="isHeaderVisible" class="app-shell-sidebar" :class="{ 'topbar-expanded': isTopbarExpanded }">
       <div class="sidebar-header">
         <NuxtLink class="sidebar-brand" to="/">
           <h2 style="margin: 0; font-size: 18px">realXmessage</h2>
@@ -273,7 +280,7 @@ async function copyX25519PublicKey() {
       </div>
     </aside>
 
-    <section class="app-shell-content">
+    <section class="app-shell-content" :class="{ 'header-hidden': !isHeaderVisible }">
       <div class="container">
         <slot />
       </div>
@@ -377,6 +384,10 @@ async function copyX25519PublicKey() {
     padding: 16px;
     padding-top: calc(56px + 16px);
     overflow: visible;
+  }
+
+  .app-shell-content.header-hidden {
+    padding-top: 16px;
   }
 }
 
