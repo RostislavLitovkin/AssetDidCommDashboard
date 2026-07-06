@@ -11,26 +11,37 @@ export default defineNuxtPlugin(async () => {
   const session = useSessionStore()
   const operations = useOperationsStore()
 
-  // Always attempt auto-connect on page load.
-  // - Returning user: restores the previously connected address
-  // - First-time user: connects to the first available account
-  const storedSession = session.accountAddress
-    ? { address: session.accountAddress, provider: session.providerName }
-    : null
+  // Wait for Polkadot.js extension to inject accounts, then auto-connect
+  const connectWhenReady = async (): Promise<boolean> => {
+    try {
+      const accounts = await provider.listAccounts()
+      if (!accounts.length) {
+        return false
+      }
 
-  try {
-    const walletSession = await provider.autoConnect(storedSession)
-    if (walletSession) {
+      // Prefer the previously connected address, otherwise use the first account
+      const targetAddress = session.accountAddress || accounts[0].address
+      const walletSession = await provider.connectToAddress(targetAddress)
+
       session.setConnected(walletSession.address, walletSession.provider)
       operations.add("wallet", walletSession.address, "success", "Wallet auto-connected")
-    } else {
-      // Extension unavailable or no accounts — reset stale session
-      session.disconnect()
-      operations.add("wallet", "session", "error", "Wallet extension unavailable")
+      return true
+    } catch {
+      return false
     }
-  } catch {
-    // Auto-connect failed — reset stale session
+  }
+
+  // Poll until extension injects accounts (max 5 seconds)
+  let connected = false
+  for (let i = 0; i < 50 && !connected; i++) {
+    connected = await connectWhenReady()
+    if (!connected) {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+  }
+
+  if (!connected) {
     session.disconnect()
-    operations.add("wallet", "session", "error", "Wallet connection failed")
+    operations.add("wallet", "session", "error", "Wallet extension unavailable")
   }
 })

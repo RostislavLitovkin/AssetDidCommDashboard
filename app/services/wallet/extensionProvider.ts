@@ -57,11 +57,26 @@ export class WalletExtensionProvider {
   /**
    * Auto-connect: restore the previously connected address from storedSession,
    * or fall back to the first available account. Never shows a popup.
+   * Retries with a short delay if the extension hasn't finished injecting yet.
    */
-  async autoConnect(storedSession: { address: string; provider: string } | null): Promise<WalletSession | null> {
+  async autoConnect(storedSession: { address: string; provider: string } | null, retries = 3): Promise<WalletSession | null> {
+    let extensions: Awaited<ReturnType<typeof web3Enable>>
+
     try {
-      await this.ensureEnabled()
+      extensions = await web3Enable("realXmessage Dashboard")
     } catch {
+      if (retries > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 500))
+        return this.autoConnect(storedSession, retries - 1)
+      }
+      return null
+    }
+
+    if (!extensions.length) {
+      if (retries > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 500))
+        return this.autoConnect(storedSession, retries - 1)
+      }
       return null
     }
 
