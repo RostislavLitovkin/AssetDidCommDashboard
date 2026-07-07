@@ -32,11 +32,20 @@ const activeX25519KeyKid = computed(() => settings.x25519SecretJwk?.kid || "")
 const activeX25519PublicX = computed(() => settings.x25519SecretJwk?.x || "")
 const hasActiveX25519Key = computed(() => Boolean(settings.x25519SecretJwk))
 const isHeaderVisible = computed(() => {
+  const cookie = useCookie('rxm.isHeaderVisible')
+  const cookieValue = cookie.value
+
+  // Cookie takes priority (persistent across navigations)
+  if (cookieValue === 'false') return false
+  if (cookieValue === 'true') return true
+
+  // Fall back to query param (one-time override)
   const value = route.query.isHeaderVisible
   const normalizedValue = Array.isArray(value) ? value[0] : value
 
   return normalizedValue !== "false"
 })
+
 const formattedAccounts = computed(() =>
   accounts.value.map((account) => ({
     ...account,
