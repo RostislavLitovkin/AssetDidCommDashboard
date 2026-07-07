@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { DidCommRepository, type BucketRecord } from "../../../services/papi/didCommRepository"
 import LoadingBar from "../../../components/common/LoadingBar.vue"
+import SkeletonCard from "../../../components/common/SkeletonCard.vue"
 import WalletConnectPrompt from "../../../components/common/WalletConnectPrompt.vue"
 import { Trash2, UserPlus, Users } from "lucide-vue-next"
 import { useAddress } from "../../../composables/useAddress"
@@ -161,7 +162,7 @@ onMounted(async () => {
         </div>
       </div>
 
-      <LoadingBar v-if="bucketsLoading" label="Loading buckets..." />
+      <SkeletonCard v-if="bucketsLoading" :count="3" :lines="2" />
 
       <p v-if="bucketsError" style="margin: 0; color: var(--status-error)">{{ bucketsError }}</p>
       <div v-else class="stack" style="gap: 12px">
@@ -193,7 +194,7 @@ onMounted(async () => {
         </NuxtLink>
       </div>
 
-      <LoadingBar v-if="managersLoading" label="Loading managers..." />
+      <SkeletonCard v-if="managersLoading" :count="3" :lines="1" />
       <p v-if="managersError" style="margin: 0; color: var(--status-error)">{{ managersError }}</p>
 
       <ul v-if="managers.length && !managersLoading" class="bucket-members-list"

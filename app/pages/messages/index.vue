@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { DidCommRepository, type BucketNamespace } from "../../services/papi/didCommRepository"
-import LoadingBar from "../../components/common/LoadingBar.vue"
+import SkeletonCard from "../../components/common/SkeletonCard.vue"
 import { useNuxtApp, useRuntimeConfig } from "nuxt/app"
 import { useKeys } from "../../composables/useKeys"
 import { useOperationsStore } from "../../stores/operations"
@@ -97,14 +97,16 @@ onMounted(async () => {
         </div>
       </div>
 
-      <LoadingBar v-if="namespacesLoading" label="Loading namespaces..." />
+      <div v-if="namespacesLoading" class="stack" style="gap: 12px">
+        <SkeletonCard :count="3" :lines="2" />
+      </div>
 
-      <p v-if="namespaceError" style="margin: 0; color: var(--status-error)">{{ namespaceError }}</p>
-      <p v-else-if="!namespaces.length && !namespacesLoading" class="muted" style="margin: 0">
+      <p v-else-if="namespaceError" style="margin: 0; color: var(--status-error)">{{ namespaceError }}</p>
+      <p v-else-if="!namespaces.length" class="muted" style="margin: 0">
         No namespaces found.
       </p>
 
-      <div v-else-if="namespaces.length" class="stack" style="gap: 12px">
+      <div v-else class="stack" style="gap: 12px">
         <NuxtLink
           v-for="namespace in namespaces"
           :key="namespace.id"

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { DidCommRepository, type BucketMessage, type BucketRecord, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
 import LoadingBar from "../../../../components/common/LoadingBar.vue"
+import SkeletonCard from "../../../../components/common/SkeletonCard.vue"
 import { useAddress } from "../../../../composables/useAddress"
 import { Trash2 } from "lucide-vue-next"
 import { hexToU8a } from "@polkadot/util"
@@ -1527,7 +1528,7 @@ function isRemoving(address) {
               Reload
             </button>
           </div>
-          <LoadingBar v-if="bucketLoading" label="Loading metadata..." />
+          <SkeletonCard v-if="bucketLoading" :count="2" :lines="2" />
           <p v-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
 
           <dl v-if="!bucketLoading && !bucketError && bucketMetadata.length" class="bucket-metadata"
@@ -1564,7 +1565,7 @@ function isRemoving(address) {
             </div>
           </div>
 
-          <LoadingBar v-if="bucketLoading" label="Loading members..." />
+          <SkeletonCard v-if="bucketLoading" :count="3" :lines="1" />
           <p v-if="membersError" style="margin: 0; color: var(--status-error)">{{ membersError }}</p>
 
           <ul v-if="allMembers.length" class="bucket-members-list"

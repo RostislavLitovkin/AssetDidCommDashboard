@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import LoadingBar from "../../components/common/LoadingBar.vue"
+import SkeletonCard from "../../components/common/SkeletonCard.vue"
 import WalletConnectPrompt from "../../components/common/WalletConnectPrompt.vue"
 import { computed, onMounted, ref, watch } from "vue"
 import { useNuxtApp, useRuntimeConfig } from "nuxt/app"
@@ -387,7 +388,7 @@ onMounted(() => {
         <div ref="sentinelElement" style="height: 1px; visibility: hidden"></div>
       </div>
 
-        <LoadingBar v-else-if="loading" label="Loading buckets..." />
+        <SkeletonCard v-else-if="loading" :count="3" :lines="2" />
       </template>
     </section>
     </div>
