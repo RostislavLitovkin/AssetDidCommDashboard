@@ -547,7 +547,7 @@ onMounted(async () => {
           </button>
         </div>
 
-        <p v-else class="muted" style="margin: 0">No wallets found.</p>
+        <p v-else class="muted" style="margin: 0; min-height: 68px; display: flex; align-items: center; justify-content: center;">No wallets found.</p>
       </div>
     </div>
   </div>

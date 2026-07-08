@@ -102,7 +102,7 @@ onMounted(async () => {
       </div>
 
       <p v-else-if="namespaceError" style="margin: 0; color: var(--status-error)">{{ namespaceError }}</p>
-      <p v-else-if="!namespaces.length" class="muted" style="margin: 0">
+      <p v-else-if="!namespaces.length" class="muted" style="margin: 0; min-height: 228px; display: flex; align-items: center; justify-content: center;">
         No namespaces found.
       </p>
 

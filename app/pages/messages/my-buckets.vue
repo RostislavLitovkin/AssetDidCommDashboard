@@ -331,8 +331,8 @@ onMounted(() => {
 
       <template v-else>
         <p v-if="error" style="margin: 0; color: var(--status-error)">{{ error }}</p>
-        <p v-else-if="!buckets.length && !loading" class="muted" style="margin: 0">
-          No buckets found for this wallet.
+        <p v-else-if="!buckets.length && !loading" class="muted" style="margin: 0; min-height: 228px; display: flex; align-items: center; justify-content: center;">
+          You do not have access to any buckets.
         </p>
 
         <div v-else-if="buckets.length" class="stack" style="gap: 12px">

@@ -166,9 +166,9 @@ onMounted(async () => {
 
       <p v-if="bucketsError" style="margin: 0; color: var(--status-error)">{{ bucketsError }}</p>
       <div v-else class="stack" style="gap: 12px">
-        <p v-if="!buckets.length && !bucketsLoading" class="muted" style="margin: 0">
-          No buckets found for this namespace.
-        </p>
+        <p v-if="!buckets.length && !bucketsLoading" class="muted" style="margin: 0; min-height: 228px; display: flex; align-items: center; justify-content: center;">
+        No buckets found for this namespace.
+      </p>
 
         <div v-if="buckets.length" class="stack" style="gap: 12px">
           <NuxtLink v-for="bucket in buckets" :key="bucket.id" :to="`/indexed-bucket/${encodeURIComponent(bucket.id)}`"
@@ -199,33 +199,24 @@ onMounted(async () => {
 
       <ul v-if="managers.length && !managersLoading" class="bucket-members-list"
         style="display: flex; flex-direction: column; gap: 8px; list-style: none; padding: 0; margin: 0;">
-        <li v-for="address in managers" :key="address" class="bucket-member-item card"
-          style="padding: 12px 16px; background: #f6f7f9; margin: 0; border: 1px solid var(--border-default);">
-          <div class="row"
-            style="justify-content: space-between; align-items: center; width: 100%; flex-wrap: wrap; gap: 12px;">
-            <div class="stack" style="gap: 4px;">
-              <div class="row" style="align-items: center; gap: 8px;">
-                <strong style="font-size: 14px;">{{ formatAddress(address) }}</strong>
-                <span
-                  style="padding: 4px 8px; border-radius: 999px; font-size: 11px; color: white; font-weight: 600; text-transform: capitalize; background: var(--color-primary);">
-                  Manager
-                </span>
-              </div>
-            </div>
-
-            <div class="row" style="gap: 8px;">
-              <button class="btn member-remove-btn" type="button" title="Remove Manager"
-                :disabled="Boolean(removingManagerAddress) || !session.accountAddress"
-                @click="removeManager(address)" style="background: var(--color-white);">
-                <Trash2 v-if="removingManagerAddress !== address" :size="16" aria-hidden="true" />
-                <span v-else class="spinner-small"></span>
-                <span>{{ removingManagerAddress === address ? "Removing..." : "Remove Manager" }}</span>
-              </button>
-            </div>
-          </div>
+        <li v-for="address in managers" :key="address"
+          :style="{ padding: '12px 16px', background: '#f6f7f9', margin: 0, border: '1px solid var(--border-default)', borderRadius: '8px', display: 'flex', alignItems: 'center', flexWrap: 'nowrap', gap: '8px', width: '100%', boxSizing: 'border-box', minWidth: 0 }">
+          <strong :style="{ fontSize: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 0 0%', minWidth: 0 }">{{ formatAddress(address) }}</strong>
+          <span
+            :style="{ padding: '4px 8px', borderRadius: '999px', fontSize: '11px', color: 'white', fontWeight: '600', textTransform: 'capitalize', background: 'var(--color-primary)', flexShrink: 0, whiteSpace: 'nowrap' }">
+            Manager
+          </span>
+          <button class="btn member-remove-btn" type="button" title="Remove"
+            :disabled="Boolean(removingManagerAddress) || !session.accountAddress"
+            @click="removeManager(address)"
+            :style="{ background: 'var(--color-white)', flexShrink: 0, padding: '4px 6px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '3px', whiteSpace: 'nowrap', minWidth: 'auto', maxWidth: '120px', overflow: 'hidden' }">
+            <Trash2 v-if="removingManagerAddress !== address" :size="14" aria-hidden="true" />
+            <span v-else class="spinner-small"></span>
+            <span :style="{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0 }">{{ removingManagerAddress === address ? "Removing..." : "Remove" }}</span>
+          </button>
         </li>
       </ul>
-      <p v-else-if="!managersLoading && !managersError" class="muted" style="margin: 0">
+      <p v-else-if="!managersLoading && !managersError" class="muted" style="margin: 0; min-height: 68px; display: flex; align-items: center; justify-content: center;">
         No managers found for this namespace.
       </p>
     </div>
@@ -272,18 +263,24 @@ onMounted(async () => {
   gap: 4px;
 }
 
-.bucket-member-item {
-  display: flex;
-  justify-content: space-between;
+.member-remove-btn {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  border: 1px solid var(--border-default);
-  border-radius: 8px;
-  padding: 8px 10px;
-  background: rgba(255, 255, 255, 0.7);
+  padding: 2px 6px;
+  font-size: 11px;
+  gap: 2px;
+  white-space: nowrap;
+  min-width: auto;
+  height: 28px;
 }
 
-.member-remove-btn {
+@media (max-width: 600px) {
+  .member-remove-btn span:not(.spinner-small) {
+    display: none;
+  }
+}
+
+.remove-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
