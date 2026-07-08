@@ -122,8 +122,10 @@ const messageDecryptErrorById = ref<Record<string, string>>({})
 const chatViewport = ref<HTMLElement | null>(null)
 const bucketAdmins = ref<string[]>([])
 const bucketContributors = ref<string[]>([])
+const bucketViewers = ref<string[]>([])
 const removingAdminAddress = ref("")
 const removingContributorAddress = ref("")
+const removingViewerAddress = ref("")
 const loadingContributorKeys = ref(false)
 const contributorX25519Keys = ref<Record<string, string>>({})
 const currentBucketCall = ref("buckets.write")
@@ -466,17 +468,20 @@ async function loadBucketMembers() {
   membersError.value = ""
 
   try {
-    const [admins, contributors] = await Promise.all([
+    const [admins, contributors, viewers] = await Promise.all([
       didCommRepository.fetchBucketAdmins(bucketId.value),
-      didCommRepository.fetchBucketContributors(bucketId.value)
+      didCommRepository.fetchBucketContributors(bucketId.value),
+      didCommRepository.fetchBucketViewers(bucketId.value)
     ])
 
     bucketAdmins.value = admins
     bucketContributors.value = contributors
+    bucketViewers.value = viewers
     await loadContributorX25519Keys(contributors)
   } catch (error) {
     bucketAdmins.value = []
     bucketContributors.value = []
+    bucketViewers.value = []
     contributorX25519Keys.value = {}
     membersError.value = error instanceof Error ? error.message : "Unable to load bucket member lists"
   }
@@ -706,6 +711,42 @@ async function removeContributor(address: string): Promise<void> {
     operations.add("bucket_write", currentBucketCall.value, "error", membersError.value)
   } finally {
     removingContributorAddress.value = ""
+  }
+}
+
+async function removeViewer(address: string): Promise<void> {
+  membersError.value = ""
+
+  if (!session.accountAddress) {
+    membersError.value = "Connect wallet before submitting member removal extrinsics"
+    return
+  }
+
+  const namespaceId = resolveNamespaceIdFromBucket(bucket.value)
+  if (!namespaceId) {
+    membersError.value = "Namespace id is required to remove bucket members"
+    return
+  }
+
+  removingViewerAddress.value = address
+  currentBucketCall.value = "buckets.removeViewer"
+
+  try {
+    const result = await didCommRepository.removeBucketViewer(
+      namespaceId,
+      bucketId.value,
+      address,
+      session.accountAddress,
+      logExtrinsicUpdate
+    )
+
+    operations.add("bucket_write", result.method, "success", `Viewer removed: ${result.txHash}`)
+    await loadBucketMembers()
+  } catch (error) {
+    membersError.value = error instanceof Error ? error.message : "Unable to remove viewer"
+    operations.add("bucket_write", currentBucketCall.value, "error", membersError.value)
+  } finally {
+    removingViewerAddress.value = ""
   }
 }
 
@@ -1501,11 +1542,17 @@ const allMembers = computed(() => {
     }
   }
 
+  for (const viewer of bucketViewers.value) {
+    if (!membersMap.has(viewer)) {
+      membersMap.set(viewer, { address: viewer, roles: ['viewer'] })
+    }
+  }
+
   return Array.from(membersMap.values())
 })
 
 function isRemoving(address) {
-  return removingAdminAddress.value === address || removingContributorAddress.value === address
+  return removingAdminAddress.value === address || removingContributorAddress.value === address || removingViewerAddress.value === address
 }
 </script>
 
@@ -1562,6 +1609,10 @@ function isRemoving(address) {
                 :to="`/messages/bucket/members/${encodeURIComponent(bucketId)}?role=contributor&namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`">
                 Add Contributor
               </NuxtLink>
+              <NuxtLink class="btn"
+                :to="`/messages/bucket/viewers/${encodeURIComponent(bucketId)}?namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`">
+                Add Viewer
+              </NuxtLink>
             </div>
           </div>
 
@@ -1587,21 +1638,31 @@ function isRemoving(address) {
                     X25519: {{ contributorX25519Keys[member.address] || (loadingContributorKeys ? "Loading..." :
                       "Not found") }}
                   </span>
+                  <span v-if="member.roles.includes('viewer')" class="muted"
+                    style="font-size: 11px; color: var(--text-secondary);">
+                    Viewer
+                  </span>
                 </div>
 
                 <div class="row" style="gap: 8px;">
                   <button v-if="member.roles.includes('admin')" class="btn member-remove-btn" type="button"
-                    :disabled="Boolean(removingAdminAddress) || Boolean(removingContributorAddress) || !session.accountAddress"
+                    :disabled="isRemoving(member.address) || !session.accountAddress"
                     @click="removeAdmin(member.address)" style="background: var(--color-white);">
                     <Trash2 :size="16" aria-hidden="true" />
                     <span>{{ removingAdminAddress === member.address ? "Removing..." : "Remove Admin" }}</span>
                   </button>
                   <button v-if="member.roles.includes('contributor')" class="btn member-remove-btn" type="button"
-                    :disabled="Boolean(removingAdminAddress) || Boolean(removingContributorAddress) || !session.accountAddress"
+                    :disabled="isRemoving(member.address) || !session.accountAddress"
                     @click="removeContributor(member.address)" style="background: var(--color-white);">
                     <Trash2 :size="16" aria-hidden="true" />
                     <span>{{ removingContributorAddress === member.address ? "Removing..." : "Remove Contributor"
                       }}</span>
+                  </button>
+                  <button v-if="member.roles.includes('viewer')" class="btn member-remove-btn" type="button"
+                    :disabled="isRemoving(member.address) || !session.accountAddress"
+                    @click="removeViewer(member.address)" style="background: var(--color-white);">
+                    <Trash2 :size="16" aria-hidden="true" />
+                    <span>{{ removingViewerAddress === member.address ? "Removing..." : "Remove Viewer" }}</span>
                   </button>
                 </div>
               </div>

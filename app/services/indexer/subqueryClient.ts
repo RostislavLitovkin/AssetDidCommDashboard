@@ -40,10 +40,18 @@ export interface IndexedBucketMember {
   addedBlock: number
 }
 
+export interface IndexedBucketViewer {
+  id: string
+  bucketId: string
+  subjectId: string
+  addedBlock: number
+}
+
 export interface IndexedBucketDetail {
   bucket: IndexedBucket
   admins: IndexedBucketMember[]
   contributors: IndexedBucketMember[]
+  viewers: IndexedBucketViewer[]
   messages: IndexedMessage[]
 }
 
@@ -129,6 +137,9 @@ query BucketDetail($id: String!) {
     contributors(orderBy: [ADDED_BLOCK_ASC]) {
       nodes { id bucketId subjectId addedBlock }
     }
+    viewers(orderBy: [ADDED_BLOCK_ASC]) {
+      nodes { id bucketId subjectId addedBlock }
+    }
     messages(orderBy: [CREATED_BLOCK_ASC]) {
       nodes { id bucketId messageId contributor reference tag description contentType contentHash createdBlock ipfsContent }
     }
@@ -144,6 +155,7 @@ export async function fetchIndexedBucketDetail(
     bucket: (IndexedBucket & {
       admins: { nodes: IndexedBucketMember[] }
       contributors: { nodes: IndexedBucketMember[] }
+      viewers: { nodes: IndexedBucketViewer[] }
       messages: { nodes: IndexedMessage[] }
     }) | null
   }
@@ -158,6 +170,7 @@ export async function fetchIndexedBucketDetail(
     bucket: data.bucket,
     admins: data.bucket.admins.nodes,
     contributors: data.bucket.contributors.nodes,
+    viewers: data.bucket.viewers.nodes,
     messages: data.bucket.messages.nodes,
   }
 }
