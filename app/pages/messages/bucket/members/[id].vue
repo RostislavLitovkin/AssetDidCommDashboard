@@ -66,6 +66,18 @@ const submitError = ref("")
 const submittedTxHash = ref("")
 const submittedMethod = ref("")
 
+const submitButtonLabel = computed(() => {
+  if (submitting.value) {
+    return "Submitting..."
+  }
+
+  if (submittedTxHash.value) {
+    return "Submitted successfully"
+  }
+
+  return "Submit"
+})
+
 function extractRouteNamespaceId(): string {
   const raw = route.query.namespaceId
   const value = Array.isArray(raw) ? (raw[0] ?? "") : (raw ?? "")
@@ -102,6 +114,21 @@ watch(
     namespaceId.value = extractRouteNamespaceId()
   }
 )
+
+watch(memberAddress, () => {
+  submittedTxHash.value = ""
+  submittedMethod.value = ""
+})
+
+watch(namespaceId, () => {
+  submittedTxHash.value = ""
+  submittedMethod.value = ""
+})
+
+watch(role, () => {
+  submittedTxHash.value = ""
+  submittedMethod.value = ""
+})
 
 onMounted(async () => {
   namespaceId.value = extractRouteNamespaceId()
@@ -251,13 +278,10 @@ async function submitAddMember(): Promise<void> {
         </label>
 
         <p v-if="submitError" style="margin: 0; color: var(--status-error); font-size: 13px;">{{ submitError }}</p>
-        <p v-if="submittedTxHash" style="margin: 0; color: var(--status-success); font-size: 13px;">
-          Submitted via {{ submittedMethod }} with hash {{ submittedTxHash }}
-        </p>
 
         <div class="row" style="justify-content: flex-end; gap: 12px; margin-top: 8px;">
           <button class="btn btn-primary" type="button" :disabled="submitting || !memberAddress" @click="submitAddMember">
-            {{ submitting ? "Submitting..." : "Submit Transaction" }}
+            {{ submitButtonLabel }}
           </button>
         </div>
       </div>
