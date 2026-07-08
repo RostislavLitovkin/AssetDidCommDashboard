@@ -49,16 +49,18 @@ export interface IndexedBucketDetail {
 
 export interface IndexedNamespace {
   id: string
+  namespaceId: number
   name: string | null
-  owner: string | null
-  manager: string | null
-  createdBlock: number
+  schemaUri: string | null
+  properties: string | null
+  createdAt: number
+  creator: string | null
 }
 
 export interface IndexedNamespaceManager {
   id: string
   namespaceId: string
-  managerAddress: string
+  manager: string
   addedBlock: number
 }
 
@@ -74,6 +76,19 @@ export interface IndexedBucketWithCounts {
   createdBlock: number
   adminCount: number
   contributorCount: number
+}
+
+type IndexedBucketWithRelations = Omit<IndexedBucketWithCounts, "adminCount" | "contributorCount"> & {
+  admins?: { totalCount?: number }
+  contributors?: { totalCount?: number }
+}
+
+function normalizeBucketCounts(bucket: IndexedBucketWithRelations): IndexedBucketWithCounts {
+  return {
+    ...bucket,
+    adminCount: bucket.admins?.totalCount ?? 0,
+    contributorCount: bucket.contributors?.totalCount ?? 0
+  }
 }
 
 // -- GraphQL helper --
@@ -108,13 +123,13 @@ const BUCKET_DETAIL_QUERY = `
 query BucketDetail($id: String!) {
   bucket(id: $id) {
     id namespaceId bucketId creator name category isWritable encryptionKey createdBlock
-    admins(orderBy: ADDED_BLOCK_ASC) {
+    admins(orderBy: [ADDED_BLOCK_ASC]) {
       nodes { id bucketId subjectId addedBlock }
     }
-    contributors(orderBy: ADDED_BLOCK_ASC) {
+    contributors(orderBy: [ADDED_BLOCK_ASC]) {
       nodes { id bucketId subjectId addedBlock }
     }
-    messages(orderBy: CREATED_BLOCK_ASC) {
+    messages(orderBy: [CREATED_BLOCK_ASC]) {
       nodes { id bucketId messageId contributor reference tag description contentType contentHash createdBlock ipfsContent }
     }
   }
@@ -149,7 +164,7 @@ export async function fetchIndexedBucketDetail(
 
 const MESSAGES_QUERY = `
 query BucketMessages($bucketId: String!, $after: Cursor) {
-  messages(filter: { bucketId: { equalTo: $bucketId } }, orderBy: CREATED_BLOCK_ASC, after: $after) {
+  messages(filter: { bucketId: { equalTo: $bucketId } }, orderBy: [CREATED_BLOCK_ASC], after: $after) {
     nodes { id bucketId messageId contributor reference tag description contentType contentHash createdBlock ipfsContent }
     pageInfo { hasNextPage endCursor }
   }
@@ -190,7 +205,7 @@ const MESSAGES_BY_TAG_QUERY = `
 query BucketMessagesByTag($bucketId: String!, $tag: String!, $after: Cursor) {
   messages(
     filter: { bucketId: { equalTo: $bucketId }, tag: { equalTo: $tag } },
-    orderBy: CREATED_BLOCK_ASC,
+    orderBy: [CREATED_BLOCK_ASC],
     after: $after
   ) {
     nodes { id bucketId messageId contributor reference tag description contentType contentHash createdBlock ipfsContent }
@@ -233,9 +248,9 @@ export async function fetchIndexedMessagesByTag(
 // -- Namespace queries --
 
 const NAMESPACES_QUERY = `
-query Namespaces($after: Cursor, $first: Int, $orderBy: NamespaceOrdering) {
+query Namespaces($after: Cursor, $first: Int, $orderBy: [NamespacesOrderBy!]) {
   namespaces(orderBy: $orderBy, after: $after, first: $first) {
-    nodes { id name owner manager createdBlock }
+    nodes { id namespaceId name schemaUri properties createdAt creator }
     pageInfo { hasNextPage endCursor }
   }
 }
@@ -243,7 +258,7 @@ query Namespaces($after: Cursor, $first: Int, $orderBy: NamespaceOrdering) {
 
 export async function fetchIndexedNamespaces(
   endpoint: string,
-  orderBy?: string
+  orderBy?: string | string[]
 ): Promise<IndexedNamespace[]> {
   const all: IndexedNamespace[] = []
   let after: string | null = null
@@ -258,7 +273,7 @@ export async function fetchIndexedNamespaces(
     }
 
     const vars: Record<string, unknown> = {}
-    if (orderBy) vars.orderBy = orderBy
+    if (orderBy) vars.orderBy = Array.isArray(orderBy) ? orderBy : [orderBy]
     if (after) vars.after = after
 
     const data = await gql<Raw>(endpoint, NAMESPACES_QUERY, vars)
@@ -275,7 +290,7 @@ export async function fetchIndexedNamespaces(
 const NAMESPACE_BY_ID_QUERY = `
 query NamespaceById($id: String!) {
   namespace(id: $id) {
-    id name owner manager createdBlock
+    id namespaceId name schemaUri properties createdAt creator
   }
 }
 `
@@ -294,8 +309,8 @@ export async function fetchIndexedNamespaceById(
 
 const NAMESPACE_MANAGERS_QUERY = `
 query NamespaceManagers($namespaceId: String!, $after: Cursor, $first: Int) {
-  namespaceManagers(filter: { namespaceId: { equalTo: $namespaceId } }, orderBy: ADDED_BLOCK_ASC, after: $after, first: $first) {
-    nodes { id namespaceId managerAddress addedBlock }
+  namespaceManagers(filter: { namespaceId: { equalTo: $namespaceId } }, orderBy: [ADDED_BLOCK_ASC], after: $after, first: $first) {
+    nodes { id namespaceId manager addedBlock }
     pageInfo { hasNextPage endCursor }
   }
 }
@@ -332,9 +347,13 @@ export async function fetchIndexedNamespaceManagers(
 }
 
 const BUCKETS_BY_NAMESPACE_QUERY = `
-query BucketsByNamespace($namespaceId: String!, $after: Cursor, $first: Int) {
-  buckets(filter: { namespaceId: { equalTo: $namespaceId } }, orderBy: CREATED_BLOCK_ASC, after: $after, first: $first) {
-    nodes { id namespaceId bucketId creator name category isWritable encryptionKey createdBlock adminCount contributorCount }
+query BucketsByNamespace($namespaceId: BigFloat!, $after: Cursor, $first: Int) {
+  buckets(filter: { namespaceId: { equalTo: $namespaceId } }, orderBy: [CREATED_BLOCK_ASC], after: $after, first: $first) {
+    nodes {
+      id namespaceId bucketId creator name category isWritable encryptionKey createdBlock
+      admins { totalCount }
+      contributors { totalCount }
+    }
     pageInfo { hasNextPage endCursor }
   }
 }
@@ -346,21 +365,25 @@ export async function fetchIndexedBucketsByNamespace(
 ): Promise<IndexedBucketWithCounts[]> {
   const all: IndexedBucketWithCounts[] = []
   let after: string | null = null
+  const numericNamespaceId = Number(namespaceId)
+  if (!Number.isFinite(numericNamespaceId)) {
+    throw new Error("Namespace id must be numeric for indexer bucket queries")
+  }
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
     interface Raw {
       buckets: {
-        nodes: IndexedBucketWithCounts[]
+        nodes: IndexedBucketWithRelations[]
         pageInfo: { hasNextPage: boolean; endCursor: string | null }
       }
     }
 
-    const vars: Record<string, unknown> = { namespaceId }
+    const vars: Record<string, unknown> = { namespaceId: numericNamespaceId }
     if (after) vars.after = after
 
     const data = await gql<Raw>(endpoint, BUCKETS_BY_NAMESPACE_QUERY, vars)
-    all.push(...data.buckets.nodes)
+    all.push(...data.buckets.nodes.map(normalizeBucketCounts))
 
     if (!data.buckets.pageInfo.hasNextPage) break
     after = data.buckets.pageInfo.endCursor ?? null
@@ -372,8 +395,12 @@ export async function fetchIndexedBucketsByNamespace(
 
 const BUCKETS_FILTERED_QUERY = `
 query BucketsFiltered($filter: BucketFilter!, $after: Cursor, $first: Int) {
-  buckets(filter: $filter, orderBy: CREATED_BLOCK_ASC, after: $after, first: $first) {
-    nodes { id namespaceId bucketId creator name category isWritable encryptionKey createdBlock adminCount contributorCount }
+  buckets(filter: $filter, orderBy: [CREATED_BLOCK_ASC], after: $after, first: $first) {
+    nodes {
+      id namespaceId bucketId creator name category isWritable encryptionKey createdBlock
+      admins { totalCount }
+      contributors { totalCount }
+    }
     pageInfo { hasNextPage endCursor }
   }
 }
@@ -390,7 +417,7 @@ export async function fetchIndexedBucketsFiltered(
   while (true) {
     interface Raw {
       buckets: {
-        nodes: IndexedBucketWithCounts[]
+        nodes: IndexedBucketWithRelations[]
         pageInfo: { hasNextPage: boolean; endCursor: string | null }
       }
     }
@@ -399,7 +426,7 @@ export async function fetchIndexedBucketsFiltered(
     if (after) vars.after = after
 
     const data = await gql<Raw>(endpoint, BUCKETS_FILTERED_QUERY, vars)
-    all.push(...data.buckets.nodes)
+    all.push(...data.buckets.nodes.map(normalizeBucketCounts))
 
     if (!data.buckets.pageInfo.hasNextPage) break
     after = data.buckets.pageInfo.endCursor ?? null
@@ -411,8 +438,8 @@ export async function fetchIndexedBucketsFiltered(
 
 const NAMESPACES_BY_ADDRESS_QUERY = `
 query NamespacesByAddress($address: String!, $after: Cursor, $first: Int) {
-  namespaces(filter: { owner: { equalTo: $address } }, orderBy: CREATED_BLOCK_ASC, after: $after, first: $first) {
-    nodes { id name owner manager createdBlock }
+  namespaces(filter: { creator: { equalToInsensitive: $address } }, orderBy: [CREATED_AT_ASC], after: $after, first: $first) {
+    nodes { id namespaceId name schemaUri properties createdAt creator }
     pageInfo { hasNextPage endCursor }
   }
 }

@@ -1,55 +1,48 @@
 <script setup lang="ts">
-import { DidCommRepository, type BucketNamespace } from "../../services/papi/didCommRepository"
+import { fetchIndexedNamespaces, type IndexedNamespace } from "../../services/indexer/subqueryClient"
 import SkeletonCard from "../../components/common/SkeletonCard.vue"
-import { useNuxtApp, useRuntimeConfig } from "nuxt/app"
+import { useRuntimeConfig } from "nuxt/app"
 import { useKeys } from "../../composables/useKeys"
 import { useOperationsStore } from "../../stores/operations"
 import { useSessionStore } from "../../stores/session"
 import { computed, onMounted, ref } from "vue"
 
-const { $papiClient } = useNuxtApp()
 const config = useRuntimeConfig()
 const keys = useKeys()
 const operations = useOperationsStore()
 const session = useSessionStore()
-const asOptionalString = (value: unknown): string | undefined => {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined
+
+interface NamespaceListItem {
+  id: string
+  name: string
+  raw: IndexedNamespace
 }
-const didCommRepository = new DidCommRepository(
-  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string },
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  {
-    jwt: asOptionalString(config.public.pinataJwt),
-    apiKey: asOptionalString(config.public.pinataApiKey),
-    apiSecret: asOptionalString(config.public.pinataApiSecret),
-    publicGateway: asOptionalString(config.public.pinataGateway)
-  },
-  undefined,
-  undefined,
-  undefined,
-  String(config.public.subqueryIndexerUrl || "")
-)
+
 const isWalletConnected = computed(() => session.walletStatus === "connected" && Boolean(session.accountAddress))
-const namespaces = ref<BucketNamespace[]>([])
+const namespaces = ref<NamespaceListItem[]>([])
 const namespaceError = ref("")
 const namespacesLoading = ref(true)
+
+function resolveIndexerUrl(): string {
+  const url = config.public.subqueryIndexerUrl
+  if (typeof url === "string" && url.trim()) {
+    return url.trim()
+  }
+
+  throw new Error("Subquery indexer URL is not configured")
+}
 
 async function loadNamespaces() {
   namespaceError.value = ""
   namespacesLoading.value = true
 
   try {
-    namespaces.value = await didCommRepository.fetchNamespaces()
+    const indexed = await fetchIndexedNamespaces(resolveIndexerUrl(), "CREATED_AT_ASC")
+    namespaces.value = indexed.map((namespace) => ({
+      id: namespace.id,
+      name: namespace.name?.trim() || `Namespace ${namespace.namespaceId}`,
+      raw: namespace
+    }))
   } catch (error) {
     namespaceError.value = error instanceof Error ? error.message : "Unable to load namespaces"
   } finally {

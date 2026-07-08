@@ -387,7 +387,7 @@ export class DidCommRepository {
       try {
         const indexed = await fetchIndexedNamespaceManagers(this.indexerUrl, trimmedNamespaceId)
         if (indexed.length > 0) {
-          return indexed.map((m) => m.managerAddress)
+          return indexed.map((m) => m.manager)
         }
       } catch {
         // Fallback to RPC
@@ -481,7 +481,10 @@ export class DidCommRepository {
     // Try indexer first
     if (this.indexerUrl) {
       try {
-        const filter = { bucketId: { equalTo: trimmedBucketId } }
+        const numericBucketId = Number(trimmedBucketId)
+        const filter = Number.isFinite(numericBucketId)
+          ? { bucketId: { equalTo: numericBucketId } }
+          : { id: { equalTo: trimmedBucketId } }
         const indexed = await fetchIndexedBucketsFiltered(this.indexerUrl, filter)
         if (indexed.length > 0) {
           return indexed.map((b) => ({
