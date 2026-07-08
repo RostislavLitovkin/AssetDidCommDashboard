@@ -1,45 +1,27 @@
 <script setup lang="ts">
-import { DidCommRepository, type BucketRecord } from "../../../services/papi/didCommRepository"
+import {
+  fetchIndexedBucketsByNamespace,
+  fetchIndexedNamespaceById,
+  fetchIndexedNamespaceManagers,
+  type IndexedBucketWithCounts
+} from "../../../services/indexer/subqueryClient"
+import { DidCommRepository } from "../../../services/papi/didCommRepository"
 import LoadingBar from "../../../components/common/LoadingBar.vue"
 import SkeletonCard from "../../../components/common/SkeletonCard.vue"
 import WalletConnectPrompt from "../../../components/common/WalletConnectPrompt.vue"
 import { Trash2, UserPlus, Users } from "lucide-vue-next"
 import { useAddress } from "../../../composables/useAddress"
 import { computed, onMounted, ref } from "vue"
-import { useNuxtApp, useRoute } from "nuxt/app"
+import { useNuxtApp, useRoute, useRuntimeConfig } from "nuxt/app"
 import { useSessionStore } from "../../../stores/session"
 
 const route = useRoute()
 const { $papiClient } = useNuxtApp()
 const config = useRuntimeConfig()
 const session = useSessionStore()
-const asOptionalString = (value: unknown): string | undefined => {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined
-}
 const { formatAddress, addressesEqual } = useAddress()
 const didCommRepository = new DidCommRepository(
-  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string },
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  {
-    jwt: asOptionalString(config.public.pinataJwt),
-    apiKey: asOptionalString(config.public.pinataApiKey),
-    apiSecret: asOptionalString(config.public.pinataApiSecret),
-    publicGateway: asOptionalString(config.public.pinataGateway)
-  },
-  undefined,
-  undefined,
-  undefined,
-  String(config.public.subqueryIndexerUrl || "")
+  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string }
 )
 
 const namespaceId = computed(() => {
@@ -53,7 +35,7 @@ const namespaceId = computed(() => {
   }
 })
 
-const buckets = ref<BucketRecord[]>([])
+const buckets = ref<IndexedBucketWithCounts[]>([])
 const bucketsLoading = ref(true)
 const bucketsError = ref("")
 const namespaceName = ref("")
@@ -65,13 +47,22 @@ const removingManagerAddress = ref("")
 const namespaceDisplayName = computed(() => namespaceName.value || `Namespace id: ${namespaceId.value}`)
 const isWalletConnected = computed(() => session.walletStatus === "connected" && Boolean(session.accountAddress))
 
-function resolveDisplayName(bucket: BucketRecord): string {
+function resolveIndexerUrl(): string {
+  const url = config.public.subqueryIndexerUrl
+  if (typeof url === "string" && url.trim()) {
+    return url.trim()
+  }
+
+  throw new Error("Subquery indexer URL is not configured")
+}
+
+function resolveDisplayName(bucket: IndexedBucketWithCounts): string {
   const name = typeof bucket.name === "string" ? bucket.name.trim() : ""
   if (name) {
     return name
   }
 
-  return `Bucket ${bucket.id}`
+  return `Bucket ${bucket.bucketId}`
 }
 
 async function loadBuckets() {
@@ -79,7 +70,7 @@ async function loadBuckets() {
   bucketsLoading.value = true
 
   try {
-    buckets.value = await didCommRepository.fetchBuckets(namespaceId.value)
+    buckets.value = await fetchIndexedBucketsByNamespace(resolveIndexerUrl(), namespaceId.value)
   } catch (error) {
     bucketsError.value = error instanceof Error ? error.message : "Unable to load buckets"
   } finally {
@@ -87,20 +78,12 @@ async function loadBuckets() {
   }
 }
 
-function normalizeNamespaceId(value: string): string {
-  return value.trim().toLowerCase()
-}
-
 async function loadNamespaceName() {
   namespaceName.value = ""
 
   try {
-    const namespaces = await didCommRepository.fetchNamespaces()
-    const matched = namespaces.find(
-      (namespace) => normalizeNamespaceId(namespace.id) === normalizeNamespaceId(namespaceId.value)
-    )
-
-    namespaceName.value = matched?.name?.trim() ?? ""
+    const namespace = await fetchIndexedNamespaceById(resolveIndexerUrl(), namespaceId.value)
+    namespaceName.value = namespace?.name?.trim() ?? ""
   } catch {
     namespaceName.value = ""
   }
@@ -111,7 +94,8 @@ async function loadManagers() {
   managersLoading.value = true
 
   try {
-    managers.value = await didCommRepository.fetchNamespaceManagers(namespaceId.value)
+    const indexedManagers = await fetchIndexedNamespaceManagers(resolveIndexerUrl(), namespaceId.value)
+    managers.value = indexedManagers.map((manager) => manager.manager)
   } catch (error) {
     managersError.value = error instanceof Error ? error.message : "Unable to load managers"
   } finally {
