@@ -128,6 +128,8 @@ const removingContributorAddress = ref("")
 const removingViewerAddress = ref("")
 const loadingContributorKeys = ref(false)
 const contributorX25519Keys = ref<Record<string, string>>({})
+const loadingViewerKeys = ref(false)
+const viewerX25519Keys = ref<Record<string, string>>({})
 const currentBucketCall = ref("buckets.write")
 const generatingEncryptionKey = ref(false)
 const encryptionKeyError = ref("")
@@ -165,6 +167,21 @@ const contributorRecipients = computed(() => {
 
 const contributorsMissingEncryptionKey = computed(() => {
   return Math.max(0, bucketContributors.value.length - contributorRecipients.value.length)
+})
+
+const viewerRecipients = computed(() => {
+  return bucketViewers.value.flatMap((address) => {
+    const x25519 = viewerX25519Keys.value[address]
+    if (!isValidX25519(x25519)) {
+      return []
+    }
+
+    return [{ address, x25519: x25519.trim() }]
+  })
+})
+
+const contributorsAndViewerRecipients = computed(() => {
+  return [...contributorRecipients.value, ...viewerRecipients.value]
 })
 
 const bucketMetadata = computed<MetadataEntry[]>(() => extractBucketMetadataEntries(bucket.value))
@@ -477,12 +494,16 @@ async function loadBucketMembers() {
     bucketAdmins.value = admins
     bucketContributors.value = contributors
     bucketViewers.value = viewers
-    await loadContributorX25519Keys(contributors)
+    await Promise.all([
+      loadContributorX25519Keys(contributors),
+      loadViewerX25519Keys(viewers)
+    ])
   } catch (error) {
     bucketAdmins.value = []
     bucketContributors.value = []
     bucketViewers.value = []
     contributorX25519Keys.value = {}
+    viewerX25519Keys.value = {}
     membersError.value = error instanceof Error ? error.message : "Unable to load bucket member lists"
   }
 }
@@ -623,8 +644,36 @@ async function loadContributorX25519Keys(addresses: string[]): Promise<void> {
     const message = error instanceof Error ? error.message : "Unable to load contributor DID key agreements"
     membersError.value = message
     operations.add("did_read", bucketId.value, "error", message)
+    contributorX25519Keys.value = {}
   } finally {
     loadingContributorKeys.value = false
+  }
+}
+
+async function loadViewerX25519Keys(addresses: string[]): Promise<void> {
+  viewerX25519Keys.value = {}
+
+  if (!addresses.length) {
+    return
+  }
+
+  loadingViewerKeys.value = true
+  const keysByAddress: Record<string, string> = {}
+
+  try {
+    for (const address of addresses) {
+      const payload = await queryDidPayloadByAddress(address)
+      keysByAddress[address] = extractContributorX25519(payload) ?? "Not found"
+    }
+
+    viewerX25519Keys.value = keysByAddress
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to load viewer DID key agreements"
+    membersError.value = message
+    operations.add("did_read", bucketId.value, "error", message)
+    viewerX25519Keys.value = {}
+  } finally {
+    loadingViewerKeys.value = false
   }
 }
 
@@ -790,14 +839,14 @@ function buildKeySharingMessage(secretJwk: jose.JWK, readerAddresses: string[]):
 }
 
 function buildRecipientJwks(bucketPublicJwk: jose.JWK): { recipientJwks: jose.JWK[]; readerAddresses: string[] } {
-  const readerAddresses = contributorRecipients.value.map((recipient) => recipient.address)
+  const readerAddresses = contributorsAndViewerRecipients.value.map((recipient) => recipient.address)
 
   if (!readerAddresses.length) {
-    throw new Error("No valid contributor X25519 keys are available for key sharing")
+    throw new Error("No valid contributor or viewer X25519 keys are available for key sharing")
   }
 
   const recipientJwks: jose.JWK[] = [bucketPublicJwk]
-  for (const recipient of contributorRecipients.value) {
+  for (const recipient of contributorsAndViewerRecipients.value) {
     recipientJwks.push({
       kty: "OKP",
       crv: "X25519",
@@ -1680,7 +1729,8 @@ function isRemoving(address) {
               !session.accountAddress ||
               !connectedAdmin ||
               loadingContributorKeys ||
-              !contributorRecipients.length
+              loadingViewerKeys ||
+              !contributorsAndViewerRecipients.length
               " @click="generateAndShareEncryptionKey">
               {{ generatingEncryptionKey ? "Generating..." : "Generate & Share New Key" }}
             </button>
@@ -1689,12 +1739,13 @@ function isRemoving(address) {
           <p class="muted" style="margin: 0">
             Generates a fresh X25519 encryption keypair, stores the public key ID on-chain, ensures the key-sharing tag
             exists,
-            then encrypts and shares the new secret key for contributors using their loaded X25519 keys.
+            then encrypts and shares the new secret key for contributors and viewers using their loaded X25519 keys.
           </p>
 
           <ul class="key-rotation-checks"
             style="background: #f6f7f9; padding: 12px 12px 12px 32px; border-radius: 8px;">
             <li>Contributors with X25519: {{ contributorRecipients.length }} / {{ bucketContributors.length }}</li>
+            <li>Viewers with X25519: {{ viewerRecipients.length }} / {{ bucketViewers.length }}</li>
             <li v-if="latestGeneratedKeyId">Last generated key ID: {{ latestGeneratedKeyId }}</li>
           </ul>
 
