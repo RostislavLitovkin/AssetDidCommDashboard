@@ -138,7 +138,7 @@ query BucketDetail($id: String!) {
       nodes { id bucketId subjectId addedBlock }
     }
     viewers(orderBy: [ADDED_BLOCK_ASC]) {
-      nodes { id bucketId subjectId addedBlock }
+      nodes { id bucketId subjectId: viewerId addedBlock }
     }
     messages(orderBy: [CREATED_BLOCK_ASC]) {
       nodes { id bucketId messageId contributor reference tag description contentType contentHash createdBlock ipfsContent }
