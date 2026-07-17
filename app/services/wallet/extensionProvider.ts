@@ -1,4 +1,4 @@
-import { web3Accounts, web3Enable } from "@polkadot/extension-dapp"
+import { web3Accounts, web3Enable, web3FromAddress } from "@polkadot/extension-dapp"
 
 export interface WalletSession {
   address: string
@@ -30,14 +30,14 @@ export class WalletExtensionProvider {
   }
 
   async connect(): Promise<WalletSession> {
-    const accounts = await this.listAccounts()
-    if (!accounts.length) {
+    const [account] = await this.listAccounts()
+    if (!account) {
       throw new Error("WALLET_CONNECTION_REJECTED")
     }
 
     return {
-      address: accounts[0].address,
-      provider: accounts[0].source
+      address: account.address,
+      provider: account.source
     }
   }
 
@@ -51,6 +51,38 @@ export class WalletExtensionProvider {
     return {
       address: selected.address,
       provider: selected.source
+    }
+  }
+
+  async signProfileRequest(
+    address: string,
+    method: "POST" | "PUT",
+    path: string,
+    body: string
+  ): Promise<HeadersInit> {
+    await this.ensureEnabled()
+    const { blake2AsHex, cryptoWaitReady } = await import("@polkadot/util-crypto")
+    await cryptoWaitReady()
+
+    const injector = await web3FromAddress(address)
+    if (!injector.signer.signRaw) {
+      throw new Error("WALLET_SIGNING_UNAVAILABLE")
+    }
+
+    const timestamp = new Date().toISOString()
+    const bodyHash = blake2AsHex(body, 128).slice(2)
+    const payload = `${method}:${path}:${bodyHash}:${timestamp}`
+    const payloadHash = blake2AsHex(payload, 128)
+    const signed = await injector.signer.signRaw({
+      address,
+      data: payloadHash,
+      type: "bytes"
+    })
+
+    return {
+      "X-SS58-Address": address,
+      "X-Signature": signed.signature,
+      "X-Timestamp": timestamp
     }
   }
 
@@ -90,14 +122,14 @@ export class WalletExtensionProvider {
     }
 
     // 2) Fall back to the first available account
-    const options = await this.listAccounts()
-    if (!options.length) {
+    const [account] = await this.listAccounts()
+    if (!account) {
       return null
     }
 
     return {
-      address: options[0].address,
-      provider: options[0].source
+      address: account.address,
+      provider: account.source
     }
   }
 }

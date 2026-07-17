@@ -39,6 +39,19 @@ export function useWallet() {
     operations.add("wallet", previous || "session", "info", "Wallet disconnected")
   }
 
+  async function signProfileRequest(
+    method: "POST" | "PUT",
+    path: string,
+    body: string
+  ): Promise<HeadersInit> {
+    const address = store.accountAddress
+    if (!address) {
+      throw new Error("Connect a wallet before saving your profile")
+    }
+
+    return provider.signProfileRequest(address, method, path, body)
+  }
+
   return {
     walletStatus: computed(() => store.walletStatus),
     accountAddress: computed(() => store.accountAddress),
@@ -46,6 +59,7 @@ export function useWallet() {
     connect,
     listAccounts,
     connectToAddress,
+    signProfileRequest,
     disconnect
   }
 }

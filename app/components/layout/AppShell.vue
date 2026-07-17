@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronRight, FileUp, Fingerprint, Layers, Menu, MessageSquare, Settings, Trash2, Wallet, X } from "lucide-vue-next"
+import { ChevronRight, FileUp, Fingerprint, Layers, Menu, MessageSquare, Settings, Trash2, UserRound, Wallet, X } from "lucide-vue-next"
 import { computed, ref } from "vue"
 import NotificationCenter from "../common/NotificationCenter.vue"
 import { useAddress } from "../../composables/useAddress"
@@ -194,6 +194,10 @@ async function copyX25519PublicKey() {
         <NuxtLink aria-label="Messages" class="btn sidebar-btn" to="/messages/my-buckets" style="display: flex; align-items: center; gap: 8px; text-decoration: none" @click="collapseTopbar">
           <MessageSquare :size="16" />
           <span class="sidebar-label">Messages</span>
+        </NuxtLink>
+        <NuxtLink aria-label="Profile" class="btn sidebar-btn" to="/profile" style="display: flex; align-items: center; gap: 8px; text-decoration: none" @click="collapseTopbar">
+          <UserRound :size="16" />
+          <span class="sidebar-label">Profile</span>
         </NuxtLink>
         <NuxtLink aria-label="Settings" class="btn sidebar-btn" to="/settings" style="display: flex; align-items: center; gap: 8px; text-decoration: none" @click="collapseTopbar">
           <Settings :size="16" />
