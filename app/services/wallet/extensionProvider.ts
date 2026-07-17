@@ -11,6 +11,18 @@ export interface WalletAccountOption {
   source: string
 }
 
+// Map property names to match C# Profile serialization
+// C# uses JsonNamingPolicy.CamelCase with specific JsonPropertyName attributes:
+// - Ss58Address -> "ss58address" (not "ss58Address")
+// - Nickname -> "nickname"
+// - Bio -> "bio"
+// - ProfilePicture -> "profilePicture"
+// - X25519Key -> "x25519Key"
+function toCSharpPropertyNames(json: string): string {
+  // Replace "ss58Address" with "ss58address"
+  return json.replace('"ss58Address":', '"ss58address":')
+}
+
 export class WalletExtensionProvider {
   private async ensureEnabled(): Promise<void> {
     const extensions = await web3Enable("realXmessage Dashboard")
@@ -70,7 +82,8 @@ export class WalletExtensionProvider {
     }
 
     const timestamp = new Date().toISOString()
-    const bodyHash = blake2AsHex(body, 128).slice(2)
+    // Hash the JSON with C#-style property names to match Profile.Hash() implementation
+    const bodyHash = blake2AsHex(toCSharpPropertyNames(body), 128).slice(2)
     const payload = `${method}:${path}:${bodyHash}:${timestamp}`
     const payloadHash = blake2AsHex(payload, 128)
     const signed = await injector.signer.signRaw({

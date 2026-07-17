@@ -103,6 +103,19 @@ type BucketKeyRotationBatchExtrinsicSubmitter = (
   pinataConfig?: PinataConfig
 ) => Promise<string>
 
+export type BucketMemberRole = "admin" | "contributor" | "viewer"
+
+type BucketMemberBatchExtrinsicSubmitter = (
+  endpoint: string,
+  role: "admin" | "contributor",
+  namespaceId: string,
+  bucketId: string,
+  ss58Address: string,
+  x25519Key: string,
+  ownerAddress: string,
+  onUpdate?: ExtrinsicUpdateHandler
+) => Promise<string>
+
 type NamespaceStorageReader = (endpoint: string) => Promise<unknown>
 type BucketsStorageReader = (endpoint: string) => Promise<unknown>
 type MessagesStorageReader = (endpoint: string) => Promise<unknown>
@@ -193,6 +206,7 @@ export class DidCommRepository {
   private submitAddNamespaceManagerExtrinsic: NamespaceMemberExtrinsicSubmitter
   private submitRemoveNamespaceManagerExtrinsic: NamespaceMemberExtrinsicSubmitter
   private submitBucketKeyRotationBatchExtrinsic: BucketKeyRotationBatchExtrinsicSubmitter
+  private submitAddMemberBatchExtrinsic: BucketMemberBatchExtrinsicSubmitter
   private pinataConfig?: PinataConfig
   private indexerUrl?: string
 
@@ -216,7 +230,8 @@ export class DidCommRepository {
     submitBucketKeyRotationBatchExtrinsic: BucketKeyRotationBatchExtrinsicSubmitter = submitBucketsBatchKeyRotationExtrinsic,
     submitAddNamespaceManagerExtrinsic: NamespaceMemberExtrinsicSubmitter = submitBucketsAddNamespaceManagerExtrinsic,
     submitRemoveNamespaceManagerExtrinsic: NamespaceMemberExtrinsicSubmitter = submitBucketsRemoveNamespaceManagerExtrinsic,
-    indexerUrl?: string
+    indexerUrl?: string,
+    submitAddMemberBatchExtrinsic: BucketMemberBatchExtrinsicSubmitter = submitBucketsAddMemberBatchExtrinsic
   ) {
     this.client = client
     this.submitExtrinsic = submitExtrinsic
@@ -236,6 +251,7 @@ export class DidCommRepository {
     this.submitAddNamespaceManagerExtrinsic = submitAddNamespaceManagerExtrinsic
     this.submitRemoveNamespaceManagerExtrinsic = submitRemoveNamespaceManagerExtrinsic
     this.submitBucketKeyRotationBatchExtrinsic = submitBucketKeyRotationBatchExtrinsic
+    this.submitAddMemberBatchExtrinsic = submitAddMemberBatchExtrinsic
     this.pinataConfig = sanitizePinataConfig(pinataConfig)
     this.indexerUrl = indexerUrl
   }
@@ -980,6 +996,80 @@ export class DidCommRepository {
     }
   }
 
+  async addBucketMemberWithRole(
+    role: BucketMemberRole,
+    namespaceId: string,
+    bucketId: string,
+    ss58Address: string,
+    x25519Key: string,
+    ownerAddress?: string,
+    onUpdate?: ExtrinsicUpdateHandler
+  ): Promise<AddBucketMemberResult> {
+    const trimmedNamespaceId = namespaceId.trim()
+    if (!trimmedNamespaceId) {
+      throw new Error("Namespace id is required")
+    }
+
+    const trimmedBucketId = bucketId.trim()
+    if (!trimmedBucketId) {
+      throw new Error("Bucket id is required")
+    }
+
+    const trimmedSs58Address = ss58Address.trim()
+    if (!trimmedSs58Address) {
+      throw new Error("Member address is required")
+    }
+
+    const trimmedX25519Key = x25519Key.trim()
+    if (!trimmedX25519Key) {
+      // Every role adds a viewer, and the viewer call needs the X25519 key from the profile.
+      throw new Error("X25519 key is required")
+    }
+
+    // The chain's viewer field is a fixed [u8;32]. Profiles store the X25519 public key as a
+    // base64url JWK "x" value (43 chars), so decode it to a 32-byte hex string before submitting.
+    const viewerKeyHex = normalizeFixed32ByteKey(trimmedX25519Key)
+
+    if (!ownerAddress) {
+      throw new Error("Wallet must be connected to submit bucket member extrinsics")
+    }
+
+    const endpoint = this.client.getEndpoint?.()
+    if (!endpoint) {
+      throw new Error("Unable to resolve chain endpoint for extrinsic submission")
+    }
+
+    if (role === "viewer") {
+      const txHash = await this.submitAddViewerExtrinsic(
+        endpoint,
+        trimmedNamespaceId,
+        trimmedBucketId,
+        viewerKeyHex,
+        ownerAddress,
+        onUpdate
+      )
+      return {
+        txHash,
+        method: "buckets.addViewer"
+      }
+    }
+
+    const txHash = await this.submitAddMemberBatchExtrinsic(
+      endpoint,
+      role,
+      trimmedNamespaceId,
+      trimmedBucketId,
+      trimmedSs58Address,
+      viewerKeyHex,
+      ownerAddress,
+      onUpdate
+    )
+    return {
+      txHash,
+      method: "utility.batchAll"
+    }
+  }
+
   async removeBucketAdmin(
     namespaceId: string,
     bucketId: string,
@@ -1524,6 +1614,91 @@ async function submitBucketsBatchKeyRotationExtrinsic(
       createTag(bucketId, utf8ToHexBytes(tag)),
       write(namespaceId, bucketId, messageInput)
     ]
+
+    const tx = batchAll(calls) as SubmittableTx
+    logEncodedCallBytes("utility.batchAll", tx)
+
+    const injector = await web3FromAddress(ownerAddress)
+    const attemptTips = ["0", "1000000", "2000000"]
+    let lastError: Error | null = null
+
+    for (let attempt = 0; attempt < attemptTips.length; attempt += 1) {
+      const tip = attemptTips[attempt]!
+
+      try {
+        if (attempt > 0) {
+          onUpdate?.({
+            stage: "submitted",
+            message: `Retrying extrinsic with higher priority fee (tip=${tip})`
+          })
+        }
+
+        return await submitWithTip(tx, ownerAddress, injector.signer, tip, onUpdate, api)
+      } catch (error) {
+        const normalized = error instanceof Error ? error : new Error("Extrinsic submission failed")
+        lastError = normalized
+
+        if (!isLowPriorityTransactionError(normalized) || attempt === attemptTips.length - 1) {
+          throw normalized
+        }
+      }
+    }
+
+    throw lastError ?? new Error("Extrinsic submission failed")
+  } finally {
+    await api.disconnect()
+  }
+}
+
+async function submitBucketsAddMemberBatchExtrinsic(
+  endpoint: string,
+  role: "admin" | "contributor",
+  namespaceId: string,
+  bucketId: string,
+  ss58Address: string,
+  x25519Key: string,
+  ownerAddress: string,
+  onUpdate?: ExtrinsicUpdateHandler
+): Promise<string> {
+  const [{ ApiPromise, WsProvider }, { web3FromAddress }] = await Promise.all([
+    import("@polkadot/api"),
+    import("@polkadot/extension-dapp")
+  ])
+
+  const provider = new WsProvider(endpoint)
+  const api = await ApiPromise.create({ provider })
+
+  try {
+    const txRoot = api.tx as Record<string, unknown>
+    const utility = txRoot.utility as Record<string, unknown> | undefined
+    const batchAll = utility?.batchAll as ((calls: unknown[]) => unknown) | undefined
+    if (!batchAll) {
+      throw new Error("utility.batchAll extrinsic is not available on this chain")
+    }
+
+    const buckets = txRoot.buckets as Record<string, unknown> | undefined
+    const addAdmin = resolveBucketsTxMethod(buckets, ["addAdmin", "addBucketAdmin"])
+    const addContributor = resolveBucketsTxMethod(buckets, ["addContributor"])
+    const addViewer = resolveBucketsTxMethod(buckets, ["addViewer"])
+
+    if (!addContributor) {
+      throw new Error("buckets.addContributor extrinsic is not available on this chain")
+    }
+    if (!addViewer) {
+      throw new Error("buckets.addViewer extrinsic is not available on this chain")
+    }
+    if (role === "admin" && !addAdmin) {
+      throw new Error("buckets.addAdmin extrinsic is not available on this chain")
+    }
+
+    // Admin adds all three roles; contributor adds contributor + viewer.
+    // The viewer call takes the member's X25519 public key, the others take the SS58 address.
+    const calls: unknown[] = []
+    if (role === "admin") {
+      calls.push(addAdmin!(namespaceId, bucketId, ss58Address))
+    }
+    calls.push(addContributor(namespaceId, bucketId, ss58Address))
+    calls.push(addViewer(namespaceId, bucketId, x25519Key))
 
     const tx = batchAll(calls) as SubmittableTx
     logEncodedCallBytes("utility.batchAll", tx)

@@ -1651,16 +1651,8 @@ function isRemoving(address) {
             <h4 style="margin: 0; font-size: 16px;">Members</h4>
             <div class="row" style="gap: 8px">
               <NuxtLink class="btn"
-                :to="`/messages/bucket/members/${encodeURIComponent(bucketId)}?role=admin&namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`">
-                Add Admin
-              </NuxtLink>
-              <NuxtLink class="btn"
-                :to="`/messages/bucket/members/${encodeURIComponent(bucketId)}?role=contributor&namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`">
-                Add Contributor
-              </NuxtLink>
-              <NuxtLink class="btn"
-                :to="`/messages/bucket/viewers/${encodeURIComponent(bucketId)}?namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`">
-                Add Viewer
+                :to="`/messages/bucket/add-member/${encodeURIComponent(bucketId)}?namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`">
+                Add Member
               </NuxtLink>
             </div>
           </div>

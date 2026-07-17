@@ -373,6 +373,134 @@ describe("DidCommRepository", () => {
     expect(result.txHash).toBe("0xremove-contributor")
   })
 
+  it("submits a utility.batchAll adding admin, contributor and viewer for the admin role", async () => {
+    const calls: unknown[] = []
+    const repository = new DidCommRepository(
+      {
+        rpc: async () => [] as unknown[],
+        getEndpoint: () => "wss://example-chain"
+      },
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined,
+      async () => {
+        throw new Error("addViewer should not be called directly for the admin role")
+      },
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
+      async (endpoint, role, namespaceId, bucketId, ss58Address, x25519Key, ownerAddress) => {
+        calls.push({ endpoint, role, namespaceId, bucketId, ss58Address, x25519Key, ownerAddress })
+        return "0xbatch-admin"
+      }
+    )
+
+    const result = await repository.addBucketMemberWithRole(
+      "admin",
+      "9",
+      "bucket-9",
+      "5F3sa2TJ...member",
+      // base64url JWK "x" value (43 chars) as stored on a profile
+      "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
+      "5F3sa2TJ...owner"
+    )
+
+    expect(result.method).toBe("utility.batchAll")
+    expect(result.txHash).toBe("0xbatch-admin")
+    expect(calls).toEqual([
+      {
+        endpoint: "wss://example-chain",
+        role: "admin",
+        namespaceId: "9",
+        bucketId: "bucket-9",
+        ss58Address: "5F3sa2TJ...member",
+        // decoded to a fixed 32-byte hex string for the chain's [u8;32] viewer field
+        x25519Key: "0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+        ownerAddress: "5F3sa2TJ...owner"
+      }
+    ])
+  })
+
+  it("submits a utility.batchAll adding contributor and viewer for the contributor role", async () => {
+    let observedRole = ""
+    let observedKey = ""
+    const repository = new DidCommRepository(
+      {
+        rpc: async () => [] as unknown[],
+        getEndpoint: () => "wss://example-chain"
+      },
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
+      async (_endpoint, role, _namespaceId, _bucketId, _ss58Address, x25519Key) => {
+        observedRole = role
+        observedKey = x25519Key
+        return "0xbatch-contributor"
+      }
+    )
+
+    const result = await repository.addBucketMemberWithRole(
+      "contributor",
+      "9",
+      "bucket-9",
+      "5F3sa2TJ...member",
+      "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
+      "5F3sa2TJ...owner"
+    )
+
+    expect(observedRole).toBe("contributor")
+    expect(observedKey).toBe("0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20")
+    expect(result.method).toBe("utility.batchAll")
+    expect(result.txHash).toBe("0xbatch-contributor")
+  })
+
+  it("submits a direct buckets.addViewer using the x25519 key for the viewer role", async () => {
+    let viewerMemberArg = ""
+    const repository = new DidCommRepository(
+      {
+        rpc: async () => [] as unknown[],
+        getEndpoint: () => "wss://example-chain"
+      },
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined,
+      async (endpoint, namespaceId, bucketId, memberAddress, ownerAddress) => {
+        expect(endpoint).toBe("wss://example-chain")
+        expect(namespaceId).toBe("9")
+        expect(bucketId).toBe("bucket-9")
+        expect(ownerAddress).toBe("5F3sa2TJ...owner")
+        viewerMemberArg = memberAddress
+        return "0xviewer-only"
+      },
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
+      async () => {
+        throw new Error("batch submitter should not be called for the viewer role")
+      }
+    )
+
+    const result = await repository.addBucketMemberWithRole(
+      "viewer",
+      "9",
+      "bucket-9",
+      "5F3sa2TJ...member",
+      "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
+      "5F3sa2TJ...owner"
+    )
+
+    expect(viewerMemberArg).toBe("0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20")
+    expect(result.method).toBe("buckets.addViewer")
+    expect(result.txHash).toBe("0xviewer-only")
+  })
+
+  it("rejects add-member-with-role when the x25519 key is empty", async () => {
+    const repository = new DidCommRepository(
+      { rpc: async () => "0xignored", getEndpoint: () => "wss://example-chain" }
+    )
+
+    await expect(
+      repository.addBucketMemberWithRole("admin", "9", "bucket-9", "5F3sa2TJ...member", "   ", "5F3sa2TJ...owner")
+    ).rejects.toThrow("X25519 key is required")
+  })
+
   it("rejects add-admin when namespace id is empty", async () => {
     const repository = new DidCommRepository(
       { rpc: async () => "0xignored", getEndpoint: () => "wss://example-chain" },
