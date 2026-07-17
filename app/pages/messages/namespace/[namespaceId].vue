@@ -140,8 +140,6 @@ onMounted(async () => {
           <h3 style="margin: 0">{{ namespaceDisplayName }}</h3>
         </div>
         <div class="row" style="gap: 8px">
-          <NuxtLink class="btn" :to="`/messages/namespace/managers/${encodeURIComponent(namespaceId)}`">Add
-            Manager</NuxtLink>
           <NuxtLink class="btn" :to="`/messages/bucket/create/${encodeURIComponent(namespaceId)}`">Add Bucket</NuxtLink>
         </div>
       </div>
@@ -170,9 +168,10 @@ onMounted(async () => {
     </section>
 
     <div class="card stack" style="gap: 16px; margin-top: 24px;">
-      <div class="row" style="justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
-        <h4 style="margin: 0; font-size: 16px;">Managers</h4>
+      <div class="row managers-header" style="justify-content: space-between; align-items: center; flex-wrap: nowrap; gap: 12px;">
+        <h4 style="margin: 0; font-size: 16px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Managers</h4>
         <NuxtLink v-if="isWalletConnected" class="btn"
+          style="flex-shrink: 0; white-space: nowrap;"
           :to="`/messages/namespace/managers/${encodeURIComponent(namespaceId)}`">
           Add Manager
         </NuxtLink>

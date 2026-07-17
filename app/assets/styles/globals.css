@@ -172,6 +172,37 @@ select:focus-visible {
   }
 }
 
+/* Keep the Managers/Members headers (title + Add button) on one horizontal line at all widths */
+@media (max-width: 720px) {
+  .managers-header,
+  .members-header {
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    flex-wrap: nowrap !important;
+  }
+
+  .managers-header h4,
+  .members-header h4 {
+    flex: 1 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .managers-header .btn,
+  .members-header .btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .members-header > .row {
+    flex-direction: row !important;
+    flex: 0 0 auto;
+  }
+}
+
 /* Keep bucket cards on a single row on small screens and truncate text */
 @media (max-width: 720px) {
   .card.bucket-card {

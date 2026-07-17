@@ -1647,10 +1647,10 @@ function isRemoving(address) {
         </div>
 
         <div class="card stack" style="gap: 16px;">
-          <div class="row" style="justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
-            <h4 style="margin: 0; font-size: 16px;">Members</h4>
-            <div class="row" style="gap: 8px">
-              <NuxtLink class="btn"
+          <div class="row members-header" style="justify-content: space-between; align-items: center; flex-wrap: nowrap; gap: 12px;">
+            <h4 style="margin: 0; font-size: 16px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Members</h4>
+            <div class="row" style="gap: 8px; flex: 0 0 auto; flex-wrap: nowrap;">
+              <NuxtLink class="btn" style="flex-shrink: 0; white-space: nowrap;"
                 :to="`/messages/bucket/add-member/${encodeURIComponent(bucketId)}?namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`">
                 Add Member
               </NuxtLink>
