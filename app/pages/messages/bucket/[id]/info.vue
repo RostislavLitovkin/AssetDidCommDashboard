@@ -565,18 +565,12 @@ function resolveMemberName(address: string): string {
   return formatAddress(address)
 }
 
-function resolveRemovalRoles(address: string): BucketMemberRole[] {
-  const roles: BucketMemberRole[] = []
-  if (bucketAdmins.value.some((candidate) => addressesEqual(candidate, address))) {
-    roles.push("admin")
-  }
-  if (bucketContributors.value.some((candidate) => addressesEqual(candidate, address))) {
-    roles.push("contributor")
-  }
-  if (bucketViewers.value.some((candidate) => addressesEqual(candidate, address))) {
-    roles.push("viewer")
-  }
-  return roles
+interface MemberEntry {
+  // SS58 address for admins/contributors; the X25519 key for viewer-only members.
+  address: string
+  roles: BucketMemberRole[]
+  // On-chain viewer identifier (X25519 key), present whenever the member holds the viewer role.
+  viewerKey?: string
 }
 
 function isHex32(value: string): boolean {
@@ -616,14 +610,16 @@ function normalizeX25519Value(value: unknown): string | undefined {
 }
 
 function deriveMemberX25519Keys(contributors: string[], viewers: string[]): void {
-  const keyForAddress = (address: string): string =>
-    normalizeX25519Value(memberProfiles.value[address]?.x25519Key) ?? "Not found"
-
+  // Contributors are keyed by SS58 address, so their encryption key comes from their profile.
   contributorX25519Keys.value = Object.fromEntries(
-    contributors.map((address) => [address, keyForAddress(address)])
+    contributors.map((address) => [
+      address,
+      normalizeX25519Value(memberProfiles.value[address]?.x25519Key) ?? "Not found"
+    ])
   )
+  // Viewers are keyed on-chain by their X25519 key, so the identifier itself is the key.
   viewerX25519Keys.value = Object.fromEntries(
-    viewers.map((address) => [address, keyForAddress(address)])
+    viewers.map((viewerKey) => [viewerKey, normalizeX25519Value(viewerKey) ?? "Not found"])
   )
 }
 
@@ -641,7 +637,7 @@ function resolveNamespaceIdFromBucket(bucketRecord: BucketRecord | null): string
   return typeof candidate === "string" ? candidate.trim() : ""
 }
 
-async function removeAllRoles(address: string): Promise<void> {
+async function removeAllRoles(member: MemberEntry): Promise<void> {
   membersError.value = ""
 
   if (!session.accountAddress) {
@@ -655,26 +651,26 @@ async function removeAllRoles(address: string): Promise<void> {
     return
   }
 
-  const roles = resolveRemovalRoles(address)
-  if (!roles.length) {
+  if (!member.roles.length) {
     membersError.value = "This member has no removable roles"
     return
   }
 
-  removingMemberAddress.value = address
+  removingMemberAddress.value = member.address
   currentBucketCall.value = "utility.batchAll"
 
   try {
     const result = await didCommRepository.removeBucketMemberRoles(
       namespaceId,
       bucketId.value,
-      address,
-      roles,
+      member.address,
+      member.roles,
+      member.viewerKey,
       session.accountAddress,
       logExtrinsicUpdate
     )
 
-    operations.add("bucket_write", result.method, "success", `Member removed (${roles.join(", ")}): ${result.txHash}`)
+    operations.add("bucket_write", result.method, "success", `Member removed (${member.roles.join(", ")}): ${result.txHash}`)
     await loadBucketMembers()
   } catch (error) {
     membersError.value = error instanceof Error ? error.message : "Unable to remove member"
@@ -1461,24 +1457,40 @@ onMounted(async () => {
   await scrollToBottom()
 })
 
-const allMembers = computed(() => {
-  const membersMap = new Map()
+const allMembers = computed<MemberEntry[]>(() => {
+  const membersMap = new Map<string, MemberEntry>()
 
   for (const admin of bucketAdmins.value) {
     membersMap.set(admin, { address: admin, roles: ['admin'] })
   }
 
   for (const contributor of bucketContributors.value) {
-    if (membersMap.has(contributor)) {
-      membersMap.get(contributor).roles.push('contributor')
+    const existing = membersMap.get(contributor)
+    if (existing) {
+      existing.roles.push('contributor')
     } else {
       membersMap.set(contributor, { address: contributor, roles: ['contributor'] })
     }
   }
 
-  for (const viewer of bucketViewers.value) {
-    if (!membersMap.has(viewer)) {
-      membersMap.set(viewer, { address: viewer, roles: ['viewer'] })
+  // Viewers are identified on-chain by their X25519 key. Match each viewer key to the
+  // admin/contributor whose profile carries the same key and merge the viewer role in;
+  // an unmatched viewer stays as its own row keyed by the raw key.
+  for (const viewerKey of bucketViewers.value) {
+    const normalizedViewerKey = normalizeX25519Value(viewerKey)
+    const matched = normalizedViewerKey
+      ? Array.from(membersMap.values()).find(
+          (member) => normalizeX25519Value(memberProfiles.value[member.address]?.x25519Key) === normalizedViewerKey
+        )
+      : undefined
+
+    if (matched) {
+      if (!matched.roles.includes('viewer')) {
+        matched.roles.push('viewer')
+      }
+      matched.viewerKey = viewerKey
+    } else if (!membersMap.has(viewerKey)) {
+      membersMap.set(viewerKey, { address: viewerKey, roles: ['viewer'], viewerKey })
     }
   }
 
@@ -1557,7 +1569,7 @@ const allMembers = computed(() => {
               </span>
               <button class="btn member-remove-btn" type="button" title="Remove"
                 :disabled="Boolean(removingMemberAddress) || !session.accountAddress"
-                @click="removeAllRoles(member.address)"
+                @click="removeAllRoles(member)"
                 :style="{ background: 'var(--color-white)', flexShrink: 0, padding: '4px 6px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '3px', whiteSpace: 'nowrap', minWidth: 'auto', maxWidth: '120px', overflow: 'hidden' }">
                 <Trash2 v-if="removingMemberAddress !== member.address" :size="14" aria-hidden="true" />
                 <span v-else class="spinner-small"></span>

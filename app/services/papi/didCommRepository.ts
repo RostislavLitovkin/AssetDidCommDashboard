@@ -122,6 +122,7 @@ type BucketMemberRolesRemovalBatchExtrinsicSubmitter = (
   bucketId: string,
   memberAddress: string,
   roles: BucketMemberRole[],
+  viewerKey: string | undefined,
   ownerAddress: string,
   onUpdate?: ExtrinsicUpdateHandler
 ) => Promise<string>
@@ -1226,6 +1227,7 @@ export class DidCommRepository {
     bucketId: string,
     memberAddress: string,
     roles: BucketMemberRole[],
+    viewerKey?: string,
     ownerAddress?: string,
     onUpdate?: ExtrinsicUpdateHandler
   ): Promise<AddBucketMemberResult> {
@@ -1252,6 +1254,12 @@ export class DidCommRepository {
       throw new Error("At least one role is required to remove a member")
     }
 
+    // Viewers are keyed on-chain by their X25519 key, not their SS58 address.
+    const trimmedViewerKey = viewerKey?.trim()
+    if (orderedRoles.includes("viewer") && !trimmedViewerKey) {
+      throw new Error("Viewer key is required to remove a viewer")
+    }
+
     if (!ownerAddress) {
       throw new Error("Wallet must be connected to submit utility.batchAll extrinsic")
     }
@@ -1267,6 +1275,7 @@ export class DidCommRepository {
       trimmedBucketId,
       trimmedMemberAddress,
       orderedRoles,
+      trimmedViewerKey,
       ownerAddress,
       onUpdate
     )
@@ -1810,6 +1819,7 @@ async function submitBucketsRemoveMemberBatchExtrinsic(
   bucketId: string,
   memberAddress: string,
   roles: BucketMemberRole[],
+  viewerKey: string | undefined,
   ownerAddress: string,
   onUpdate?: ExtrinsicUpdateHandler
 ): Promise<string> {
@@ -1836,14 +1846,19 @@ async function submitBucketsRemoveMemberBatchExtrinsic(
       viewer: ["removeViewer"]
     }
 
-    // Every remove call takes (namespaceId, bucketId, memberAddress).
+    // Admin/contributor remove calls take the SS58 address; the viewer call is keyed
+    // on-chain by the member's X25519 key.
     const calls: unknown[] = []
     for (const role of roles) {
       const removeCall = resolveBucketsTxMethod(buckets, removeByRole[role])
       if (!removeCall) {
         throw new Error(`buckets.${removeByRole[role][0]} extrinsic is not available on this chain`)
       }
-      calls.push(removeCall(namespaceId, bucketId, memberAddress))
+      const subject = role === "viewer" ? viewerKey : memberAddress
+      if (!subject) {
+        throw new Error("Viewer key is required to remove a viewer")
+      }
+      calls.push(removeCall(namespaceId, bucketId, subject))
     }
 
     if (!calls.length) {

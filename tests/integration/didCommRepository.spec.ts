@@ -386,8 +386,8 @@ describe("DidCommRepository", () => {
       undefined, undefined, undefined, undefined, undefined, undefined,
       undefined, undefined, undefined, undefined, undefined, undefined,
       undefined, undefined,
-      async (endpoint, namespaceId, bucketId, memberAddress, roles, ownerAddress) => {
-        calls.push({ endpoint, namespaceId, bucketId, memberAddress, roles, ownerAddress })
+      async (endpoint, namespaceId, bucketId, memberAddress, roles, viewerKey, ownerAddress) => {
+        calls.push({ endpoint, namespaceId, bucketId, memberAddress, roles, viewerKey, ownerAddress })
         return "0xremove-batch"
       }
     )
@@ -398,6 +398,7 @@ describe("DidCommRepository", () => {
       "bucket-7",
       "5F3sa2TJ...member",
       ["viewer", "admin", "admin"],
+      "0xviewer-x25519-key",
       "5F3sa2TJ...owner"
     )
 
@@ -410,6 +411,7 @@ describe("DidCommRepository", () => {
         bucketId: "bucket-7",
         memberAddress: "5F3sa2TJ...member",
         roles: ["admin", "viewer"],
+        viewerKey: "0xviewer-x25519-key",
         ownerAddress: "5F3sa2TJ...owner"
       }
     ])
@@ -421,8 +423,18 @@ describe("DidCommRepository", () => {
     )
 
     await expect(
-      repository.removeBucketMemberRoles("7", "bucket-7", "5F3sa2TJ...member", [], "5F3sa2TJ...owner")
+      repository.removeBucketMemberRoles("7", "bucket-7", "5F3sa2TJ...member", [], undefined, "5F3sa2TJ...owner")
     ).rejects.toThrow("At least one role is required to remove a member")
+  })
+
+  it("rejects remove-member-roles when a viewer role has no viewer key", async () => {
+    const repository = new DidCommRepository(
+      { rpc: async () => "0xignored", getEndpoint: () => "wss://example-chain" }
+    )
+
+    await expect(
+      repository.removeBucketMemberRoles("7", "bucket-7", "5F3sa2TJ...member", ["viewer"], undefined, "5F3sa2TJ...owner")
+    ).rejects.toThrow("Viewer key is required to remove a viewer")
   })
 
   it("submits a utility.batchAll adding admin, contributor and viewer for the admin role", async () => {
