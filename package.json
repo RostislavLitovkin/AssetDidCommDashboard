@@ -29,11 +29,11 @@
     "pinia": "^3.0.4"
   },
   "devDependencies": {
-    "@playwright/test": "^1.58.2",
-    "@types/node": "^24.5.2",
+    "@playwright/test": "^1.61.1",
+    "@types/node": "^24.13.3",
     "eslint": "^10.1.0",
     "typescript": "^6.0.2",
-    "vitest": "^4.1.1",
+    "vitest": "^4.1.10",
     "vue-tsc": "^3.2.6"
   }
 }

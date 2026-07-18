@@ -1,7 +1,5 @@
 {
   "extends": "./.nuxt/tsconfig.json",
-  "compilerOptions": {
-    "types": ["vitest/globals"]
-  },
-  "include": ["tests/**/*.ts", "app/types/nuxt.d.ts"]
+  "exclude": ["tests/**/*"],
+  "include": ["app/types/nuxt.d.ts"]
 }
