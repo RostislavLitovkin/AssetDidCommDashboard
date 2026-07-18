@@ -158,21 +158,6 @@ const connectedAdmin = computed(() => {
   return bucketAdmins.value.some((adminAddress) => addressesEqual(adminAddress, session.accountAddress as string))
 })
 
-const contributorRecipients = computed(() => {
-  return bucketContributors.value.flatMap((address) => {
-    const x25519 = contributorX25519Keys.value[address]
-    if (!isValidX25519(x25519)) {
-      return []
-    }
-
-    return [{ address, x25519: x25519.trim() }]
-  })
-})
-
-const contributorsMissingEncryptionKey = computed(() => {
-  return Math.max(0, bucketContributors.value.length - contributorRecipients.value.length)
-})
-
 const viewerRecipients = computed(() => {
   return bucketViewers.value.flatMap((address) => {
     const x25519 = viewerX25519Keys.value[address]
@@ -182,10 +167,6 @@ const viewerRecipients = computed(() => {
 
     return [{ address, x25519: x25519.trim() }]
   })
-})
-
-const contributorsAndViewerRecipients = computed(() => {
-  return [...contributorRecipients.value, ...viewerRecipients.value]
 })
 
 const bucketMetadata = computed<MetadataEntry[]>(() => extractBucketMetadataEntries(bucket.value))
@@ -720,14 +701,14 @@ function buildKeySharingMessage(secretJwk: jose.JWK, readerAddresses: string[]):
 }
 
 function buildRecipientJwks(bucketPublicJwk: jose.JWK): { recipientJwks: jose.JWK[]; readerAddresses: string[] } {
-  const readerAddresses = contributorsAndViewerRecipients.value.map((recipient) => recipient.address)
+  const readerAddresses = viewerRecipients.value.map((recipient) => recipient.address)
 
   if (!readerAddresses.length) {
-    throw new Error("No valid contributor or viewer X25519 keys are available for key sharing")
+    throw new Error("No valid viewer X25519 keys are available for key sharing")
   }
 
   const recipientJwks: jose.JWK[] = [bucketPublicJwk]
-  for (const recipient of contributorsAndViewerRecipients.value) {
+  for (const recipient of viewerRecipients.value) {
     recipientJwks.push({
       kty: "OKP",
       crv: "X25519",
@@ -774,11 +755,6 @@ async function generateAndShareEncryptionKey(): Promise<void> {
     return
   }
 
-  if (profilesLoading.value) {
-    encryptionKeyError.value = "Member encryption keys are still loading"
-    return
-  }
-
   const namespaceId = resolveNamespaceIdFromBucket(bucket.value)
   if (!namespaceId) {
     encryptionKeyError.value = "Namespace id is required to rotate bucket encryption keys"
@@ -818,7 +794,7 @@ async function generateAndShareEncryptionKey(): Promise<void> {
 
     console.log("--- [ADMIN] 4b. Preparing recipients and encrypting key-sharing payload ---")
     const { recipientJwks, readerAddresses } = buildRecipientJwks(bucketPkJwk)
-    console.log(`Using ${readerAddresses.length} contributor reader(s):`, readerAddresses)
+    console.log(`Using ${readerAddresses.length} viewer reader(s):`, readerAddresses)
 
     const keySharingMessage = buildKeySharingMessage(bucketSkJwk, readerAddresses)
     console.log("Constructed Key-Sharing Message:", JSON.parse(keySharingMessage) as unknown)
@@ -1589,22 +1565,20 @@ const allMembers = computed<MemberEntry[]>(() => {
             <button class="btn btn-primary" type="button" :disabled="generatingEncryptionKey ||
               !session.accountAddress ||
               !connectedAdmin ||
-              profilesLoading ||
-              !contributorsAndViewerRecipients.length
+              !viewerRecipients.length
               " @click="generateAndShareEncryptionKey">
-              {{ generatingEncryptionKey ? "Generating..." : "Generate & Share New Key" }}
+              {{ generatingEncryptionKey ? "Creating & Sharing..." : "Create & Share Key" }}
             </button>
           </div>
 
           <p class="muted" style="margin: 0">
             Generates a fresh X25519 encryption keypair, stores the public key ID on-chain, ensures the key-sharing tag
             exists,
-            then encrypts and shares the new secret key for contributors and viewers using their loaded X25519 keys.
+            then encrypts and shares the new secret key with all viewers using their X25519 keys.
           </p>
 
           <ul class="key-rotation-checks"
             style="background: #f6f7f9; padding: 12px 12px 12px 32px; border-radius: 8px;">
-            <li>Contributors with X25519: {{ contributorRecipients.length }} / {{ bucketContributors.length }}</li>
             <li>Viewers with X25519: {{ viewerRecipients.length }} / {{ bucketViewers.length }}</li>
             <li v-if="latestGeneratedKeyId">Last generated key ID: {{ latestGeneratedKeyId }}</li>
           </ul>
