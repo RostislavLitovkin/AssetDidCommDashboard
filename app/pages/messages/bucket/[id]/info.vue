@@ -30,28 +30,30 @@ const asOptionalString = (value: unknown): string | undefined => {
 
 const didCommRepository = new DidCommRepository(
   $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string },
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  {
+  undefined, // 2 submitExtrinsic
+  undefined, // 3 submitBucketExtrinsic
+  undefined, // 4 readNamespaceStorage
+  undefined, // 5 readBucketsStorage
+  undefined, // 6 readMessagesStorage
+  undefined, // 7 submitMessageExtrinsic
+  undefined, // 8 submitAddAdminExtrinsic
+  undefined, // 9 submitAddContributorExtrinsic
+  undefined, // 10 submitAddViewerExtrinsic
+  undefined, // 11 submitRemoveAdminExtrinsic
+  undefined, // 12 submitRemoveContributorExtrinsic
+  undefined, // 13 submitRemoveViewerExtrinsic
+  undefined, // 14 submitSetBucketPublicKeyExtrinsic
+  undefined, // 15 submitCreateTagExtrinsic
+  { // 16 pinataConfig
     jwt: asOptionalString(runtimeConfig.public.pinataJwt),
     apiKey: asOptionalString(runtimeConfig.public.pinataApiKey),
     apiSecret: asOptionalString(runtimeConfig.public.pinataApiSecret),
     publicGateway: asOptionalString(runtimeConfig.public.pinataGateway)
   },
-  undefined,
-  undefined,
-  undefined,
-  String(runtimeConfig.public.subqueryIndexerUrl || "")
+  undefined, // 17 submitBucketKeyRotationBatchExtrinsic
+  undefined, // 18 submitAddNamespaceManagerExtrinsic
+  undefined, // 19 submitRemoveNamespaceManagerExtrinsic
+  String(runtimeConfig.public.subqueryIndexerUrl || "") // 20 indexerUrl
 )
 
 const profileClient = new ProfileClient()
@@ -130,9 +132,7 @@ const bucketViewers = ref<string[]>([])
 const removingMemberAddress = ref("")
 const memberProfiles = ref<Record<string, Profile | null>>({})
 const profilesLoading = ref(false)
-const loadingContributorKeys = ref(false)
 const contributorX25519Keys = ref<Record<string, string>>({})
-const loadingViewerKeys = ref(false)
 const viewerX25519Keys = ref<Record<string, string>>({})
 const currentBucketCall = ref("buckets.write")
 const generatingEncryptionKey = ref(false)
@@ -498,11 +498,10 @@ async function loadBucketMembers() {
     bucketAdmins.value = admins
     bucketContributors.value = contributors
     bucketViewers.value = viewers
-    await Promise.all([
-      loadContributorX25519Keys(contributors),
-      loadViewerX25519Keys(viewers),
-      loadMemberProfiles([...admins, ...contributors, ...viewers])
-    ])
+    // Profiles carry each member's X25519 key, so we derive the encryption keys
+    // from them instead of querying the chain's DID storage.
+    await loadMemberProfiles([...admins, ...contributors, ...viewers])
+    deriveMemberX25519Keys(contributors, viewers)
   } catch (error) {
     bucketAdmins.value = []
     bucketContributors.value = []
@@ -616,137 +615,16 @@ function normalizeX25519Value(value: unknown): string | undefined {
   return trimmed
 }
 
-function extractX25519FromPublicKeyEntry(entry: unknown): string | undefined {
-  const keyRecord = toRecord(toRecord(entry)?.key)
-  const publicEncryptionKey = toRecord(keyRecord?.publicEncryptionKey)
-  return normalizeX25519Value(publicEncryptionKey?.x25519)
-}
+function deriveMemberX25519Keys(contributors: string[], viewers: string[]): void {
+  const keyForAddress = (address: string): string =>
+    normalizeX25519Value(memberProfiles.value[address]?.x25519Key) ?? "Not found"
 
-function extractContributorX25519(payload: unknown): string | undefined {
-  const record = toRecord(payload)
-  if (!record) {
-    return undefined
-  }
-
-  const publicKeys = toRecord(record.publicKeys)
-  const keyAgreementKeys = Array.isArray(record.keyAgreementKeys)
-    ? record.keyAgreementKeys.filter((value): value is string => typeof value === "string")
-    : []
-
-  // Canonical path for this runtime:
-  // keyAgreementKeys[] -> publicKeys[keyId].key.publicEncryptionKey.x25519
-  if (publicKeys && keyAgreementKeys.length) {
-    for (const keyId of keyAgreementKeys) {
-      const normalizedId = keyId.trim().toLowerCase()
-      const matchedEntry = Object.entries(publicKeys).find(([mapKey]) => mapKey.trim().toLowerCase() === normalizedId)?.[1]
-      const x25519 = extractX25519FromPublicKeyEntry(matchedEntry)
-      if (x25519) {
-        return x25519
-      }
-    }
-  }
-
-  // Fallback: any encryption key in publicKeys map
-  if (publicKeys) {
-    for (const entry of Object.values(publicKeys)) {
-      const x25519 = extractX25519FromPublicKeyEntry(entry)
-      if (x25519) {
-        return x25519
-      }
-    }
-  }
-
-  return undefined
-}
-
-async function queryDidPayloadByAddress(address: string): Promise<unknown> {
-  const endpoint = session.networkEndpoint || runtimeConfig.public.xcavateWsEndpoint || "wss://xcavate-paseo.api.onfinality.io/public-ws"
-  const { ApiPromise, WsProvider } = await import("@polkadot/api")
-
-  const provider = new WsProvider(endpoint)
-  const api = await ApiPromise.create({ provider })
-
-  try {
-    const queryDid = api.query?.did?.did
-    if (typeof queryDid !== "function") {
-      return undefined
-    }
-
-    const result = await queryDid(address)
-
-    try {
-      if (typeof result.toJSON === "function") {
-        return result.toJSON()
-      }
-    } catch {
-    }
-
-    try {
-      if (typeof result.toHuman === "function") {
-        return result.toHuman()
-      }
-    } catch {
-    }
-
-    return typeof result.toString === "function" ? result.toString() : undefined
-  } finally {
-    await api.disconnect().catch(() => undefined)
-    provider.disconnect()
-  }
-}
-
-async function loadContributorX25519Keys(addresses: string[]): Promise<void> {
-  contributorX25519Keys.value = {}
-
-  if (!addresses.length) {
-    return
-  }
-
-  loadingContributorKeys.value = true
-  const keysByAddress: Record<string, string> = {}
-
-  try {
-    for (const address of addresses) {
-      const payload = await queryDidPayloadByAddress(address)
-      keysByAddress[address] = extractContributorX25519(payload) ?? "Not found"
-    }
-
-    contributorX25519Keys.value = keysByAddress
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to load contributor DID key agreements"
-    membersError.value = message
-    operations.add("did_read", bucketId.value, "error", message)
-    contributorX25519Keys.value = {}
-  } finally {
-    loadingContributorKeys.value = false
-  }
-}
-
-async function loadViewerX25519Keys(addresses: string[]): Promise<void> {
-  viewerX25519Keys.value = {}
-
-  if (!addresses.length) {
-    return
-  }
-
-  loadingViewerKeys.value = true
-  const keysByAddress: Record<string, string> = {}
-
-  try {
-    for (const address of addresses) {
-      const payload = await queryDidPayloadByAddress(address)
-      keysByAddress[address] = extractContributorX25519(payload) ?? "Not found"
-    }
-
-    viewerX25519Keys.value = keysByAddress
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to load viewer DID key agreements"
-    membersError.value = message
-    operations.add("did_read", bucketId.value, "error", message)
-    viewerX25519Keys.value = {}
-  } finally {
-    loadingViewerKeys.value = false
-  }
+  contributorX25519Keys.value = Object.fromEntries(
+    contributors.map((address) => [address, keyForAddress(address)])
+  )
+  viewerX25519Keys.value = Object.fromEntries(
+    viewers.map((address) => [address, keyForAddress(address)])
+  )
 }
 
 function resolveNamespaceIdFromBucket(bucketRecord: BucketRecord | null): string {
@@ -900,8 +778,8 @@ async function generateAndShareEncryptionKey(): Promise<void> {
     return
   }
 
-  if (loadingContributorKeys.value) {
-    encryptionKeyError.value = "Contributor X25519 keys are still loading"
+  if (profilesLoading.value) {
+    encryptionKeyError.value = "Member encryption keys are still loading"
     return
   }
 
@@ -1699,8 +1577,7 @@ const allMembers = computed(() => {
             <button class="btn btn-primary" type="button" :disabled="generatingEncryptionKey ||
               !session.accountAddress ||
               !connectedAdmin ||
-              loadingContributorKeys ||
-              loadingViewerKeys ||
+              profilesLoading ||
               !contributorsAndViewerRecipients.length
               " @click="generateAndShareEncryptionKey">
               {{ generatingEncryptionKey ? "Generating..." : "Generate & Share New Key" }}
