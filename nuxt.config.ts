@@ -7,7 +7,8 @@ export default defineNuxtConfig({
     baseURL: process.env.NUXT_APP_BASE_URL || "/",
     head: {
       title: "realXmessage",
-      meta: [{ name: "viewport", content: "width=device-width, initial-scale=1" }]
+      meta: [{ name: "viewport", content: "width=device-width, initial-scale=1" }],
+      link: [{ rel: "icon", type: "image/x-icon", href: "/realXmessengerAppIcon.ico" }]
     }
   },
   nitro: {

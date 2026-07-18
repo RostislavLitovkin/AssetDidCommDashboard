@@ -188,8 +188,7 @@ onMounted(async () => {
           </label>
 
           <div class="row" style="justify-content: flex-end; gap: 8px">
-            <NuxtLink class="btn" :to="namespaceRoutePath">Cancel</NuxtLink>
-            <button class="btn" type="button" :disabled="submitting || managersLoading || !isManager" @click="submitCreateBucket">
+            <button class="btn btn-primary" type="button" :disabled="submitting || managersLoading || !isManager" @click="submitCreateBucket">
               {{ submitting ? "Submitting..." : "Submit Extrinsic" }}
             </button>
           </div>

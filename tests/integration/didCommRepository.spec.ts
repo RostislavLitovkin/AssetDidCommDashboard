@@ -326,6 +326,7 @@ describe("DidCommRepository", () => {
       async () => "0xignored-message",
       async () => "0xignored-admin",
       async () => "0xignored-contributor",
+      undefined,
       async (endpoint, namespaceId, bucketId, memberAddress, ownerAddress) => {
         expect(endpoint).toBe("wss://example-chain")
         expect(namespaceId).toBe("7")
@@ -356,7 +357,8 @@ describe("DidCommRepository", () => {
       async () => "0xignored-message",
       async () => "0xignored-admin",
       async () => "0xignored-contributor",
-      async () => "0xignored-remove-admin",
+      undefined,
+      undefined,
       async (endpoint, namespaceId, bucketId, memberAddress, ownerAddress) => {
         expect(endpoint).toBe("wss://example-chain")
         expect(namespaceId).toBe("7")
@@ -371,6 +373,56 @@ describe("DidCommRepository", () => {
 
     expect(result.method).toBe("buckets.removeContributor")
     expect(result.txHash).toBe("0xremove-contributor")
+  })
+
+  it("submits a utility.batchAll removing every role a member holds", async () => {
+    const calls: unknown[] = []
+    const repository = new DidCommRepository(
+      {
+        rpc: async () => [] as unknown[],
+        getEndpoint: () => "wss://example-chain"
+      },
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined,
+      async (endpoint, namespaceId, bucketId, memberAddress, roles, ownerAddress) => {
+        calls.push({ endpoint, namespaceId, bucketId, memberAddress, roles, ownerAddress })
+        return "0xremove-batch"
+      }
+    )
+
+    // Roles supplied out of order and with a duplicate; the repository normalizes them.
+    const result = await repository.removeBucketMemberRoles(
+      "7",
+      "bucket-7",
+      "5F3sa2TJ...member",
+      ["viewer", "admin", "admin"],
+      "5F3sa2TJ...owner"
+    )
+
+    expect(result.method).toBe("utility.batchAll")
+    expect(result.txHash).toBe("0xremove-batch")
+    expect(calls).toEqual([
+      {
+        endpoint: "wss://example-chain",
+        namespaceId: "7",
+        bucketId: "bucket-7",
+        memberAddress: "5F3sa2TJ...member",
+        roles: ["admin", "viewer"],
+        ownerAddress: "5F3sa2TJ...owner"
+      }
+    ])
+  })
+
+  it("rejects remove-member-roles when no roles are provided", async () => {
+    const repository = new DidCommRepository(
+      { rpc: async () => "0xignored", getEndpoint: () => "wss://example-chain" }
+    )
+
+    await expect(
+      repository.removeBucketMemberRoles("7", "bucket-7", "5F3sa2TJ...member", [], "5F3sa2TJ...owner")
+    ).rejects.toThrow("At least one role is required to remove a member")
   })
 
   it("submits a utility.batchAll adding admin, contributor and viewer for the admin role", async () => {

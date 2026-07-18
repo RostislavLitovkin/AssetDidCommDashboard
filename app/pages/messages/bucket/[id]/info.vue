@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { DidCommRepository, type BucketMessage, type BucketRecord, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
+import { DidCommRepository, type BucketMemberRole, type BucketMessage, type BucketRecord, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
+import { ProfileClient } from "../../../../services/profile/profileClient"
+import type { Profile } from "../../../../types/profile"
 import LoadingBar from "../../../../components/common/LoadingBar.vue"
 import SkeletonCard from "../../../../components/common/SkeletonCard.vue"
 import { useAddress } from "../../../../composables/useAddress"
 import { Trash2 } from "lucide-vue-next"
 import { hexToU8a } from "@polkadot/util"
-import { xxhashAsHex } from "@polkadot/util-crypto"
+import { decodeAddress, encodeAddress, xxhashAsHex } from "@polkadot/util-crypto"
 import * as jose from "jose"
 import { computed, nextTick, onMounted, ref, watch } from "vue"
 import { useNuxtApp, useRoute, useRuntimeConfig } from "nuxt/app"
@@ -51,6 +53,8 @@ const didCommRepository = new DidCommRepository(
   undefined,
   String(runtimeConfig.public.subqueryIndexerUrl || "")
 )
+
+const profileClient = new ProfileClient()
 
 type DeliveryState = "sending" | "sent" | "failed"
 
@@ -123,9 +127,9 @@ const chatViewport = ref<HTMLElement | null>(null)
 const bucketAdmins = ref<string[]>([])
 const bucketContributors = ref<string[]>([])
 const bucketViewers = ref<string[]>([])
-const removingAdminAddress = ref("")
-const removingContributorAddress = ref("")
-const removingViewerAddress = ref("")
+const removingMemberAddress = ref("")
+const memberProfiles = ref<Record<string, Profile | null>>({})
+const profilesLoading = ref(false)
 const loadingContributorKeys = ref(false)
 const contributorX25519Keys = ref<Record<string, string>>({})
 const loadingViewerKeys = ref(false)
@@ -496,7 +500,8 @@ async function loadBucketMembers() {
     bucketViewers.value = viewers
     await Promise.all([
       loadContributorX25519Keys(contributors),
-      loadViewerX25519Keys(viewers)
+      loadViewerX25519Keys(viewers),
+      loadMemberProfiles([...admins, ...contributors, ...viewers])
     ])
   } catch (error) {
     bucketAdmins.value = []
@@ -504,8 +509,75 @@ async function loadBucketMembers() {
     bucketViewers.value = []
     contributorX25519Keys.value = {}
     viewerX25519Keys.value = {}
+    memberProfiles.value = {}
     membersError.value = error instanceof Error ? error.message : "Unable to load bucket member lists"
   }
+}
+
+async function loadMemberProfiles(addresses: string[]): Promise<void> {
+  const uniqueAddresses = Array.from(new Set(addresses.map((address) => address.trim()).filter(Boolean)))
+  if (!uniqueAddresses.length) {
+    memberProfiles.value = {}
+    return
+  }
+
+  profilesLoading.value = true
+  const profilesByAddress: Record<string, Profile | null> = {}
+
+  try {
+    await Promise.all(
+      uniqueAddresses.map(async (address) => {
+        try {
+          // The profile API keys on the generic Substrate SS58 format (prefix 42).
+          profilesByAddress[address] = await profileClient.getProfile(toSs58Prefix42(address))
+        } catch {
+          // Treat a failed lookup the same as a missing profile.
+          profilesByAddress[address] = null
+        }
+      })
+    )
+    memberProfiles.value = profilesByAddress
+  } finally {
+    profilesLoading.value = false
+  }
+}
+
+function toSs58Prefix42(address: string): string {
+  const trimmed = address.trim()
+  try {
+    return encodeAddress(decodeAddress(trimmed), 42)
+  } catch {
+    return trimmed
+  }
+}
+
+function resolveMemberName(address: string): string {
+  const profile = memberProfiles.value[address]
+  if (profile?.nickname) {
+    return profile.nickname
+  }
+
+  // A resolved-but-missing profile is flagged explicitly; while still loading (or
+  // for a profile without a nickname) fall back to the formatted address.
+  if (address in memberProfiles.value && profile === null) {
+    return "Profile Not Found"
+  }
+
+  return formatAddress(address)
+}
+
+function resolveRemovalRoles(address: string): BucketMemberRole[] {
+  const roles: BucketMemberRole[] = []
+  if (bucketAdmins.value.some((candidate) => addressesEqual(candidate, address))) {
+    roles.push("admin")
+  }
+  if (bucketContributors.value.some((candidate) => addressesEqual(candidate, address))) {
+    roles.push("contributor")
+  }
+  if (bucketViewers.value.some((candidate) => addressesEqual(candidate, address))) {
+    roles.push("viewer")
+  }
+  return roles
 }
 
 function isHex32(value: string): boolean {
@@ -691,7 +763,7 @@ function resolveNamespaceIdFromBucket(bucketRecord: BucketRecord | null): string
   return typeof candidate === "string" ? candidate.trim() : ""
 }
 
-async function removeAdmin(address: string): Promise<void> {
+async function removeAllRoles(address: string): Promise<void> {
   membersError.value = ""
 
   if (!session.accountAddress) {
@@ -705,97 +777,32 @@ async function removeAdmin(address: string): Promise<void> {
     return
   }
 
-  removingAdminAddress.value = address
-  currentBucketCall.value = "buckets.removeAdmin"
+  const roles = resolveRemovalRoles(address)
+  if (!roles.length) {
+    membersError.value = "This member has no removable roles"
+    return
+  }
+
+  removingMemberAddress.value = address
+  currentBucketCall.value = "utility.batchAll"
 
   try {
-    const result = await didCommRepository.removeBucketAdmin(
+    const result = await didCommRepository.removeBucketMemberRoles(
       namespaceId,
       bucketId.value,
       address,
+      roles,
       session.accountAddress,
       logExtrinsicUpdate
     )
 
-    operations.add("bucket_write", result.method, "success", `Admin removed: ${result.txHash}`)
+    operations.add("bucket_write", result.method, "success", `Member removed (${roles.join(", ")}): ${result.txHash}`)
     await loadBucketMembers()
   } catch (error) {
-    membersError.value = error instanceof Error ? error.message : "Unable to remove admin"
+    membersError.value = error instanceof Error ? error.message : "Unable to remove member"
     operations.add("bucket_write", currentBucketCall.value, "error", membersError.value)
   } finally {
-    removingAdminAddress.value = ""
-  }
-}
-
-async function removeContributor(address: string): Promise<void> {
-  membersError.value = ""
-
-  if (!session.accountAddress) {
-    membersError.value = "Connect wallet before submitting member removal extrinsics"
-    return
-  }
-
-  const namespaceId = resolveNamespaceIdFromBucket(bucket.value)
-  if (!namespaceId) {
-    membersError.value = "Namespace id is required to remove bucket members"
-    return
-  }
-
-  removingContributorAddress.value = address
-  currentBucketCall.value = "buckets.removeContributor"
-
-  try {
-    const result = await didCommRepository.removeBucketContributor(
-      namespaceId,
-      bucketId.value,
-      address,
-      session.accountAddress,
-      logExtrinsicUpdate
-    )
-
-    operations.add("bucket_write", result.method, "success", `Contributor removed: ${result.txHash}`)
-    await loadBucketMembers()
-  } catch (error) {
-    membersError.value = error instanceof Error ? error.message : "Unable to remove contributor"
-    operations.add("bucket_write", currentBucketCall.value, "error", membersError.value)
-  } finally {
-    removingContributorAddress.value = ""
-  }
-}
-
-async function removeViewer(address: string): Promise<void> {
-  membersError.value = ""
-
-  if (!session.accountAddress) {
-    membersError.value = "Connect wallet before submitting member removal extrinsics"
-    return
-  }
-
-  const namespaceId = resolveNamespaceIdFromBucket(bucket.value)
-  if (!namespaceId) {
-    membersError.value = "Namespace id is required to remove bucket members"
-    return
-  }
-
-  removingViewerAddress.value = address
-  currentBucketCall.value = "buckets.removeViewer"
-
-  try {
-    const result = await didCommRepository.removeBucketViewer(
-      namespaceId,
-      bucketId.value,
-      address,
-      session.accountAddress,
-      logExtrinsicUpdate
-    )
-
-    operations.add("bucket_write", result.method, "success", `Viewer removed: ${result.txHash}`)
-    await loadBucketMembers()
-  } catch (error) {
-    membersError.value = error instanceof Error ? error.message : "Unable to remove viewer"
-    operations.add("bucket_write", currentBucketCall.value, "error", membersError.value)
-  } finally {
-    removingViewerAddress.value = ""
+    removingMemberAddress.value = ""
   }
 }
 
@@ -1599,10 +1606,6 @@ const allMembers = computed(() => {
 
   return Array.from(membersMap.values())
 })
-
-function isRemoving(address) {
-  return removingAdminAddress.value === address || removingContributorAddress.value === address || removingViewerAddress.value === address
-}
 </script>
 
 <template>
@@ -1619,10 +1622,10 @@ function isRemoving(address) {
 
         <div class="card stack" style="gap: 16px;">
           <div class="row" style="justify-content: space-between; align-items: center">
-            <h4 style="margin: 0; font-size: 16px;">Metadata</h4>
-            <button class="btn" type="button" :disabled="bucketLoading" @click="loadBucketPage">
-              Reload
-            </button>
+            <h4
+              style="margin: 0; font-size: 16px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+              Metadata</h4>
+
           </div>
           <SkeletonCard v-if="bucketLoading" :count="2" :lines="2" />
           <p v-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
@@ -1635,7 +1638,7 @@ function isRemoving(address) {
               <dd v-if="entry.key.includes('createdAt') && bucketCreatedAtTimestampString">
                 {{ bucketCreatedAtTimestampString }}
                 <span v-if="showDebug" class="muted" style="font-size: 11px; margin-left: 6px;">(Block: {{ entry.value
-                  }})</span>
+                }})</span>
               </dd>
               <dd v-else-if="entry.key.toLowerCase().includes('category') && entry.value.trim() === '0x'">None</dd>
               <dd v-else>{{ entry.value }}</dd>
@@ -1647,8 +1650,11 @@ function isRemoving(address) {
         </div>
 
         <div class="card stack" style="gap: 16px;">
-          <div class="row members-header" style="justify-content: space-between; align-items: center; flex-wrap: nowrap; gap: 12px;">
-            <h4 style="margin: 0; font-size: 16px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Members</h4>
+          <div class="row members-header"
+            style="justify-content: space-between; align-items: center; flex-wrap: nowrap; gap: 12px;">
+            <h4
+              style="margin: 0; font-size: 16px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+              Members</h4>
             <div class="row" style="gap: 8px; flex: 0 0 auto; flex-wrap: nowrap;">
               <NuxtLink class="btn" style="flex-shrink: 0; white-space: nowrap;"
                 :to="`/messages/bucket/add-member/${encodeURIComponent(bucketId)}?namespaceId=${encodeURIComponent(bucket?.namespaceId ?? '')}`">
@@ -1661,52 +1667,25 @@ function isRemoving(address) {
           <p v-if="membersError" style="margin: 0; color: var(--status-error)">{{ membersError }}</p>
 
           <ul v-if="allMembers.length" class="bucket-members-list"
-            style="display: flex; flex-direction: column; gap: 8px;">
-            <li v-for="member in allMembers" :key="member.address" class="bucket-member-item card"
-              style="padding: 12px 16px; background: #f6f7f9; margin: 0; border: 1px solid var(--border-default);">
-              <div class="row"
-                style="justify-content: space-between; align-items: center; width: 100%; flex-wrap: wrap; gap: 12px;">
-                <div class="stack" style="gap: 4px;">
-                  <div class="row" style="align-items: center; gap: 8px;">
-                    <strong style="font-size: 14px;">{{ formatAddress(member.address) }}</strong>
-                    <span v-for="role in member.roles" :key="role"
-                      style="padding: 4px 8px; border-radius: 999px; font-size: 11px; color: white; font-weight: 600; text-transform: capitalize; background: var(--color-primary);">
-                      {{ role }}
-                    </span>
-                  </div>
-                  <span v-if="member.roles.includes('contributor')" class="muted contributor-key"
-                    style="font-size: 11px;">
-                    X25519: {{ contributorX25519Keys[member.address] || (loadingContributorKeys ? "Loading..." :
-                      "Not found") }}
-                  </span>
-                  <span v-if="member.roles.includes('viewer')" class="muted"
-                    style="font-size: 11px; color: var(--text-secondary);">
-                    Viewer
-                  </span>
-                </div>
-
-                <div class="row" style="gap: 8px;">
-                  <button v-if="member.roles.includes('admin')" class="btn member-remove-btn" type="button"
-                    :disabled="isRemoving(member.address) || !session.accountAddress"
-                    @click="removeAdmin(member.address)" style="background: var(--color-white);">
-                    <Trash2 :size="16" aria-hidden="true" />
-                    <span>{{ removingAdminAddress === member.address ? "Removing..." : "Remove Admin" }}</span>
-                  </button>
-                  <button v-if="member.roles.includes('contributor')" class="btn member-remove-btn" type="button"
-                    :disabled="isRemoving(member.address) || !session.accountAddress"
-                    @click="removeContributor(member.address)" style="background: var(--color-white);">
-                    <Trash2 :size="16" aria-hidden="true" />
-                    <span>{{ removingContributorAddress === member.address ? "Removing..." : "Remove Contributor"
-                      }}</span>
-                  </button>
-                  <button v-if="member.roles.includes('viewer')" class="btn member-remove-btn" type="button"
-                    :disabled="isRemoving(member.address) || !session.accountAddress"
-                    @click="removeViewer(member.address)" style="background: var(--color-white);">
-                    <Trash2 :size="16" aria-hidden="true" />
-                    <span>{{ removingViewerAddress === member.address ? "Removing..." : "Remove Viewer" }}</span>
-                  </button>
-                </div>
-              </div>
+            style="display: flex; flex-direction: column; gap: 8px; list-style: none; padding: 0; margin: 0;">
+            <li v-for="member in allMembers" :key="member.address"
+              :style="{ padding: '12px 16px', background: '#f6f7f9', margin: 0, border: '1px solid var(--border-default)', borderRadius: '8px', display: 'flex', alignItems: 'center', flexWrap: 'nowrap', gap: '8px', width: '100%', boxSizing: 'border-box', minWidth: 0 }">
+              <strong
+                :style="{ fontSize: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 0 0%', minWidth: 0 }">{{
+                  resolveMemberName(member.address) }}</strong>
+              <span v-for="role in member.roles" :key="role"
+                :style="{ padding: '4px 8px', borderRadius: '999px', fontSize: '11px', color: 'white', fontWeight: '600', textTransform: 'capitalize', background: 'var(--color-primary)', flexShrink: 0, whiteSpace: 'nowrap' }">
+                {{ role }}
+              </span>
+              <button class="btn member-remove-btn" type="button" title="Remove"
+                :disabled="Boolean(removingMemberAddress) || !session.accountAddress"
+                @click="removeAllRoles(member.address)"
+                :style="{ background: 'var(--color-white)', flexShrink: 0, padding: '4px 6px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '3px', whiteSpace: 'nowrap', minWidth: 'auto', maxWidth: '120px', overflow: 'hidden' }">
+                <Trash2 v-if="removingMemberAddress !== member.address" :size="14" aria-hidden="true" />
+                <span v-else class="spinner-small"></span>
+                <span :style="{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0 }">{{
+                  removingMemberAddress === member.address ? "Removing..." : "Remove" }}</span>
+              </button>
             </li>
           </ul>
           <p v-else-if="!bucketLoading && !membersError" class="muted" style="margin: 0">
@@ -2092,9 +2071,35 @@ function isRemoving(address) {
 .member-remove-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
+  padding: 2px 6px;
+  font-size: 11px;
+  white-space: nowrap;
+  min-width: auto;
+  height: 28px;
   color: var(--status-error);
   border-color: color-mix(in srgb, var(--status-error) 50%, var(--border-default));
+}
+
+@media (max-width: 600px) {
+  .member-remove-btn span:not(.spinner-small) {
+    display: none;
+  }
+}
+
+.spinner-small {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(0, 0, 0, 0.1);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .key-rotation-checks {

@@ -116,6 +116,16 @@ type BucketMemberBatchExtrinsicSubmitter = (
   onUpdate?: ExtrinsicUpdateHandler
 ) => Promise<string>
 
+type BucketMemberRolesRemovalBatchExtrinsicSubmitter = (
+  endpoint: string,
+  namespaceId: string,
+  bucketId: string,
+  memberAddress: string,
+  roles: BucketMemberRole[],
+  ownerAddress: string,
+  onUpdate?: ExtrinsicUpdateHandler
+) => Promise<string>
+
 type NamespaceStorageReader = (endpoint: string) => Promise<unknown>
 type BucketsStorageReader = (endpoint: string) => Promise<unknown>
 type MessagesStorageReader = (endpoint: string) => Promise<unknown>
@@ -207,6 +217,7 @@ export class DidCommRepository {
   private submitRemoveNamespaceManagerExtrinsic: NamespaceMemberExtrinsicSubmitter
   private submitBucketKeyRotationBatchExtrinsic: BucketKeyRotationBatchExtrinsicSubmitter
   private submitAddMemberBatchExtrinsic: BucketMemberBatchExtrinsicSubmitter
+  private submitRemoveMemberBatchExtrinsic: BucketMemberRolesRemovalBatchExtrinsicSubmitter
   private pinataConfig?: PinataConfig
   private indexerUrl?: string
 
@@ -231,7 +242,8 @@ export class DidCommRepository {
     submitAddNamespaceManagerExtrinsic: NamespaceMemberExtrinsicSubmitter = submitBucketsAddNamespaceManagerExtrinsic,
     submitRemoveNamespaceManagerExtrinsic: NamespaceMemberExtrinsicSubmitter = submitBucketsRemoveNamespaceManagerExtrinsic,
     indexerUrl?: string,
-    submitAddMemberBatchExtrinsic: BucketMemberBatchExtrinsicSubmitter = submitBucketsAddMemberBatchExtrinsic
+    submitAddMemberBatchExtrinsic: BucketMemberBatchExtrinsicSubmitter = submitBucketsAddMemberBatchExtrinsic,
+    submitRemoveMemberBatchExtrinsic: BucketMemberRolesRemovalBatchExtrinsicSubmitter = submitBucketsRemoveMemberBatchExtrinsic
   ) {
     this.client = client
     this.submitExtrinsic = submitExtrinsic
@@ -252,6 +264,7 @@ export class DidCommRepository {
     this.submitRemoveNamespaceManagerExtrinsic = submitRemoveNamespaceManagerExtrinsic
     this.submitBucketKeyRotationBatchExtrinsic = submitBucketKeyRotationBatchExtrinsic
     this.submitAddMemberBatchExtrinsic = submitAddMemberBatchExtrinsic
+    this.submitRemoveMemberBatchExtrinsic = submitRemoveMemberBatchExtrinsic
     this.pinataConfig = sanitizePinataConfig(pinataConfig)
     this.indexerUrl = indexerUrl
   }
@@ -1208,6 +1221,62 @@ export class DidCommRepository {
     }
   }
 
+  async removeBucketMemberRoles(
+    namespaceId: string,
+    bucketId: string,
+    memberAddress: string,
+    roles: BucketMemberRole[],
+    ownerAddress?: string,
+    onUpdate?: ExtrinsicUpdateHandler
+  ): Promise<AddBucketMemberResult> {
+    const trimmedNamespaceId = namespaceId.trim()
+    if (!trimmedNamespaceId) {
+      throw new Error("Namespace id is required")
+    }
+
+    const trimmedBucketId = bucketId.trim()
+    if (!trimmedBucketId) {
+      throw new Error("Bucket id is required")
+    }
+
+    const trimmedMemberAddress = memberAddress.trim()
+    if (!trimmedMemberAddress) {
+      throw new Error("Member address is required")
+    }
+
+    // Deduplicate while preserving a stable admin -> contributor -> viewer order.
+    const orderedRoles: BucketMemberRole[] = (["admin", "contributor", "viewer"] as const).filter((role) =>
+      roles.includes(role)
+    )
+    if (!orderedRoles.length) {
+      throw new Error("At least one role is required to remove a member")
+    }
+
+    if (!ownerAddress) {
+      throw new Error("Wallet must be connected to submit utility.batchAll extrinsic")
+    }
+
+    const endpoint = this.client.getEndpoint?.()
+    if (!endpoint) {
+      throw new Error("Unable to resolve chain endpoint for extrinsic submission")
+    }
+
+    const txHash = await this.submitRemoveMemberBatchExtrinsic(
+      endpoint,
+      trimmedNamespaceId,
+      trimmedBucketId,
+      trimmedMemberAddress,
+      orderedRoles,
+      ownerAddress,
+      onUpdate
+    )
+
+    return {
+      txHash,
+      method: "utility.batchAll"
+    }
+  }
+
   async addNamespaceManager(
     namespaceId: string,
     memberAddress: string,
@@ -1699,6 +1768,87 @@ async function submitBucketsAddMemberBatchExtrinsic(
     }
     calls.push(addContributor(namespaceId, bucketId, ss58Address))
     calls.push(addViewer(namespaceId, bucketId, x25519Key))
+
+    const tx = batchAll(calls) as SubmittableTx
+    logEncodedCallBytes("utility.batchAll", tx)
+
+    const injector = await web3FromAddress(ownerAddress)
+    const attemptTips = ["0", "1000000", "2000000"]
+    let lastError: Error | null = null
+
+    for (let attempt = 0; attempt < attemptTips.length; attempt += 1) {
+      const tip = attemptTips[attempt]!
+
+      try {
+        if (attempt > 0) {
+          onUpdate?.({
+            stage: "submitted",
+            message: `Retrying extrinsic with higher priority fee (tip=${tip})`
+          })
+        }
+
+        return await submitWithTip(tx, ownerAddress, injector.signer, tip, onUpdate, api)
+      } catch (error) {
+        const normalized = error instanceof Error ? error : new Error("Extrinsic submission failed")
+        lastError = normalized
+
+        if (!isLowPriorityTransactionError(normalized) || attempt === attemptTips.length - 1) {
+          throw normalized
+        }
+      }
+    }
+
+    throw lastError ?? new Error("Extrinsic submission failed")
+  } finally {
+    await api.disconnect()
+  }
+}
+
+async function submitBucketsRemoveMemberBatchExtrinsic(
+  endpoint: string,
+  namespaceId: string,
+  bucketId: string,
+  memberAddress: string,
+  roles: BucketMemberRole[],
+  ownerAddress: string,
+  onUpdate?: ExtrinsicUpdateHandler
+): Promise<string> {
+  const [{ ApiPromise, WsProvider }, { web3FromAddress }] = await Promise.all([
+    import("@polkadot/api"),
+    import("@polkadot/extension-dapp")
+  ])
+
+  const provider = new WsProvider(endpoint)
+  const api = await ApiPromise.create({ provider })
+
+  try {
+    const txRoot = api.tx as Record<string, unknown>
+    const utility = txRoot.utility as Record<string, unknown> | undefined
+    const batchAll = utility?.batchAll as ((calls: unknown[]) => unknown) | undefined
+    if (!batchAll) {
+      throw new Error("utility.batchAll extrinsic is not available on this chain")
+    }
+
+    const buckets = txRoot.buckets as Record<string, unknown> | undefined
+    const removeByRole: Record<BucketMemberRole, string[]> = {
+      admin: ["removeAdmin", "removeBucketAdmin"],
+      contributor: ["removeContributor"],
+      viewer: ["removeViewer"]
+    }
+
+    // Every remove call takes (namespaceId, bucketId, memberAddress).
+    const calls: unknown[] = []
+    for (const role of roles) {
+      const removeCall = resolveBucketsTxMethod(buckets, removeByRole[role])
+      if (!removeCall) {
+        throw new Error(`buckets.${removeByRole[role][0]} extrinsic is not available on this chain`)
+      }
+      calls.push(removeCall(namespaceId, bucketId, memberAddress))
+    }
+
+    if (!calls.length) {
+      throw new Error("At least one role is required to remove a member")
+    }
 
     const tx = batchAll(calls) as SubmittableTx
     logEncodedCallBytes("utility.batchAll", tx)
