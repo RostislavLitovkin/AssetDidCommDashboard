@@ -63,6 +63,12 @@ const submitting = ref(false)
 const submitError = ref("")
 const submittedTxHash = ref("")
 const submittedMethod = ref("")
+const bucketCreated = ref(false)
+
+// Reset bucketCreated flag when user types in bucket name
+const onBucketNameInput = () => {
+  bucketCreated.value = false
+}
 
 // Manager check
 const managers = ref<string[]>([])
@@ -128,6 +134,7 @@ async function submitCreateBucket(): Promise<void> {
     submittedTxHash.value = result.txHash
     submittedMethod.value = result.method
     operations.add("bucket_write", bucketName.value.trim(), "success", `Bucket extrinsic submitted: ${result.txHash}`)
+    bucketCreated.value = true
     bucketName.value = ""
     category.value = ""
   } catch (error) {
@@ -178,7 +185,7 @@ onMounted(async () => {
           <label class="stack" style="gap: 6px">
             <span>Bucket Name</span>
             <input v-model="bucketName" class="input" type="text" name="bucket-name" placeholder="e.g. primary-bucket"
-              :disabled="submitting || (!managersLoading && !isManager)" />
+              :disabled="submitting || (!managersLoading && !isManager)" @input="onBucketNameInput" />
           </label>
 
           <label class="stack" style="gap: 6px">
@@ -189,12 +196,14 @@ onMounted(async () => {
 
           <div class="row" style="justify-content: flex-end; gap: 8px">
             <button class="btn btn-primary" type="button" :disabled="submitting || managersLoading || !isManager" @click="submitCreateBucket">
-              {{ submitting ? "Submitting..." : "Submit Extrinsic" }}
+              <span v-if="submitting">Submitting...</span>
+              <span v-else-if="bucketCreated">Bucket successfully created</span>
+              <span v-else>Submit Extrinsic</span>
             </button>
           </div>
 
           <p v-if="submitError" style="margin: 0; color: var(--status-error)">{{ submitError }}</p>
-          <p v-if="submittedTxHash" style="margin: 0; color: var(--status-success)">
+          <p v-if="submittedTxHash && !bucketCreated" style="margin: 0; color: var(--status-success)">
             Submitted via {{ submittedMethod }} successfully.
           </p>
         </section>
