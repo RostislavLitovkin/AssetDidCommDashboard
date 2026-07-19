@@ -7,6 +7,7 @@ export interface ChatMessageProps {
   senderAddress?: string
   tag?: string
   contentType?: string
+  attachment?: ChatMessageAttachment
   reference?: string
   payloadError?: string
   timestampLabel: string
@@ -30,6 +31,12 @@ export interface AttachmentEnvelope {
   fileName: string
   data: string // base64
 }
+
+export interface ChatMessageAttachment {
+  contentType: string
+  fileName?: string
+  data: string // base64
+}
 </script>
 
 <script setup lang="ts">
@@ -43,7 +50,23 @@ const props = defineProps<{
 
 const settings = useSettingsStore()
 
-const attachment = computed(() => parseAttachmentEnvelope(props.message.body))
+function defaultFileName(contentType: string): string {
+  const subtype = contentType.split("/")[1]?.split(";")[0]?.trim()
+  return `attachment.${subtype || "bin"}`
+}
+
+const attachment = computed<AttachmentEnvelope | null>(() => {
+  const explicit = props.message.attachment
+  if (explicit) {
+    return {
+      type: "attachment",
+      contentType: explicit.contentType,
+      fileName: explicit.fileName || defaultFileName(explicit.contentType),
+      data: explicit.data
+    }
+  }
+  return parseAttachmentEnvelope(props.message.body)
+})
 const isImage = computed(() => attachment.value?.contentType?.startsWith("image/") ?? false)
 const isVideo = computed(() => attachment.value?.contentType?.startsWith("video/") ?? false)
 const isAudio = computed(() => attachment.value?.contentType?.startsWith("audio/") ?? false)
