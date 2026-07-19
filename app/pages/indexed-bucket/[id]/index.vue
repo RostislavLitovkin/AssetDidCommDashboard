@@ -319,6 +319,7 @@ async function decryptMessages(msgs: IndexedMessage[]) {
 
   await Promise.all(msgs.map(async m => {
     if (m.tag === keySharingTag) return
+    if (isFileMessage(m)) return
     const p = payloadById.value[m.id]
     if (!p) return
     const t = p.trim()
@@ -340,17 +341,11 @@ async function decryptMessages(msgs: IndexedMessage[]) {
 const textMessageContentType = "text/plain;charset=utf-8"
 const keySharingContentType = "application/didcomm-encrypted+json"
 
-function looksLikeBareCid(value: string): boolean {
-  return /^[A-Za-z0-9]{32,128}$/.test(value)
-}
-
-// A file message carries a real MIME contentType on-chain and a bare file CID as payload.
-function fileMessagePayloadCid(m: IndexedMessage): string | undefined {
-  if (m.tag === keySharingTag) return undefined
+// A file message carries a real MIME contentType on-chain; its reference points at the encrypted file.
+function isFileMessage(m: IndexedMessage): boolean {
+  if (m.tag === keySharingTag) return false
   const ct = m.contentType?.trim()
-  if (!ct || ct === textMessageContentType || ct === keySharingContentType) return undefined
-  const payload = (decryptedById.value[m.id] ?? payloadById.value[m.id])?.trim()
-  return payload && looksLikeBareCid(payload) ? payload : undefined
+  return Boolean(ct && ct !== textMessageContentType && ct !== keySharingContentType)
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -369,13 +364,12 @@ async function hydrateAttachments(msgs: IndexedMessage[]) {
 
   await Promise.all(msgs.map(async m => {
     if (next[m.id]) return
-    const fileCid = fileMessagePayloadCid(m)
-    if (!fileCid) return
+    if (!isFileMessage(m)) return
+    const fileJwe = payloadById.value[m.id]?.trim()
+    if (!fileJwe) return
     try {
       if (!sk || !isX25519Secret(sk)) throw new Error("No decrypted bucket key available. Decrypt key-sharing first.")
-      const res = await fetch(resolveUrl(fileCid))
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const fileJwe = (await res.text()).trim()
+      if (!looksLikeCompactJwe(fileJwe)) throw new Error("File payload is not an encrypted attachment")
       const key = await jose.importJWK(sk as jose.JWK, "ECDH-ES+A256KW")
       const { plaintext, protectedHeader } = await jose.compactDecrypt(fileJwe, key)
       next[m.id] = {

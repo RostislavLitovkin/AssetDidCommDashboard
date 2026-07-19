@@ -395,6 +395,10 @@ async function decryptReceivedMessages(entries: BucketMessage[]): Promise<void> 
         return
       }
 
+      if (isFileMessage(entry)) {
+        return
+      }
+
       const payload = messagePayloadById.value[entry.id]
       if (!payload) {
         return
@@ -429,17 +433,11 @@ async function decryptReceivedMessages(entries: BucketMessage[]): Promise<void> 
 const textMessageContentType = "text/plain;charset=utf-8"
 const keySharingContentType = "application/didcomm-encrypted+json"
 
-function looksLikeBareCid(value: string): boolean {
-  return /^[A-Za-z0-9]{32,128}$/.test(value)
-}
-
-// A file message carries a real MIME contentType on-chain and a bare file CID as payload.
-function fileMessagePayloadCid(entry: BucketMessage): string | undefined {
-  if (resolveMessageTag(entry) === keySharingTag) return undefined
+// A file message carries a real MIME contentType on-chain; its reference points at the encrypted file.
+function isFileMessage(entry: BucketMessage): boolean {
+  if (resolveMessageTag(entry) === keySharingTag) return false
   const contentType = resolveMessageContentType(entry)?.trim()
-  if (!contentType || contentType === textMessageContentType || contentType === keySharingContentType) return undefined
-  const payload = (decryptedMessagePayloadById.value[entry.id] ?? messagePayloadById.value[entry.id])?.trim()
-  return payload && looksLikeBareCid(payload) ? payload : undefined
+  return Boolean(contentType && contentType !== textMessageContentType && contentType !== keySharingContentType)
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -458,15 +456,14 @@ async function hydrateMessageAttachments(entries: BucketMessage[]): Promise<void
 
   await Promise.all(entries.map(async (entry) => {
     if (next[entry.id]) return
-    const fileCid = fileMessagePayloadCid(entry)
-    if (!fileCid) return
+    if (!isFileMessage(entry)) return
+    const fileJwe = messagePayloadById.value[entry.id]?.trim()
+    if (!fileJwe) return
     try {
       if (!secretJwk || !isX25519SecretJwk(secretJwk)) {
         throw new Error("No active bucket encryption key is available for decrypting attachments")
       }
-      const response = await fetch(`${resolveGatewayUrl()}/ipfs/${fileCid}`)
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      const fileJwe = (await response.text()).trim()
+      if (!looksLikeCompactJwe(fileJwe)) throw new Error("File payload is not an encrypted attachment")
       const privateKey = await jose.importJWK(secretJwk as jose.JWK, "ECDH-ES+A256KW")
       const { plaintext, protectedHeader } = await jose.compactDecrypt(fileJwe, privateKey)
       next[entry.id] = {
