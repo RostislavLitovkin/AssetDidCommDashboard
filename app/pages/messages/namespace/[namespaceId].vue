@@ -152,7 +152,7 @@ onMounted(async () => {
         No buckets found for this namespace.
       </p>
 
-        <div v-if="buckets.length" class="stack" style="gap: 12px">
+        <div v-if="buckets.length" class="stack" style="gap: 12px; min-height: 280px;">
           <NuxtLink v-for="bucket in buckets" :key="bucket.id" :to="`/indexed-bucket/${encodeURIComponent(bucket.id)}`"
             class="card bucket-card" style="padding: 16px; text-decoration: none; color: inherit; display: block">
             <div class="row"
@@ -255,6 +255,8 @@ onMounted(async () => {
   white-space: nowrap;
   min-width: auto;
   height: 28px;
+  color: var(--status-error);
+  border-color: color-mix(in srgb, var(--status-error) 50%, var(--border-default));
 }
 
 @media (max-width: 600px) {

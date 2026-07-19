@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useNuxtApp, useRoute } from "nuxt/app"
+import { decodeAddress, encodeAddress } from "@polkadot/util-crypto"
 import { DidCommRepository, type BucketMemberRole, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
 import { ProfileClient } from "../../../../services/profile/profileClient"
 import type { Profile } from "../../../../types/profile"
@@ -14,6 +15,20 @@ const runtimeConfig = useRuntimeConfig()
 const session = useSessionStore()
 const asOptionalString = (value: unknown): string | undefined => {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
+}
+
+// Convert any SS58 address to prefix 42
+function convertToPrefix42(address: string): string {
+  try {
+    const input = address.trim()
+    // Decode the address to get the raw public key bytes
+    const bytes = decodeAddress(input)
+    // Encode with prefix 42
+    return encodeAddress(bytes, 42)
+  } catch {
+    // If decoding fails, return the original address
+    return input
+  }
 }
 const operations = useOperationsStore()
 const profileClient = new ProfileClient()
@@ -128,13 +143,15 @@ async function lookupProfile(): Promise<void> {
     return
   }
 
-  lastQueriedAddress = address
+  // Convert any SS58 address to prefix 42 for the profile API
+  const normalizedAddress = convertToPrefix42(address)
+  lastQueriedAddress = normalizedAddress
   profileStatus.value = "loading"
   profile.value = null
   profileError.value = ""
 
   try {
-    const result = await profileClient.getProfile(address)
+    const result = await profileClient.getProfile(normalizedAddress)
 
     // Ignore results for a stale query if the address changed while loading.
     if (memberAddress.value.trim() !== address) {
@@ -179,8 +196,10 @@ function lookupProfileNow(): void {
   if (!address) {
     return
   }
+  // Convert to prefix 42 for comparison with lastQueriedAddress
+  const normalizedAddress = convertToPrefix42(address)
   // Avoid a redundant request if this address is already resolved.
-  if (address === lastQueriedAddress && profileStatus.value !== "idle" && profileStatus.value !== "loading") {
+  if (normalizedAddress === lastQueriedAddress && profileStatus.value !== "idle" && profileStatus.value !== "loading") {
     return
   }
   void lookupProfile()

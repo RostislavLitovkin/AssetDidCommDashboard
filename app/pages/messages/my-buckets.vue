@@ -6,8 +6,9 @@ import { computed, onMounted, ref, watch } from "vue"
 import { useNuxtApp, useRuntimeConfig } from "nuxt/app"
 import { useSessionStore } from "../../stores/session"
 import { useSettingsStore } from "../../stores/settings"
-import { hexToU8a } from "@polkadot/util"
+import { hexToU8a, u8aToHex } from "@polkadot/util"
 import { decodeAddress, encodeAddress, xxhashAsHex } from "@polkadot/util-crypto"
+import { base64url } from "jose"
 
 interface BucketConnectionNode {
   id: string
@@ -16,6 +17,7 @@ interface BucketConnectionNode {
   name?: string | null
   admins: { totalCount: number }
   contributors: { totalCount: number }
+  viewers: { totalCount: number }
   messages: { nodes: Array<{ createdBlock: number }> }
 }
 
@@ -122,6 +124,20 @@ function resolveDisplayName(bucket: BucketConnectionNode): string {
   return `Bucket ${bucket.bucketId}`
 }
 
+// Viewers are keyed on-chain by their X25519 public key, stored by the indexer as 0x-hex.
+function resolveViewerKeyHex(): string {
+  const x = settings.x25519SecretJwk?.x
+  if (typeof x !== "string" || !x.trim()) {
+    return ""
+  }
+
+  try {
+    return u8aToHex(base64url.decode(x.trim()))
+  } catch {
+    return ""
+  }
+}
+
 function resolveIndexerAddress(address: string): string {
   const trimmed = address.trim()
   if (!trimmed) {
@@ -200,15 +216,16 @@ async function loadBuckets(): Promise<void> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         query: `
-          query MyBuckets($address: String!, $first: Int!, $offset: Int!) {
+          query MyBuckets($address: String!, $viewerKey: String!, $first: Int!, $offset: Int!) {
             buckets(
               first: $first
               offset: $offset
-              orderBy: [NAME_ASC]
+              orderBy: [MESSAGES_MAX_CREATED_BLOCK_DESC, NAME_ASC, PRIMARY_KEY_ASC]
               filter: {
                 or: [
                   { admins: { some: { subjectId: { equalToInsensitive: $address } } } }
                   { contributors: { some: { subjectId: { equalToInsensitive: $address } } } }
+                  { viewers: { some: { viewerId: { equalToInsensitive: $viewerKey } } } }
                 ]
               }
             ) {
@@ -224,6 +241,9 @@ async function loadBuckets(): Promise<void> {
                 contributors(filter: { subjectId: { equalToInsensitive: $address } }) {
                   totalCount
                 }
+                viewers(filter: { viewerId: { equalToInsensitive: $viewerKey } }) {
+                  totalCount
+                }
                 messages(first: 1, orderBy: [CREATED_BLOCK_DESC]) {
                   nodes {
                     createdBlock
@@ -235,6 +255,7 @@ async function loadBuckets(): Promise<void> {
         `,
         variables: {
           address: resolveIndexerAddress(session.accountAddress),
+          viewerKey: resolveViewerKeyHex(),
           first: pageSize,
           offset: offset.value
         }
@@ -301,6 +322,14 @@ watch(
   }
 )
 
+watch(
+  () => settings.x25519SecretJwk?.x,
+  () => {
+    offset.value = 0
+    void loadBuckets()
+  }
+)
+
 onMounted(() => {
   settings.initialize()
   setupIntersectionObserver()
@@ -359,8 +388,8 @@ onMounted(() => {
                 style="padding: 6px 12px; border-radius: 999px; font-size: 12px; background: var(--color-primary); color: white; font-weight: 500">
                 Contributor
               </span>
-              <span v-if="bucket.admins.totalCount === 0 && bucket.contributors.totalCount === 0"
-                style="padding: 4px 10px; border-radius: 999px; font-size: 12px; background: var(--surface-muted)">
+              <span v-if="bucket.viewers.totalCount > 0"
+                style="padding: 6px 12px; border-radius: 999px; font-size: 12px; background: var(--color-primary); color: white; font-weight: 500">
                 Viewer
               </span>
             </div>

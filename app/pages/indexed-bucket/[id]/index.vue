@@ -1080,9 +1080,9 @@ onMounted(async () => {
 }
 
 .ib-key-ok {
-  background: color-mix(in srgb, var(--status-success) 8%, transparent);
-  color: var(--status-success);
-  border-color: color-mix(in srgb, var(--status-success) 25%, transparent);
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+  color: var(--color-primary);
+  border-color: color-mix(in srgb, var(--color-primary) 25%, transparent);
 }
 
 /* Chat Viewport: Matches reference chat-viewport */
@@ -1363,7 +1363,7 @@ onMounted(async () => {
 }
 
 .ib-tl-step.is-complete:not(:last-child)::before {
-  background: color-mix(in srgb, var(--status-success) 45%, transparent);
+  background: color-mix(in srgb, var(--color-primary) 45%, transparent);
 }
 
 .ib-tl-marker {
@@ -1388,8 +1388,8 @@ onMounted(async () => {
 }
 
 .ib-tl-step.is-complete .ib-tl-marker {
-  border-color: var(--status-success);
-  background: var(--status-success);
+  border-color: var(--color-primary);
+  background: var(--color-primary);
   color: var(--color-white);
 }
 
@@ -1439,8 +1439,8 @@ onMounted(async () => {
 }
 
 .ib-tl-step.is-complete .ib-tl-count {
-  background: color-mix(in srgb, var(--status-success) 10%, transparent);
-  color: var(--status-success);
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+  color: var(--color-primary);
 }
 
 .ib-tl-desc,
