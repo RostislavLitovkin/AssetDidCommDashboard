@@ -1,11 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { describe, expect, it } from "vitest"
 import { DidCommRepository } from "../../app/services/papi/didCommRepository"
 
 describe("DidCommRepository", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals()
-  })
-
   it("loads namespaces from buckets.namespaces storage entries", async () => {
     const client = {
       rpc: async () => [] as unknown[],
@@ -273,12 +269,7 @@ describe("DidCommRepository", () => {
     expect(receivedContentType).toBeUndefined()
   })
 
-  it("uploads the file JWE and submits buckets.write with the bare file CID and real content type", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => ({
-      ok: true,
-      json: async () => ({ data: { cid: "bafy-file-cid" } })
-    })))
-
+  it("submits the file JWE as the message content with the file's real content type", async () => {
     const submitted: { message?: string; tag?: string; contentType?: string } = {}
     const repository = new DidCommRepository(
       {
@@ -295,10 +286,7 @@ describe("DidCommRepository", () => {
         submitted.tag = tag
         submitted.contentType = contentType
         return "0xfile123"
-      },
-      // Positions 8-15 (member/key/tag submitters) use defaults; position 16 is pinataConfig.
-      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
-      { jwt: "test-jwt" }
+      }
     )
 
     const result = await repository.createFileMessage(
@@ -310,56 +298,12 @@ describe("DidCommRepository", () => {
 
     expect(result.method).toBe("buckets.write")
     expect(result.txHash).toBe("0xfile123")
-    expect(submitted.message).toBe("bafy-file-cid")
+    expect(submitted.message).toBe("eyJhbGciOiJFQ0RILUVTK0EyNTZLVyJ9.a.b.c.d")
     expect(submitted.contentType).toBe("image/png")
     expect(submitted.tag).toBeUndefined()
   })
 
-  it("aborts createFileMessage without submitting when the file upload fails", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => ({
-      ok: false,
-      status: 500,
-      text: async () => "server error"
-    })))
-
-    const submitter = vi.fn(async () => "0xshould-not-be-called")
-    const updates: { stage: string; message: string }[] = []
-    const repository = new DidCommRepository(
-      {
-        rpc: async () => [] as unknown[],
-        getEndpoint: () => "wss://example-chain"
-      },
-      async () => "0xignored",
-      async () => "0xignored-bucket",
-      async () => [],
-      async () => [],
-      async () => [],
-      submitter,
-      // Positions 8-15 (member/key/tag submitters) use defaults; position 16 is pinataConfig.
-      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
-      { jwt: "test-jwt" }
-    )
-
-    await expect(
-      repository.createFileMessage(
-        "bucket-7",
-        "eyJhbGciOiJFQ0RILUVTK0EyNTZLVyJ9.a.b.c.d",
-        "image/png",
-        "5F3sa2TJ...owner",
-        (update) => updates.push(update)
-      )
-    ).rejects.toThrow("IPFS file upload failed")
-
-    expect(submitter).not.toHaveBeenCalled()
-    expect(updates.some((update) => update.stage === "error")).toBe(true)
-  })
-
   it("falls back to application/octet-stream when the file content type is blank", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => ({
-      ok: true,
-      json: async () => ({ data: { cid: "bafy-file-cid" } })
-    })))
-
     let receivedContentType: string | undefined
     const repository = new DidCommRepository(
       {
@@ -374,10 +318,7 @@ describe("DidCommRepository", () => {
       async (_endpoint, _bucketId, _message, _ownerAddress, _onUpdate, _tag, _pinataConfig, contentType) => {
         receivedContentType = contentType
         return "0xfile124"
-      },
-      // Positions 8-15 (member/key/tag submitters) use defaults; position 16 is pinataConfig.
-      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
-      { jwt: "test-jwt" }
+      }
     )
 
     await repository.createFileMessage("bucket-7", "eyJhbGciOi.a.b.c.d", "   ", "5F3sa2TJ...owner")

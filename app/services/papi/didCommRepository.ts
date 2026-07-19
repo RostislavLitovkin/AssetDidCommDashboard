@@ -829,37 +829,16 @@ export class DidCommRepository {
     ownerAddress?: string,
     onUpdate?: ExtrinsicUpdateHandler
   ): Promise<CreateMessageResult> {
-    const trimmedBucketId = bucketId.trim()
-    if (!trimmedBucketId) {
-      throw new Error("Bucket id is required")
-    }
-
     const trimmedFileJwe = fileJwe.trim()
     if (!trimmedFileJwe) {
       throw new Error("File payload is required")
     }
 
-    if (!ownerAddress) {
-      throw new Error("Wallet must be connected to submit buckets.write extrinsic")
-    }
-
     const trimmedContentType = fileContentType.trim() || "application/octet-stream"
 
-    const storageAdapter = new PinataStorageAdapter(resolvePinataConfig(this.pinataConfig))
-    let fileCid = ""
-    try {
-      fileCid = await storageAdapter.upload(trimmedFileJwe)
-    } catch (error) {
-      const details = error instanceof Error ? error.message : "Unknown upload error"
-      const failureMessage = `IPFS file upload failed; aborting buckets.write submission. ${details}`
-      onUpdate?.({
-        stage: "error",
-        message: failureMessage
-      })
-      throw new Error(failureMessage)
-    }
-
-    return this.createMessage(trimmedBucketId, fileCid, ownerAddress, onUpdate, undefined, trimmedContentType)
+    // The standard write flow uploads the message content to IPFS and stores its
+    // CID as the on-chain reference, so the reference points straight at the file JWE.
+    return this.createMessage(bucketId, trimmedFileJwe, ownerAddress, onUpdate, undefined, trimmedContentType)
   }
 
   async rotateBucketKeyAndShare(
