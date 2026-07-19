@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { fetchIndexedBucketDetail, fetchIndexedMessagesByTag, type IndexedBucket, type IndexedMessage, type IndexedBucketMember } from "../../../services/indexer/subqueryClient"
+import { fetchIndexedBucketDetail, fetchIndexedMessagesByTag, fetchIndexedNamespaceManagers, type IndexedBucket, type IndexedMessage, type IndexedBucketMember, type IndexedBucketViewer } from "../../../services/indexer/subqueryClient"
 import { DidCommRepository, type ExtrinsicUpdate } from "../../../services/papi/didCommRepository"
 import LoadingBar from "../../../components/common/LoadingBar.vue"
 import ChatMessageEntry, { type ChatMessageProps } from "../../../components/common/ChatMessageEntry.vue"
-import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert } from "lucide-vue-next"
+import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, Check } from "lucide-vue-next"
+import { hexToU8a } from "@polkadot/util"
 import { useAddress } from "../../../composables/useAddress"
 import { useWallet } from "../../../composables/useWallet"
 import * as jose from "jose"
@@ -54,17 +55,18 @@ const asOptionalString = (value: unknown): string | undefined => {
 
 const didCommRepository = new DidCommRepository(
   $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string },
-  undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
-  {
+  // Positional args 2-15 (extrinsic submitters / storage readers) use their defaults.
+  undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+  { // 16 pinataConfig
     jwt: asOptionalString(config.public.pinataJwt),
     apiKey: asOptionalString(config.public.pinataApiKey),
     apiSecret: asOptionalString(config.public.pinataApiSecret),
     publicGateway: asOptionalString(config.public.pinataGateway)
   },
-  undefined,
-  undefined,
-  undefined,
-  String(config.public.subqueryIndexerUrl || "")
+  undefined, // 17 submitBucketKeyRotationBatchExtrinsic
+  undefined, // 18 submitAddNamespaceManagerExtrinsic
+  undefined, // 19 submitRemoveNamespaceManagerExtrinsic
+  String(config.public.subqueryIndexerUrl || "") // 20 indexerUrl
 )
 
 const indexerUrl = computed(() => String(config.public.subqueryIndexerUrl || ""))
@@ -85,6 +87,8 @@ const error = ref("")
 const bucket = ref<IndexedBucket | null>(null)
 const admins = ref<IndexedBucketMember[]>([])
 const contributors = ref<IndexedBucketMember[]>([])
+const viewers = ref<IndexedBucketViewer[]>([])
+const namespaceManagers = ref<string[]>([])
 const messages = ref<IndexedMessage[]>([])
 
 const payloadById = ref<Record<string, string>>({})
@@ -97,6 +101,8 @@ const keySharingError = ref("")
 const sendText = ref("")
 const sendError = ref("")
 const sending = ref(false)
+const creatingKey = ref(false)
+const createKeyError = ref("")
 const pendingAttachment = ref<{ file: File; dataUrl: string } | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
@@ -111,6 +117,36 @@ const connectedContributor = computed(() => {
   return contributors.value.some(c => addressesEqual(c.subjectId, session.accountAddress!))
 })
 const connectedAdminOrContributor = computed(() => connectedAdmin.value || connectedContributor.value)
+const connectedNamespaceManager = computed(() => {
+  if (!session.accountAddress) return false
+  return namespaceManagers.value.some(m => addressesEqual(m, session.accountAddress!))
+})
+const canManageBucket = computed(() => connectedAdmin.value || connectedNamespaceManager.value)
+
+// ── Empty-bucket setup timeline ────────────────────────────────────
+const memberCount = computed(() => {
+  const unique = new Set<string>()
+  for (const member of [...admins.value, ...contributors.value]) unique.add(member.subjectId)
+  return unique.size
+})
+
+// Viewers are keyed on-chain by their X25519 key, so the identifier itself is the key.
+const viewerRecipients = computed(() => {
+  return viewers.value.flatMap(viewer => {
+    const x25519 = normalizeX25519Value(viewer.subjectId)
+    return x25519 ? [{ address: viewer.subjectId, x25519 }] : []
+  })
+})
+
+const keyStepActive = computed(() => memberCount.value >= 2)
+const showSetupTimeline = computed(() =>
+  !loading.value && !error.value && Boolean(bucket.value) && !messages.value.length && canManageBucket.value
+)
+
+const addMemberUrl = computed(() => {
+  const namespaceId = bucket.value?.namespaceId != null ? String(bucket.value.namespaceId) : ""
+  return `/messages/bucket/add-member/${encodeURIComponent(bucketId.value)}?namespaceId=${encodeURIComponent(namespaceId)}`
+})
 
 // ── Chat message rendering ─────────────────────────────────────────
 const chatMessages = computed<ChatMessageProps[]>(() => {
@@ -156,7 +192,17 @@ async function loadAll() {
     bucket.value = detail.bucket
     admins.value = detail.admins
     contributors.value = detail.contributors
+    viewers.value = detail.viewers
     messages.value = detail.messages
+
+    // Namespace managers gate the setup timeline; a failed lookup must not break the page.
+    try {
+      namespaceManagers.value = detail.bucket.namespaceId != null
+        ? (await fetchIndexedNamespaceManagers(url, String(detail.bucket.namespaceId))).map(m => m.manager)
+        : []
+    } catch {
+      namespaceManagers.value = []
+    }
 
     // 1. Fetch key-sharing messages by tag first
     const keySharingMessages = await fetchIndexedMessagesByTag(url, bucketId.value, keySharingTag)
@@ -374,6 +420,169 @@ async function sendMessage() {
   }
 }
 
+// ── Create & share bucket encryption key (setup timeline step 2) ───
+function isHex32(value: string): boolean {
+  return /^0x[0-9a-fA-F]{64}$/.test(value)
+}
+
+function normalizeX25519Value(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined
+  const trimmed = value.trim()
+  if (!trimmed || trimmed === "Not found") return undefined
+  // Some chains return x25519 as hex; convert to JWK x (base64url)
+  if (isHex32(trimmed)) return jose.base64url.encode(hexToU8a(trimmed))
+  return trimmed
+}
+
+function randomNumericKeyId(): number {
+  return Math.floor(Math.random() * 1_000_000_000_000)
+}
+
+function toWasmCompatibleSecretKey(secretJwk: jose.JWK): Record<string, string> {
+  if (!secretJwk.kty || !secretJwk.crv || !secretJwk.x || !secretJwk.d || !secretJwk.use || !secretJwk.kid) {
+    throw new Error("The new secret JWK is missing required properties, including 'kid'.")
+  }
+
+  return {
+    kty: secretJwk.kty,
+    crv: secretJwk.crv,
+    x: secretJwk.x,
+    d: secretJwk.d,
+    y: "", // Workaround for rigid key-sharing consumers expecting y.
+    use: secretJwk.use,
+    kid: secretJwk.kid
+  }
+}
+
+function buildKeySharingMessage(secretJwk: jose.JWK, readerAddresses: string[]): string {
+  const adminAddress = session.accountAddress
+  if (!adminAddress) {
+    throw new Error("Admin wallet address is required")
+  }
+
+  const messageId =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `key-share-${Date.now()}-${Math.random().toString(16).slice(2)}`
+
+  return JSON.stringify({
+    id: messageId,
+    from: adminAddress,
+    to: readerAddresses,
+    keys: [toWasmCompatibleSecretKey(secretJwk)]
+  })
+}
+
+function buildRecipientJwks(bucketPublicJwk: jose.JWK): { recipientJwks: jose.JWK[]; readerAddresses: string[] } {
+  const readerAddresses = viewerRecipients.value.map(recipient => recipient.address)
+
+  if (!readerAddresses.length) {
+    throw new Error("No valid viewer X25519 keys are available for key sharing")
+  }
+
+  const recipientJwks: jose.JWK[] = [bucketPublicJwk]
+  for (const recipient of viewerRecipients.value) {
+    recipientJwks.push({
+      kty: "OKP",
+      crv: "X25519",
+      x: recipient.x25519,
+      use: "enc",
+      kid: recipient.address
+    })
+  }
+
+  return { recipientJwks, readerAddresses }
+}
+
+async function encryptJweForMultipleRecipients(plaintextBytes: Uint8Array, recipientJwks: jose.JWK[]): Promise<jose.GeneralJWE> {
+  const encryptor = new jose.GeneralEncrypt(plaintextBytes).setProtectedHeader({
+    enc: "A256GCM",
+    typ: keySharingTag
+  })
+
+  for (const recipientJwk of recipientJwks) {
+    const recipientHeader: jose.JWEHeaderParameters = { alg: "ECDH-ES+A256KW" }
+    if (typeof recipientJwk.kid === "string" && recipientJwk.kid.trim()) {
+      recipientHeader.kid = recipientJwk.kid
+    }
+
+    encryptor.addRecipient(recipientJwk).setUnprotectedHeader(recipientHeader)
+  }
+
+  return await encryptor.encrypt()
+}
+
+async function createAndShareEncryptionKey(): Promise<void> {
+  createKeyError.value = ""
+
+  if (!session.accountAddress) {
+    createKeyError.value = "Connect wallet before generating encryption keys"
+    return
+  }
+
+  if (!canManageBucket.value) {
+    createKeyError.value = "Only bucket admins and namespace managers can generate and distribute encryption keys"
+    return
+  }
+
+  const namespaceId = bucket.value?.namespaceId != null ? String(bucket.value.namespaceId) : ""
+  if (!namespaceId) {
+    createKeyError.value = "Namespace id is required to rotate bucket encryption keys"
+    return
+  }
+
+  creatingKey.value = true
+  try {
+    const { publicKey, privateKey } = await jose.generateKeyPair("ECDH-ES+A256KW", {
+      crv: "X25519",
+      extractable: true
+    })
+
+    const bucketPkJwk = await jose.exportJWK(publicKey)
+    const bucketSkJwk = await jose.exportJWK(privateKey)
+
+    const keyId = randomNumericKeyId().toString()
+    bucketPkJwk.use = "enc"
+    bucketSkJwk.use = "enc"
+    bucketPkJwk.kid = keyId
+    bucketSkJwk.kid = keyId
+
+    const bucketEncryptionKey = typeof bucketPkJwk.x === "string" ? bucketPkJwk.x.trim() : ""
+    if (!bucketEncryptionKey) {
+      throw new Error("Generated public key is missing JWK.x and cannot be used for on-chain key rotation")
+    }
+
+    const { recipientJwks, readerAddresses } = buildRecipientJwks(bucketPkJwk)
+    const keySharingMessage = buildKeySharingMessage(bucketSkJwk, readerAddresses)
+    const plaintextBytes = new TextEncoder().encode(keySharingMessage)
+    const jweObject = await encryptJweForMultipleRecipients(plaintextBytes, recipientJwks)
+
+    const batchResult = await didCommRepository.rotateBucketKeyAndShare(
+      namespaceId,
+      bucketId.value,
+      bucketEncryptionKey,
+      keySharingTag,
+      JSON.stringify(jweObject),
+      session.accountAddress,
+      logExtrinsicUpdate
+    )
+
+    operations.add(
+      "bucket_write",
+      batchResult.method,
+      "success",
+      `Bucket key rotated and shared via batchAll. keyId=${keyId}, tx=${batchResult.txHash}`
+    )
+
+    await loadAll()
+  } catch (e) {
+    createKeyError.value = e instanceof Error ? e.message : "Unable to rotate bucket encryption key"
+    operations.add("bucket_write", "utility.batchAll", "error", createKeyError.value)
+  } finally {
+    creatingKey.value = false
+  }
+}
+
 // ── Utility ────────────────────────────────────────────────────────
 function summarize(payload: string): string | undefined {
   const p = parseJson(payload)
@@ -437,7 +646,71 @@ onMounted(async () => {
     <div class="ib-chat-viewport chat-viewport" role="log" aria-live="polite" aria-label="Indexed bucket messages">
       <div class="ib-container ib-chat-inner">
         <ChatMessageEntry v-for="msg in chatMessages" :key="msg.id" :message="msg" />
-        <p v-if="!chatMessages.length && !loading" class="muted" style="text-align:center">
+
+        <!-- Empty bucket: setup timeline for admins / namespace managers -->
+        <div v-if="showSetupTimeline" class="ib-setup-timeline">
+          <div class="ib-setup-intro">
+            <h4 class="ib-setup-title">Set up this bucket</h4>
+            <p class="muted ib-setup-subtitle">No messages yet. Complete these steps to start the conversation.</p>
+          </div>
+
+          <ol class="ib-tl" aria-label="Bucket setup steps">
+            <!-- Step 1: add members -->
+            <li class="ib-tl-step" :class="keyStepActive ? 'is-complete' : 'is-active'">
+              <div class="ib-tl-marker" aria-hidden="true">
+                <Check v-if="keyStepActive" :size="16" />
+                <span v-else>1</span>
+              </div>
+              <div class="card ib-tl-body">
+                <div class="ib-tl-head">
+                  <UserPlus :size="18" class="ib-tl-head-icon" />
+                  <h5 class="ib-tl-step-title">Add members</h5>
+                  <span class="ib-tl-count">{{ memberCount }} {{ memberCount === 1 ? "member" : "members" }} added</span>
+                </div>
+                <p class="muted ib-tl-desc">
+                  Invite the people who should take part in this bucket. At least 2 members are needed
+                  before an encryption key can be shared.
+                </p>
+                <NuxtLink class="btn btn-primary ib-tl-btn" :to="addMemberUrl">
+                  <UserPlus :size="16" />
+                  Add Members
+                </NuxtLink>
+              </div>
+            </li>
+
+            <!-- Step 2: create & share encryption key -->
+            <li class="ib-tl-step" :class="keyStepActive ? 'is-active' : 'is-disabled'">
+              <div class="ib-tl-marker" aria-hidden="true"><span>2</span></div>
+              <div class="card ib-tl-body">
+                <div class="ib-tl-head">
+                  <KeyRound :size="18" class="ib-tl-head-icon" />
+                  <h5 class="ib-tl-step-title">Create &amp; Share Encryption Key</h5>
+                </div>
+                <p class="muted ib-tl-desc">
+                  Generates a fresh X25519 encryption keypair, stores the public key ID on-chain, and shares
+                  the new secret key with all viewers using their X25519 keys.
+                </p>
+                <p v-if="!keyStepActive" class="muted ib-tl-hint">
+                  Add at least 2 members to unlock this step.
+                </p>
+                <p v-else-if="!viewerRecipients.length" class="muted ib-tl-hint">
+                  No viewer X25519 keys are available yet. Members must be added with the viewer role before
+                  the key can be shared.
+                </p>
+                <button class="btn btn-primary ib-tl-btn" type="button"
+                  :disabled="!keyStepActive || creatingKey || loading || !session.accountAddress || !viewerRecipients.length"
+                  @click="createAndShareEncryptionKey">
+                  <span v-if="creatingKey" class="ib-tl-btn-spinner" aria-hidden="true"></span>
+                  <KeyRound v-else :size="16" />
+                  {{ creatingKey ? "Creating & Sharing..." : "Create & Share Encryption Key" }}
+                </button>
+                <p v-if="createKeyError" class="ib-tl-error">{{ createKeyError }}</p>
+              </div>
+            </li>
+          </ol>
+        </div>
+
+        <p v-else-if="!chatMessages.length && !loading" class="muted" style="text-align:center">
           No messages found for this bucket in the indexer.
         </p>
 
@@ -1031,6 +1304,185 @@ onMounted(async () => {
   flex-shrink: 0;
 }
 
+/* ── Empty-bucket setup timeline ────────────────────────────────── */
+.ib-setup-timeline {
+  width: 100%;
+  max-width: 640px;
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 8px 0;
+}
+
+.ib-setup-intro {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: center;
+}
+
+.ib-setup-title {
+  margin: 0;
+  font-size: 18px;
+}
+
+.ib-setup-subtitle {
+  margin: 0;
+  font-size: 14px;
+}
+
+.ib-tl {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ib-tl-step {
+  position: relative;
+  display: flex;
+  gap: 16px;
+  padding-bottom: 28px;
+}
+
+.ib-tl-step:last-child {
+  padding-bottom: 0;
+}
+
+/* Vertical connector between step markers */
+.ib-tl-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 15px;
+  top: 32px;
+  bottom: 0;
+  width: 2px;
+  background: var(--border-default);
+}
+
+.ib-tl-step.is-complete:not(:last-child)::before {
+  background: color-mix(in srgb, var(--status-success) 45%, transparent);
+}
+
+.ib-tl-marker {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 700;
+  background: var(--surface-card);
+  border: 2px solid var(--border-default);
+  color: var(--text-secondary);
+  z-index: 1;
+}
+
+.ib-tl-step.is-active .ib-tl-marker {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.ib-tl-step.is-complete .ib-tl-marker {
+  border-color: var(--status-success);
+  background: var(--status-success);
+  color: var(--color-white);
+}
+
+.ib-tl-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ib-tl-step.is-disabled .ib-tl-body {
+  opacity: 0.65;
+}
+
+.ib-tl-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ib-tl-head-icon {
+  flex-shrink: 0;
+  color: var(--color-primary);
+}
+
+.ib-tl-step.is-disabled .ib-tl-head-icon {
+  color: var(--text-secondary);
+}
+
+.ib-tl-step-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.ib-tl-count {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+  color: var(--color-primary);
+}
+
+.ib-tl-step.is-complete .ib-tl-count {
+  background: color-mix(in srgb, var(--status-success) 10%, transparent);
+  color: var(--status-success);
+}
+
+.ib-tl-desc,
+.ib-tl-hint {
+  margin: 0;
+  font-size: 13px;
+}
+
+.ib-tl-error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--status-error);
+}
+
+.ib-tl-btn {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.ib-tl-btn-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--color-white) 40%, transparent);
+  border-top-color: var(--color-white);
+  animation: ib-tl-spin 700ms linear infinite;
+}
+
+@keyframes ib-tl-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* ── Wallet popup overlay ───────────────────────────────────────── */
 .ib-wallet-overlay {
   position: fixed;
@@ -1058,6 +1510,34 @@ onMounted(async () => {
     flex-direction: column;
     text-align: center;
     padding: 16px;
+  }
+
+  .ib-tl-step {
+    gap: 12px;
+  }
+
+  .ib-tl-marker {
+    width: 28px;
+    height: 28px;
+    font-size: 13px;
+  }
+
+  .ib-tl-step:not(:last-child)::before {
+    left: 13px;
+    top: 28px;
+  }
+
+  .ib-tl-count {
+    margin-left: 0;
+    width: 100%;
+    box-sizing: border-box;
+    text-align: center;
+  }
+
+  .ib-tl-btn {
+    align-self: stretch;
+    justify-content: center;
+    white-space: normal;
   }
 }
 </style>
