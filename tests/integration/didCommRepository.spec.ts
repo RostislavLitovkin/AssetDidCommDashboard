@@ -223,6 +223,52 @@ describe("DidCommRepository", () => {
     expect(result.txHash).toBe("0xmsg789")
   })
 
+  it("passes contentType override through to the message submitter", async () => {
+    let receivedContentType: string | undefined = "unset"
+    const repository = new DidCommRepository(
+      {
+        rpc: async () => [] as unknown[],
+        getEndpoint: () => "wss://example-chain"
+      },
+      async () => "0xignored",
+      async () => "0xignored-bucket",
+      async () => [],
+      async () => [],
+      async () => [],
+      async (_endpoint, _bucketId, _message, _ownerAddress, _onUpdate, _tag, _pinataConfig, contentType) => {
+        receivedContentType = contentType
+        return "0xmsg790"
+      }
+    )
+
+    await repository.createMessage("bucket-7", "bafy-file-cid", "5F3sa2TJ...owner", undefined, undefined, "image/png")
+
+    expect(receivedContentType).toBe("image/png")
+  })
+
+  it("passes no contentType to the message submitter when none is given", async () => {
+    let receivedContentType: string | undefined = "unset"
+    const repository = new DidCommRepository(
+      {
+        rpc: async () => [] as unknown[],
+        getEndpoint: () => "wss://example-chain"
+      },
+      async () => "0xignored",
+      async () => "0xignored-bucket",
+      async () => [],
+      async () => [],
+      async () => [],
+      async (_endpoint, _bucketId, _message, _ownerAddress, _onUpdate, _tag, _pinataConfig, contentType) => {
+        receivedContentType = contentType
+        return "0xmsg791"
+      }
+    )
+
+    await repository.createMessage("bucket-7", "hello world", "5F3sa2TJ...owner")
+
+    expect(receivedContentType).toBeUndefined()
+  })
+
   it("rejects message creation when bucket id is empty", async () => {
     const repository = new DidCommRepository(
       { rpc: async () => "0xignored", getEndpoint: () => "wss://example-chain" },
