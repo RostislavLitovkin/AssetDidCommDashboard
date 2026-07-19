@@ -2,7 +2,7 @@
 import { fetchIndexedBucketDetail, fetchIndexedMessagesByTag, fetchIndexedNamespaceManagers, type IndexedBucket, type IndexedMessage, type IndexedBucketMember, type IndexedBucketViewer } from "../../../services/indexer/subqueryClient"
 import { DidCommRepository, type ExtrinsicUpdate } from "../../../services/papi/didCommRepository"
 import LoadingBar from "../../../components/common/LoadingBar.vue"
-import ChatMessageEntry, { type ChatMessageProps } from "../../../components/common/ChatMessageEntry.vue"
+import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } from "../../../components/common/ChatMessageEntry.vue"
 import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, Check } from "lucide-vue-next"
 import { hexToU8a } from "@polkadot/util"
 import { useAddress } from "../../../composables/useAddress"
@@ -95,6 +95,7 @@ const payloadById = ref<Record<string, string>>({})
 const payloadErrorById = ref<Record<string, string>>({})
 const decryptedById = ref<Record<string, string>>({})
 const decryptErrorById = ref<Record<string, string>>({})
+const attachmentById = ref<Record<string, ChatMessageAttachment>>({})
 const activeSecretJwk = ref<jose.JWK | null>(null)
 const keySharingError = ref("")
 
@@ -174,6 +175,7 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
       reference: m.reference ?? undefined,
       payloadError: payloadErrorById.value[m.id] ?? decryptErrorById.value[m.id],
       contentType: m.contentType ?? undefined,
+      attachment: attachmentById.value[m.id],
       timestampLabel: formatBlock(m.createdBlock),
       debugEntries,
     }
@@ -218,6 +220,9 @@ async function loadAll() {
 
     // 5. Decrypt normal messages using the active key
     await decryptMessages(detail.messages)
+
+    // 6. Resolve file attachments referenced by CID-pointer messages
+    await hydrateAttachments(detail.messages)
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Failed to load indexed data"
   } finally {
@@ -328,6 +333,62 @@ async function decryptMessages(msgs: IndexedMessage[]) {
     }
   }))
   decryptedById.value = nextD
+  decryptErrorById.value = nextE
+}
+
+// ── File attachments (CID-pointer messages) ────────────────────────
+const textMessageContentType = "text/plain;charset=utf-8"
+const keySharingContentType = "application/didcomm-encrypted+json"
+
+function looksLikeBareCid(value: string): boolean {
+  return /^[A-Za-z0-9]{32,128}$/.test(value)
+}
+
+// A file message carries a real MIME contentType on-chain and a bare file CID as payload.
+function fileMessagePayloadCid(m: IndexedMessage): string | undefined {
+  if (m.tag === keySharingTag) return undefined
+  const ct = m.contentType?.trim()
+  if (!ct || ct === textMessageContentType || ct === keySharingContentType) return undefined
+  const payload = (decryptedById.value[m.id] ?? payloadById.value[m.id])?.trim()
+  return payload && looksLikeBareCid(payload) ? payload : undefined
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ""
+  const chunkSize = 0x8000
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
+  }
+  return btoa(binary)
+}
+
+async function hydrateAttachments(msgs: IndexedMessage[]) {
+  const next: Record<string, ChatMessageAttachment> = { ...attachmentById.value }
+  const nextE: Record<string, string> = { ...decryptErrorById.value }
+  const sk = activeSecretJwk.value
+
+  await Promise.all(msgs.map(async m => {
+    if (next[m.id]) return
+    const fileCid = fileMessagePayloadCid(m)
+    if (!fileCid) return
+    try {
+      if (!sk || !isX25519Secret(sk)) throw new Error("No decrypted bucket key available. Decrypt key-sharing first.")
+      const res = await fetch(resolveUrl(fileCid))
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const fileJwe = (await res.text()).trim()
+      const key = await jose.importJWK(sk as jose.JWK, "ECDH-ES+A256KW")
+      const { plaintext, protectedHeader } = await jose.compactDecrypt(fileJwe, key)
+      next[m.id] = {
+        contentType: m.contentType?.trim() || "application/octet-stream",
+        fileName: typeof protectedHeader.filename === "string" ? protectedHeader.filename : undefined,
+        data: bytesToBase64(plaintext)
+      }
+    } catch (e) {
+      nextE[m.id] = e instanceof Error ? e.message : "Attachment unavailable"
+    }
+  }))
+
+  attachmentById.value = next
   decryptErrorById.value = nextE
 }
 
@@ -609,6 +670,7 @@ watch(() => settings.x25519SecretJwk, async () => {
   await hydratePayloads(keySharingMessages)
   await decryptKeySharingFromMessages(keySharingMessages)
   await decryptMessages(messages.value)
+  await hydrateAttachments(messages.value)
 }, { deep: true })
 
 onMounted(async () => {
