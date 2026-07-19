@@ -256,7 +256,7 @@ function extractActiveBucketSecretJwk(payload: unknown): jose.JWK | null {
   return null
 }
 
-async function encryptOutgoingBucketMessage(plaintext: string): Promise<string> {
+async function encryptOutgoingBucketMessage(plaintext: Uint8Array | string, extraProtectedHeader?: Record<string, string>): Promise<string> {
   const secretJwk = activeBucketEncryptionSecretJwk.value
   if (!secretJwk || !isX25519SecretJwk(secretJwk)) {
     throw new Error("No decrypted bucket encryption key is available. Decrypt latest key-sharing payload first.")
@@ -271,12 +271,14 @@ async function encryptOutgoingBucketMessage(plaintext: string): Promise<string> 
   }
 
   const publicKey = await jose.importJWK(recipientPublicJwk, "ECDH-ES+A256KW")
-  const encryptor = new jose.CompactEncrypt(new TextEncoder().encode(plaintext))
+  const plaintextBytes = typeof plaintext === "string" ? new TextEncoder().encode(plaintext) : plaintext
+  const encryptor = new jose.CompactEncrypt(plaintextBytes)
     .setProtectedHeader({
       alg: "ECDH-ES+A256KW",
       enc: "A256GCM",
       typ: encryptedMessageTag,
-      kid: recipientPublicJwk.kid
+      kid: recipientPublicJwk.kid,
+      ...extraProtectedHeader
     })
 
   return await encryptor.encrypt(publicKey)
@@ -1401,16 +1403,6 @@ function removeAttachment() {
   pendingAttachment.value = null
 }
 
-function buildAttachmentEnvelope(file: File, base64Data: string): string {
-  const base64 = base64Data.includes(",") ? base64Data.split(",")[1]! : base64Data
-  return JSON.stringify({
-    type: "attachment",
-    contentType: file.type || "application/octet-stream",
-    fileName: file.name,
-    data: base64,
-  })
-}
-
 async function sendMessage() {
   sendError.value = ""
   const textPayload = sendText.value.trim()
@@ -1443,16 +1435,27 @@ async function sendMessage() {
   currentBucketCall.value = "buckets.write"
 
   try {
-    const plaintext = attachment
-      ? buildAttachmentEnvelope(attachment.file, attachment.dataUrl)
-      : textPayload
-    const encryptedPayload = await encryptOutgoingBucketMessage(plaintext)
-    const result = await didCommRepository.createMessage(
-      bucketId.value,
-      encryptedPayload,
-      session.accountAddress,
-      logExtrinsicUpdate
-    )
+    let result
+    if (attachment) {
+      const fileContentType = attachment.file.type || "application/octet-stream"
+      const fileBytes = new Uint8Array(await attachment.file.arrayBuffer())
+      const fileJwe = await encryptOutgoingBucketMessage(fileBytes, { cty: fileContentType, filename: attachment.file.name })
+      result = await didCommRepository.createFileMessage(
+        bucketId.value,
+        fileJwe,
+        fileContentType,
+        session.accountAddress,
+        logExtrinsicUpdate
+      )
+    } else {
+      const encryptedPayload = await encryptOutgoingBucketMessage(textPayload)
+      result = await didCommRepository.createMessage(
+        bucketId.value,
+        encryptedPayload,
+        session.accountAddress,
+        logExtrinsicUpdate
+      )
+    }
     const pending = pendingMessages.value.find((entry) => entry.id === pendingId)
     if (pending) {
       pending.deliveryState = "sent"
