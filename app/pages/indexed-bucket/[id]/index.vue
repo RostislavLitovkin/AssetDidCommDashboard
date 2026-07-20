@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { fetchIndexedBucketDetail, fetchIndexedMessagesByTag, fetchIndexedNamespaceManagers, type IndexedBucket, type IndexedMessage, type IndexedBucketMember, type IndexedBucketViewer } from "../../../services/indexer/subqueryClient"
 import { DidCommRepository, type ExtrinsicUpdate } from "../../../services/papi/didCommRepository"
+import { ProfileClient } from "../../../services/profile/profileClient"
+import { resolveAvatarUrls, toSs58Prefix42 } from "../../../services/profile/avatarResolver"
 import LoadingBar from "../../../components/common/LoadingBar.vue"
 import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } from "../../../components/common/ChatMessageEntry.vue"
 import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, Check } from "lucide-vue-next"
@@ -68,6 +70,7 @@ const didCommRepository = new DidCommRepository(
   undefined, // 19 submitRemoveNamespaceManagerExtrinsic
   String(config.public.subqueryIndexerUrl || "") // 20 indexerUrl
 )
+const profileClient = new ProfileClient()
 
 const indexerUrl = computed(() => String(config.public.subqueryIndexerUrl || ""))
 const pinataGateway = computed(() => {
@@ -90,6 +93,7 @@ const contributors = ref<IndexedBucketMember[]>([])
 const viewers = ref<IndexedBucketViewer[]>([])
 const namespaceManagers = ref<string[]>([])
 const messages = ref<IndexedMessage[]>([])
+const avatarUrlByAddress = ref<Record<string, string>>({})
 
 const payloadById = ref<Record<string, string>>({})
 const payloadErrorById = ref<Record<string, string>>({})
@@ -172,6 +176,7 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
       id: m.id, body, outgoing,
       senderLabel: outgoing ? "You" : formatAddress(m.contributor),
       senderAddress: m.contributor, tag: m.tag ?? undefined,
+      avatarUrl: outgoing ? undefined : avatarUrlByAddress.value[m.contributor],
       reference: m.reference ?? undefined,
       payloadError: payloadErrorById.value[m.id] ?? decryptErrorById.value[m.id],
       contentType: m.contentType ?? undefined,
@@ -223,6 +228,9 @@ async function loadAll() {
 
     // 6. Resolve file attachments referenced by CID-pointer messages
     await hydrateAttachments(detail.messages)
+
+    // 7. Resolve sender profile pictures for incoming messages
+    await loadAvatars(detail.messages)
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Failed to load indexed data"
   } finally {
@@ -384,6 +392,21 @@ async function hydrateAttachments(msgs: IndexedMessage[]) {
 
   attachmentById.value = next
   decryptErrorById.value = nextE
+}
+
+// ── Sender avatars ─────────────────────────────────────────────────
+async function loadAvatars(msgs: IndexedMessage[]) {
+  // Incoming senders only: skip messages sent by the connected wallet.
+  const incoming = msgs
+    .map(m => m.contributor)
+    .filter(addr => Boolean(addr) && !(session.accountAddress && addressesEqual(addr, session.accountAddress)))
+
+  try {
+    const resolved = await resolveAvatarUrls(incoming, addr => profileClient.getProfile(toSs58Prefix42(addr)))
+    avatarUrlByAddress.value = { ...avatarUrlByAddress.value, ...resolved }
+  } catch {
+    // Non-fatal: unresolved senders fall back to the default avatar.
+  }
 }
 
 // ── Send message (encrypted with latest key) ───────────────────────
@@ -699,7 +722,7 @@ onMounted(async () => {
     <!-- Chat viewport -->
     <div class="ib-chat-viewport chat-viewport" role="log" aria-live="polite" aria-label="Indexed bucket messages">
       <div class="ib-container ib-chat-inner">
-        <ChatMessageEntry v-for="msg in chatMessages" :key="msg.id" :message="msg" />
+        <ChatMessageEntry v-for="msg in chatMessages" :key="msg.id" :message="msg" :show-avatars="true" />
 
         <!-- Empty bucket: setup timeline for admins / namespace managers -->
         <div v-if="showSetupTimeline" class="ib-setup-timeline">
