@@ -12,6 +12,7 @@ export interface ChatMessageProps {
   payloadError?: string
   timestampLabel: string
   debugEntries?: { key: string; value: string }[]
+  avatarUrl?: string
 }
 
 /** Try to parse the body as a file-attachment envelope. */
@@ -40,15 +41,21 @@ export interface ChatMessageAttachment {
 </script>
 
 <script setup lang="ts">
-import { computed } from "vue"
+import { computed, ref } from "vue"
 import { Paperclip } from "lucide-vue-next"
 import { useSettingsStore } from "../../stores/settings"
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   message: ChatMessageProps
-}>()
+  showAvatars?: boolean
+}>(), {
+  showAvatars: false
+})
 
 const settings = useSettingsStore()
+
+// Per-instance: flip to the default avatar if the real picture URL fails to load.
+const avatarFailed = ref(false)
 
 function defaultFileName(contentType: string): string {
   const subtype = contentType.split("/")[1]?.split(";")[0]?.trim()
@@ -94,7 +101,21 @@ function formatFileSize(base64: string): string {
 </script>
 
 <template>
-  <div class="chat-row" :class="message.outgoing ? 'chat-row-outgoing' : 'chat-row-incoming'">
+  <div class="chat-row" :class="[
+    message.outgoing ? 'chat-row-outgoing' : 'chat-row-incoming',
+    { 'chat-row-has-avatar': showAvatars && !message.outgoing }
+  ]">
+    <div v-if="showAvatars && !message.outgoing" class="chat-avatar-unit">
+      <img
+        v-if="!avatarFailed && message.avatarUrl"
+        class="chat-avatar"
+        :src="message.avatarUrl"
+        :alt="message.senderLabel"
+        @error="avatarFailed = true"
+      />
+      <img v-else class="chat-avatar" src="@/assets/Images/xcavateprofilepicture.png" alt="" />
+      <span class="chat-avatar-arrow" aria-hidden="true"></span>
+    </div>
     <div class="chat-message">
       <p v-if="!message.outgoing" class="chat-sender">{{ message.senderLabel }}</p>
       <article class="chat-bubble" :class="message.outgoing ? 'chat-bubble-outgoing' : 'chat-bubble-incoming'">
@@ -156,6 +177,44 @@ function formatFileSize(base64: string): string {
 .chat-row { display: flex; width: 100%; }
 .chat-row-incoming { justify-content: flex-start; }
 .chat-row-outgoing { justify-content: flex-end; }
+
+/* Incoming rows carrying an avatar: bottom-align so the avatar sits by the last line. */
+.chat-row-has-avatar { align-items: flex-end; }
+.chat-row-has-avatar .chat-message { max-width: min(78%, 520px); }
+
+/* Avatar + arrow travel together and stay visible while the bubble is on screen. */
+.chat-avatar-unit {
+  position: sticky;
+  top: 8px;
+  bottom: 8px;
+  align-self: flex-end;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-right: 8px;
+}
+
+.chat-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+  flex-shrink: 0;
+  background: var(--surface-bg);
+  border: 2px solid color-mix(in srgb, var(--color-primary) 30%, var(--border-default));
+}
+
+/* CSS triangle pointing left, from the bubble toward the avatar bubble. */
+.chat-avatar-arrow {
+  width: 0;
+  height: 0;
+  flex-shrink: 0;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-right: 7px solid color-mix(in srgb, var(--color-primary) 35%, var(--border-default));
+}
 
 .chat-message {
   max-width: min(78%, 560px); display: flex; flex-direction: column;
@@ -247,6 +306,7 @@ function formatFileSize(base64: string): string {
 
 @media (max-width: 840px) {
   .chat-message { max-width: 100%; }
+  .chat-row-has-avatar .chat-message { max-width: calc(100% - 56px); }
   .chat-debug-item { grid-template-columns: 1fr; }
 }
 </style>
