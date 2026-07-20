@@ -1,4 +1,10 @@
 import { web3Accounts, web3Enable, web3FromAddress } from "@polkadot/extension-dapp"
+import {
+  buildSignaturePayload,
+  formatSignatureTimestamp,
+  toCSharpHashHex,
+  type ProfilePayloadBody
+} from "../profile/profileSigning"
 
 export interface WalletSession {
   address: string
@@ -9,18 +15,6 @@ export interface WalletAccountOption {
   address: string
   name: string
   source: string
-}
-
-// Map property names to match C# Profile serialization
-// C# uses JsonNamingPolicy.CamelCase with specific JsonPropertyName attributes:
-// - Ss58Address -> "ss58address" (not "ss58Address")
-// - Nickname -> "nickname"
-// - Bio -> "bio"
-// - ProfilePicture -> "profilePicture"
-// - X25519Key -> "x25519Key"
-function toCSharpPropertyNames(json: string): string {
-  // Replace "ss58Address" with "ss58address"
-  return json.replace('"ss58Address":', '"ss58address":')
 }
 
 export class WalletExtensionProvider {
@@ -70,7 +64,7 @@ export class WalletExtensionProvider {
     address: string,
     method: "POST" | "PUT",
     path: string,
-    body: string
+    body: ProfilePayloadBody
   ): Promise<HeadersInit> {
     await this.ensureEnabled()
     const { blake2AsHex, cryptoWaitReady } = await import("@polkadot/util-crypto")
@@ -81,10 +75,16 @@ export class WalletExtensionProvider {
       throw new Error("WALLET_SIGNING_UNAVAILABLE")
     }
 
-    const timestamp = new Date().toISOString()
-    // Hash the JSON with C#-style property names to match Profile.Hash() implementation
-    const bodyHash = blake2AsHex(toCSharpPropertyNames(body), 128).slice(2)
-    const payload = `${method}:${path}:${bodyHash}:${timestamp}`
+    // Body hash matches C# `IPayloadBody.Hash()`: `0x`+UPPERCASE Blake2-128 of the
+    // canonical JSON, or "" for an empty (multipart image) body.
+    const bodyHash = body.kind === "empty"
+      ? ""
+      : toCSharpHashHex(blake2AsHex(body.canonicalJson, 128))
+    const timestamp = formatSignatureTimestamp(new Date())
+    const payload = buildSignaturePayload(method, path, bodyHash, timestamp)
+
+    // The extension wraps `signRaw` bytes in <Bytes>...</Bytes> before signing,
+    // which is exactly the fallback branch the API's SignatureValidator verifies.
     const payloadHash = blake2AsHex(payload, 128)
     const signed = await injector.signer.signRaw({
       address,

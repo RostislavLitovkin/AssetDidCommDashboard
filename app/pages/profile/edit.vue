@@ -4,6 +4,7 @@ import { computed, onMounted, ref, watch } from "vue"
 import { useRouter } from "vue-router"
 import { useWallet } from "../../composables/useWallet"
 import { ProfileClient } from "../../services/profile/profileClient"
+import { resizeProfileImage } from "../../services/profile/imageResize"
 import { useSettingsStore } from "../../stores/settings"
 
 const wallet = useWallet()
@@ -83,11 +84,14 @@ async function saveProfile(): Promise<void> {
       bio: bio.value,
       profilePicture: profilePicture.value,
       x25519Key: x25519Key.value
-    }, profileExists.value, wallet.signProfileRequest)
+    }, wallet.signProfileRequest)
     if (selectedImage.value) {
+      // The profile must exist before the image endpoint accepts an upload, so
+      // this runs after saveProfile. Resize to a small square JPEG to avoid 413s.
+      const resized = await resizeProfileImage(selectedImage.value, wallet.accountAddress.value)
       profilePicture.value = await profileClient.uploadProfileImage(
         wallet.accountAddress.value,
-        selectedImage.value,
+        resized,
         wallet.signProfileRequest
       )
     }

@@ -1,8 +1,9 @@
 import type { Profile, ProfileInput } from "../../types/profile"
+import { canonicalProfileJson, type ProfilePayloadBody } from "./profileSigning"
 
 export const PROFILE_API_URL = "https://profile-api.xcavate.io"
 
-type SignedRequest = (method: "POST" | "PUT", path: string, body: string) => Promise<HeadersInit>
+type SignedRequest = (method: "POST" | "PUT", path: string, body: ProfilePayloadBody) => Promise<HeadersInit>
 
 function profilePath(address: string): string {
   return `/api/profiles/${encodeURIComponent(address)}`
@@ -10,26 +11,6 @@ function profilePath(address: string): string {
 
 function profileImagePath(address: string): string {
   return `${profilePath(address)}/image`
-}
-
-function encodeMultipartImage(image: File): Promise<{ body: Uint8Array, contentType: string, signingBody: string }> {
-  const boundary = `----AssetDidComm${crypto.randomUUID().replaceAll("-", "")}`
-  const fileName = image.name.replaceAll("\\", "_").replaceAll("\"", "_")
-  const prefix = new TextEncoder().encode(
-    `--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="${fileName}"\r\nContent-Type: ${image.type || "application/octet-stream"}\r\n\r\n`
-  )
-  const suffix = new TextEncoder().encode(`\r\n--${boundary}--\r\n`)
-
-  return image.arrayBuffer().then((buffer) => {
-    const file = new Uint8Array(buffer)
-    const body = new Uint8Array(prefix.length + file.length + suffix.length)
-    body.set(prefix)
-    body.set(file, prefix.length)
-    body.set(suffix, prefix.length + file.length)
-
-    // The API hashes the UTF-8 text it reads from the multipart request body.
-    return { body, contentType: `multipart/form-data; boundary=${boundary}`, signingBody: new TextDecoder().decode(body) }
-  })
 }
 
 function asOptionalString(value: unknown): string | null {
@@ -89,21 +70,21 @@ export class ProfileClient {
   async saveProfile(
     address: string,
     input: ProfileInput,
-    existing: boolean,
     signRequest: SignedRequest
   ): Promise<Profile> {
-    const method = existing ? "PUT" : "POST"
-    const path = existing ? profilePath(address) : "/api/profiles"
-    const body = JSON.stringify({
+    // PUT is an upsert (creates the profile when absent), matching the mobile app
+    // which always registers via PUT /api/profiles/{address}.
+    const path = profilePath(address)
+    const body = canonicalProfileJson({
       ss58Address: address,
-      nickname: input.nickname.trim(),
+      nickname: input.nickname.trim() || null,
       bio: input.bio.trim() || null,
       profilePicture: input.profilePicture.trim() || null,
       x25519Key: input.x25519Key.trim() || null
     })
-    const headers = await signRequest(method, path, body)
+    const headers = await signRequest("PUT", path, { kind: "json", canonicalJson: body })
     const response = await this.fetcher(`${this.baseUrl}${path}`, {
-      method,
+      method: "PUT",
       headers: {
         "Content-Type": "application/json",
         ...headers
@@ -121,15 +102,15 @@ export class ProfileClient {
 
   async uploadProfileImage(address: string, image: File, signRequest: SignedRequest): Promise<string> {
     const path = profileImagePath(address)
-    const multipart = await encodeMultipartImage(image)
-    const headers = await signRequest("POST", path, multipart.signingBody)
+    // The API signs an EmptyPayloadBody for image uploads (hash of ""), so the
+    // multipart content is irrelevant to the signature — let the browser build it.
+    const headers = await signRequest("POST", path, { kind: "empty" })
+    const form = new FormData()
+    form.append("image", image, image.name)
     const response = await this.fetcher(`${this.baseUrl}${path}`, {
       method: "POST",
-      headers: {
-        "Content-Type": multipart.contentType,
-        ...headers
-      },
-      body: new Uint8Array(multipart.body).buffer
+      headers,
+      body: form
     })
 
     if (!response.ok) {

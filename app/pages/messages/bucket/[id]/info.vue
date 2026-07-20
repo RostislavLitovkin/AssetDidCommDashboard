@@ -5,7 +5,7 @@ import type { Profile } from "../../../../types/profile"
 import LoadingBar from "../../../../components/common/LoadingBar.vue"
 import SkeletonCard from "../../../../components/common/SkeletonCard.vue"
 import { useAddress } from "../../../../composables/useAddress"
-import { Trash2 } from "lucide-vue-next"
+import { Trash2, File } from "lucide-vue-next"
 import { hexToU8a } from "@polkadot/util"
 import { decodeAddress, encodeAddress, xxhashAsHex } from "@polkadot/util-crypto"
 import * as jose from "jose"
@@ -1600,6 +1600,19 @@ const allMembers = computed<MemberEntry[]>(() => {
           </div>
         </div>
       </section>
+
+      <div class="card stack" style="gap: 16px;">
+        <div class="row" style="justify-content: space-between; align-items: center">
+          <h4 style="margin: 0; font-size: 16px;">Files & Images</h4>
+          <NuxtLink class="btn" :to="`/messages/bucket/${encodeURIComponent(bucketId)}/files`">
+            <File :size="16" style="margin-right: 6px;" />
+            View Files
+          </NuxtLink>
+        </div>
+        <p class="muted" style="margin: 0;">
+          Browse all files and images shared in this bucket. Files are displayed with their encrypted metadata.
+        </p>
+      </div>
     </div>
   </div>
 </template>

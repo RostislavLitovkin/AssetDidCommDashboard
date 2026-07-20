@@ -38,15 +38,17 @@ describe("useWallet", () => {
     const provider = new WalletExtensionProvider()
     const headers = await provider.signProfileRequest(
       "5Example",
-      "POST",
-      "/api/profiles",
-      "{\"nickname\":\"alice\"}"
+      "PUT",
+      "/api/profiles/5Example",
+      { kind: "json", canonicalJson: "{\"nickname\":\"alice\"}" }
     )
 
     expect(walletMocks.blake2AsHex).toHaveBeenNthCalledWith(1, "{\"nickname\":\"alice\"}", 128)
+    // Body hash embedded as C# Bytes2HexString form (0x + UPPERCASE); timestamp in
+    // C# :o form (7 fractional digits).
     expect(walletMocks.blake2AsHex).toHaveBeenNthCalledWith(
       2,
-      "POST:/api/profiles:bodyhash:2026-07-11T22:58:41.735Z",
+      "PUT:/api/profiles/5Example:0xBODYHASH:2026-07-11T22:58:41.7350000Z",
       128
     )
     expect(walletMocks.signRaw).toHaveBeenCalledWith({
@@ -57,7 +59,29 @@ describe("useWallet", () => {
     expect(headers).toEqual({
       "X-SS58-Address": "5Example",
       "X-Signature": "0xsigned",
-      "X-Timestamp": "2026-07-11T22:58:41.735Z"
+      "X-Timestamp": "2026-07-11T22:58:41.7350000Z"
     })
+  })
+
+  it("signs an empty body hash for multipart image uploads", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-07-11T22:58:41.735Z"))
+    walletMocks.web3FromAddress.mockResolvedValue({ signer: { signRaw: walletMocks.signRaw } })
+    walletMocks.blake2AsHex.mockReturnValue("0xpayloadhash")
+
+    const provider = new WalletExtensionProvider()
+    await provider.signProfileRequest(
+      "5Example",
+      "POST",
+      "/api/profiles/5Example/image",
+      { kind: "empty" }
+    )
+
+    // No body is hashed; the payload carries an empty body-hash segment (::).
+    expect(walletMocks.blake2AsHex).toHaveBeenCalledTimes(1)
+    expect(walletMocks.blake2AsHex).toHaveBeenCalledWith(
+      "POST:/api/profiles/5Example/image::2026-07-11T22:58:41.7350000Z",
+      128
+    )
   })
 })

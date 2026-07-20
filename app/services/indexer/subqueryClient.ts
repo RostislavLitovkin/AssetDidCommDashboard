@@ -184,6 +184,23 @@ query BucketMessages($bucketId: String!, $after: Cursor) {
 }
 `
 
+const FILE_MESSAGES_QUERY = `
+query FileMessages($bucketId: String!, $after: Cursor) {
+  messages(
+    filter: {
+      bucketId: { equalTo: $bucketId },
+      contentType: { isNull: false },
+      tag: { notEqualTo: "didcomm/key-sharing-v1" }
+    },
+    orderBy: [CREATED_BLOCK_ASC],
+    after: $after
+  ) {
+    nodes { id bucketId messageId contributor reference tag description contentType contentHash createdBlock ipfsContent }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+`
+
 export async function fetchIndexedMessages(
   endpoint: string,
   bucketId: string
@@ -204,6 +221,36 @@ export async function fetchIndexedMessages(
     if (after) vars.after = after
 
     const data = await gql<Raw>(endpoint, MESSAGES_QUERY, vars)
+    all.push(...data.messages.nodes)
+
+    if (!data.messages.pageInfo.hasNextPage) break
+    after = data.messages.pageInfo.endCursor ?? null
+    if (!after) break
+  }
+
+  return all
+}
+
+export async function fetchFileMessages(
+  endpoint: string,
+  bucketId: string
+): Promise<IndexedMessage[]> {
+  const all: IndexedMessage[] = []
+  let after: string | null = null
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    interface Raw {
+      messages: {
+        nodes: IndexedMessage[]
+        pageInfo: { hasNextPage: boolean; endCursor: string | null }
+      }
+    }
+
+    const vars: Record<string, unknown> = { bucketId }
+    if (after) vars.after = after
+
+    const data = await gql<Raw>(endpoint, FILE_MESSAGES_QUERY, vars)
     all.push(...data.messages.nodes)
 
     if (!data.messages.pageInfo.hasNextPage) break

@@ -1,4 +1,5 @@
 import { WalletExtensionProvider } from "../services/wallet/extensionProvider"
+import type { ProfilePayloadBody } from "../services/profile/profileSigning"
 
 export function useWallet() {
   const store = useSessionStore()
@@ -42,7 +43,7 @@ export function useWallet() {
   async function signProfileRequest(
     method: "POST" | "PUT",
     path: string,
-    body: string
+    body: ProfilePayloadBody
   ): Promise<HeadersInit> {
     const address = store.accountAddress
     if (!address) {
