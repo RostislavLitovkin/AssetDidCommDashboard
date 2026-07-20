@@ -7,10 +7,12 @@ export interface ChatMessageProps {
   senderAddress?: string
   tag?: string
   contentType?: string
+  attachment?: ChatMessageAttachment
   reference?: string
   payloadError?: string
   timestampLabel: string
   debugEntries?: { key: string; value: string }[]
+  avatarUrl?: string
 }
 
 /** Try to parse the body as a file-attachment envelope. */
@@ -30,20 +32,54 @@ export interface AttachmentEnvelope {
   fileName: string
   data: string // base64
 }
+
+export interface ChatMessageAttachment {
+  contentType: string
+  fileName?: string
+  data: string // base64
+}
 </script>
 
 <script setup lang="ts">
-import { computed } from "vue"
-import { Paperclip } from "lucide-vue-next"
+import { computed, ref } from "vue"
+import { Paperclip, KeyRound } from "lucide-vue-next"
 import { useSettingsStore } from "../../stores/settings"
 
-const props = defineProps<{
+const KEY_SHARING_TAG = "didcomm/key-sharing-v1"
+
+const props = withDefaults(defineProps<{
   message: ChatMessageProps
-}>()
+  showAvatars?: boolean
+}>(), {
+  showAvatars: false
+})
 
 const settings = useSettingsStore()
 
-const attachment = computed(() => parseAttachmentEnvelope(props.message.body))
+// Key-sharing messages are protocol events, not conversation — rendered as a
+// centered system notice with a separation line instead of a chat bubble.
+const isKeySharing = computed(() => props.message.tag === KEY_SHARING_TAG)
+
+// Per-instance: flip to the default avatar if the real picture URL fails to load.
+const avatarFailed = ref(false)
+
+function defaultFileName(contentType: string): string {
+  const subtype = contentType.split("/")[1]?.split(";")[0]?.trim()
+  return `attachment.${subtype || "bin"}`
+}
+
+const attachment = computed<AttachmentEnvelope | null>(() => {
+  const explicit = props.message.attachment
+  if (explicit) {
+    return {
+      type: "attachment",
+      contentType: explicit.contentType,
+      fileName: explicit.fileName || defaultFileName(explicit.contentType),
+      data: explicit.data
+    }
+  }
+  return parseAttachmentEnvelope(props.message.body)
+})
 const isImage = computed(() => attachment.value?.contentType?.startsWith("image/") ?? false)
 const isVideo = computed(() => attachment.value?.contentType?.startsWith("video/") ?? false)
 const isAudio = computed(() => attachment.value?.contentType?.startsWith("audio/") ?? false)
@@ -71,7 +107,29 @@ function formatFileSize(base64: string): string {
 </script>
 
 <template>
-  <div class="chat-row" :class="message.outgoing ? 'chat-row-outgoing' : 'chat-row-incoming'">
+  <!-- Key-sharing: centered system notice with a separation line, no avatar/bubble -->
+  <div v-if="isKeySharing" class="chat-system-notice">
+    <span class="chat-system-notice-text">
+      <KeyRound :size="14" class="chat-system-notice-icon" aria-hidden="true" />
+      {{ message.senderLabel }} has set a new Encryption key at {{ message.timestampLabel }}
+    </span>
+  </div>
+
+  <div v-else class="chat-row" :class="[
+    message.outgoing ? 'chat-row-outgoing' : 'chat-row-incoming',
+    { 'chat-row-has-avatar': showAvatars && !message.outgoing }
+  ]">
+    <div v-if="showAvatars && !message.outgoing" class="chat-avatar-unit">
+      <img
+        v-if="!avatarFailed && message.avatarUrl"
+        class="chat-avatar"
+        :src="message.avatarUrl"
+        :alt="message.senderLabel"
+        @error="avatarFailed = true"
+      />
+      <img v-else class="chat-avatar" src="@/assets/Images/xcavateprofilepicture.png" alt="" />
+      <span class="chat-avatar-arrow" aria-hidden="true"></span>
+    </div>
     <div class="chat-message">
       <p v-if="!message.outgoing" class="chat-sender">{{ message.senderLabel }}</p>
       <article class="chat-bubble" :class="message.outgoing ? 'chat-bubble-outgoing' : 'chat-bubble-incoming'">
@@ -80,7 +138,7 @@ function formatFileSize(base64: string): string {
         <template v-if="attachment">
           <!-- Image -->
           <div v-if="isImage" class="chat-attachment-media">
-            <img :src="dataUrl" :alt="attachment.fileName" class="chat-attachment-img" loading="lazy" />
+            <img :src="dataUrl" :alt="attachment.fileName" class="chat-attachment-img" loading="lazy" @click="downloadAttachment" />
           </div>
           <!-- Video -->
           <div v-else-if="isVideo" class="chat-attachment-media">
@@ -98,11 +156,14 @@ function formatFileSize(base64: string): string {
           <div v-else class="chat-attachment-file" @click="downloadAttachment">
             <Paperclip :size="22" class="chat-attachment-file-icon" />
             <div class="chat-attachment-file-info">
-              <span class="chat-attachment-file-name">{{ attachment.fileName }}</span>
+              <span class="chat-attachment-file-name" :title="attachment.fileName">{{ attachment.fileName }}</span>
               <span class="chat-attachment-file-meta">{{ attachment.contentType }} · {{ formatFileSize(attachment.data) }}</span>
             </div>
           </div>
-          <p class="chat-attachment-label">{{ attachment.fileName }} · {{ formatFileSize(attachment.data) }}</p>
+          <!-- Filename + size caption for media (the generic-file card shows this itself) -->
+          <p v-if="isImage || isVideo || isAudio" class="chat-attachment-caption">
+            <span class="chat-attachment-caption-name">{{ attachment.fileName }}</span> · {{ formatFileSize(attachment.data) }}
+          </p>
         </template>
 
         <!-- Plain text message -->
@@ -127,9 +188,84 @@ function formatFileSize(base64: string): string {
 </template>
 
 <style scoped>
+/* Key-sharing system notice: centered text flanked by a separation line. */
+.chat-system-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin: 2px 0;
+}
+.chat-system-notice::before,
+.chat-system-notice::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border-default);
+}
+.chat-system-notice-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  max-width: 80%;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+.chat-system-notice-icon { flex-shrink: 0; color: var(--color-primary); }
+
 .chat-row { display: flex; width: 100%; }
 .chat-row-incoming { justify-content: flex-start; }
 .chat-row-outgoing { justify-content: flex-end; }
+
+/* Bottom-align so the avatar rides the bubble as the message scrolls. */
+.chat-row-has-avatar { align-items: flex-end; }
+.chat-row-has-avatar .chat-message { max-width: min(78%, 520px); }
+
+/* Avatar + arrow travel with the message (sticky) and stay visible while it's on
+   screen. The vertical margins fence their travel area to the bubble alone: they
+   inset the sticky range past the sender label above and the timestamp below —
+   each a 16px line + the 6px column gap = 22px — so the pair rides the bubble's
+   edge instead of drifting up to the nickname or down to the timestamp. Keep in
+   sync with the .chat-sender / .chat-timestamp line-heights and .chat-message gap. */
+.chat-avatar-unit {
+  position: sticky;
+  top: 8px;
+  bottom: 8px;
+  align-self: flex-end;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 22px;
+  margin-bottom: 22px;
+  /* No trailing gap: the arrow's base sits flush against the bubble's edge. */
+  margin-right: 0;
+}
+
+.chat-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+  flex-shrink: 0;
+  background: var(--surface-bg);
+}
+
+/* Primary-colored tail: base overlaps the bubble edge by 1px so it stays
+   seamlessly joined to the bubble (and its primary border-left) at any
+   scroll position, with the point aimed at the sticky avatar. */
+.chat-avatar-arrow {
+  width: 0;
+  height: 0;
+  flex-shrink: 0;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-right: 7px solid var(--color-primary);
+  margin-right: -1px;
+}
 
 .chat-message {
   max-width: min(78%, 560px); display: flex; flex-direction: column;
@@ -137,7 +273,7 @@ function formatFileSize(base64: string): string {
 }
 .chat-row-outgoing .chat-message { align-items: flex-end; }
 
-.chat-sender { margin: 0; font-size: 12px; font-weight: 600; color: var(--color-primary); }
+.chat-sender { margin: 0; font-size: 12px; line-height: 16px; font-weight: 600; color: var(--color-primary); }
 
 .chat-bubble {
   width: 100%; border-radius: 14px; padding: 12px 14px;
@@ -159,44 +295,53 @@ function formatFileSize(base64: string): string {
 .chat-bubble-outgoing .chat-debug-item dt,
 .chat-bubble-outgoing .chat-debug-item dd { color: rgba(255, 255, 255, 0.92); }
 .chat-bubble-outgoing .chat-warning { color: rgba(255, 255, 255, 0.9); }
-.chat-bubble-outgoing .chat-attachment-label,
+.chat-bubble-outgoing .chat-attachment-caption { color: rgba(255, 255, 255, 0.8); }
+.chat-bubble-outgoing .chat-attachment-caption-name,
 .chat-bubble-outgoing .chat-attachment-file-name,
-.chat-bubble-outgoing .chat-attachment-file-meta { color: rgba(255, 255, 255, 0.85); }
+.chat-bubble-outgoing .chat-attachment-file-meta { color: rgba(255, 255, 255, 0.92); }
 
 .chat-text { margin: 0; white-space: pre-wrap; word-break: break-word; }
 .chat-warning { margin: 8px 0 0; font-size: 12px; color: var(--status-error); }
 
-/* Attachments */
-.chat-attachment-media { margin: 0 -2px; }
+/* Attachments — media spans the full width of the bubble by bleeding past its padding */
+.chat-attachment-media {
+  margin: 2px -14px 0;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.chat-bubble-incoming .chat-attachment-media { margin-left: -12px; }
+
 .chat-attachment-img {
-  display: block; max-width: 100%; max-height: 320px; border-radius: 8px;
-  object-fit: contain; cursor: pointer;
+  display: block; width: 100%; max-height: 420px;
+  object-fit: cover; cursor: pointer;
 }
 .chat-attachment-img:hover { opacity: 0.92; }
 .chat-attachment-video {
-  display: block; max-width: 100%; max-height: 320px; border-radius: 8px;
+  display: block; width: 100%; max-height: 420px;
 }
-.chat-attachment-audio { margin: 4px 0; }
-.chat-attachment-audio-player { width: 100%; max-width: 320px; }
+.chat-attachment-audio { margin: 6px 0 0; }
+.chat-attachment-audio-player { width: 100%; }
 
 .chat-attachment-file {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px;
   border: 1px solid var(--border-default); border-radius: 10px;
   background: rgba(255,255,255,0.12); cursor: pointer;
   transition: background 150ms ease;
+  max-width: 100%;
 }
 .chat-attachment-file:hover { background: rgba(255,255,255,0.2); }
 .chat-attachment-file-icon { flex-shrink: 0; color: var(--text-secondary); }
-.chat-attachment-file-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.chat-attachment-file-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .chat-attachment-file-name {
   font-size: 13px; font-weight: 600; color: var(--text-primary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .chat-attachment-file-meta { font-size: 11px; color: var(--text-secondary); }
-.chat-attachment-label {
-  margin: 6px 0 0; font-size: 11px; color: var(--text-secondary);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+.chat-attachment-caption {
+  margin: 8px 0 0; font-size: 12px; color: var(--text-secondary);
+  word-break: break-word;
 }
+.chat-attachment-caption-name { font-weight: 600; color: var(--text-primary); }
 
 .chat-debug { margin-top: 10px; font-size: 12px; color: var(--text-secondary); }
 .chat-debug summary { cursor: pointer; font-weight: 600; color: var(--text-primary); }
@@ -208,10 +353,11 @@ function formatFileSize(base64: string): string {
 .chat-debug-item dt { margin: 0; font-weight: 600; color: var(--text-secondary); }
 .chat-debug-item dd { margin: 0; color: var(--text-primary); white-space: pre-wrap; }
 
-.chat-timestamp { margin: 0; font-size: 11px; color: var(--text-secondary); }
+.chat-timestamp { margin: 0; font-size: 11px; line-height: 16px; color: var(--text-secondary); }
 
 @media (max-width: 840px) {
   .chat-message { max-width: 100%; }
+  .chat-row-has-avatar .chat-message { max-width: calc(100% - 56px); }
   .chat-debug-item { grid-template-columns: 1fr; }
 }
 </style>

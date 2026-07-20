@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { fetchIndexedBucketDetail, fetchIndexedMessagesByTag, fetchIndexedNamespaceManagers, type IndexedBucket, type IndexedMessage, type IndexedBucketMember, type IndexedBucketViewer } from "../../../services/indexer/subqueryClient"
 import { DidCommRepository, type ExtrinsicUpdate } from "../../../services/papi/didCommRepository"
+import { ProfileClient } from "../../../services/profile/profileClient"
+import { resolveAvatarUrls, toSs58Prefix42 } from "../../../services/profile/avatarResolver"
 import LoadingBar from "../../../components/common/LoadingBar.vue"
-import ChatMessageEntry, { type ChatMessageProps } from "../../../components/common/ChatMessageEntry.vue"
+import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } from "../../../components/common/ChatMessageEntry.vue"
 import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, Check } from "lucide-vue-next"
 import { hexToU8a } from "@polkadot/util"
 import { useAddress } from "../../../composables/useAddress"
@@ -68,6 +70,7 @@ const didCommRepository = new DidCommRepository(
   undefined, // 19 submitRemoveNamespaceManagerExtrinsic
   String(config.public.subqueryIndexerUrl || "") // 20 indexerUrl
 )
+const profileClient = new ProfileClient()
 
 const indexerUrl = computed(() => String(config.public.subqueryIndexerUrl || ""))
 const pinataGateway = computed(() => {
@@ -90,13 +93,17 @@ const contributors = ref<IndexedBucketMember[]>([])
 const viewers = ref<IndexedBucketViewer[]>([])
 const namespaceManagers = ref<string[]>([])
 const messages = ref<IndexedMessage[]>([])
+const avatarUrlByAddress = ref<Record<string, string>>({})
+const profilesByAddress = ref<Record<string, import("../../../types/profile").Profile>>({})
 
 const payloadById = ref<Record<string, string>>({})
 const payloadErrorById = ref<Record<string, string>>({})
 const decryptedById = ref<Record<string, string>>({})
 const decryptErrorById = ref<Record<string, string>>({})
+const attachmentById = ref<Record<string, ChatMessageAttachment>>({})
 const activeSecretJwk = ref<jose.JWK | null>(null)
 const keySharingError = ref("")
+const blockTimestamps = ref<Record<number, string>>({})
 
 const sendText = ref("")
 const sendError = ref("")
@@ -148,6 +155,46 @@ const addMemberUrl = computed(() => {
   return `/messages/bucket/add-member/${encodeURIComponent(bucketId.value)}?namespaceId=${encodeURIComponent(namespaceId)}`
 })
 
+// ── Block timestamp caching ────────────────────────────────────────
+let timestampLoading = false
+async function loadBlockTimestamp(blockNumber: number): Promise<string> {
+  const cached = blockTimestamps.value[blockNumber]
+  if (cached) return cached
+
+  try {
+    const block = await $papiClient.rpc("chain_getBlock", [`0x${blockNumber.toString(16)}`])
+    const timestamp = block?.block?.header?.timestamp as number | undefined
+    if (timestamp) {
+      const date = new Date(timestamp)
+      const formatted = date.toLocaleString()
+      blockTimestamps.value[blockNumber] = formatted
+      return formatted
+    }
+  } catch {
+    // Fallback to block number if timestamp lookup fails
+  }
+
+  // Fallback: estimate based on ~6 seconds per block from genesis
+  const genesisTime = 1690000000000 // Approximate genesis time (JULY 2023)
+  const estimatedTime = genesisTime + blockNumber * 6000
+  const date = new Date(estimatedTime)
+  return date.toLocaleString()
+}
+
+async function lazyLoadBlockTimestamps() {
+  if (timestampLoading) return
+  timestampLoading = true
+  try {
+    // Load timestamps for all unique blocks in messages
+    const blocks = new Set(messages.value.map(m => m.createdBlock))
+    for (const blockNumber of blocks) {
+      await loadBlockTimestamp(blockNumber)
+    }
+  } finally {
+    timestampLoading = false
+  }
+}
+
 // ── Chat message rendering ─────────────────────────────────────────
 const chatMessages = computed<ChatMessageProps[]>(() => {
   // Sort messages chronologically so oldest is at the top, newest at the bottom
@@ -159,22 +206,43 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
     const body = payloadBody ?? m.description ?? m.ipfsContent ?? `Message #${m.messageId}`
     const outgoing = Boolean(session.accountAddress && addressesEqual(m.contributor, session.accountAddress))
 
+    // Get sender nickname if available, fallback to address
+    const senderAddress = m.contributor ?? ""
+    const profile = profilesByAddress.value[senderAddress]
+    // Key-sharing system notices always name the sender (nickname or address),
+    // never "You" — even for the connected user's own key rotations.
+    let senderLabel = profile?.nickname || formatAddress(senderAddress)
+    if (m.tag !== keySharingTag && outgoing && !profile?.nickname) {
+      senderLabel = "You"
+    }
+
     const debugEntries: { key: string; value: string }[] = []
     debugEntries.push({ key: "ID", value: m.id })
-    if (m.contributor) debugEntries.push({ key: "Sender", value: m.contributor })
+    if (senderAddress) debugEntries.push({ key: "Sender", value: senderAddress })
     if (m.tag) debugEntries.push({ key: "Tag", value: m.tag })
     if (m.contentType) debugEntries.push({ key: "Content Type", value: m.contentType })
     if (m.reference) debugEntries.push({ key: "IPFS Ref", value: m.reference })
-    debugEntries.push({ key: "Block", value: formatBlock(m.createdBlock) })
+    // Show block number only in debug mode
+    if (settings.showMessageDebug) {
+      debugEntries.push({ key: "Block", value: formatBlock(m.createdBlock) })
+    }
+
+    // Use cached timestamp or fallback to block number for display
+    // Lazy loading happens via watcher after initial render
+    const timestampLabel = settings.showMessageDebug
+      ? formatBlock(m.createdBlock)
+      : (blockTimestamps.value[m.createdBlock] ?? formatBlock(m.createdBlock))
 
     return {
       id: m.id, body, outgoing,
-      senderLabel: outgoing ? "You" : formatAddress(m.contributor),
-      senderAddress: m.contributor, tag: m.tag ?? undefined,
+      senderLabel,
+      senderAddress, tag: m.tag ?? undefined,
+      avatarUrl: outgoing ? undefined : avatarUrlByAddress.value[senderAddress],
       reference: m.reference ?? undefined,
       payloadError: payloadErrorById.value[m.id] ?? decryptErrorById.value[m.id],
       contentType: m.contentType ?? undefined,
-      timestampLabel: formatBlock(m.createdBlock),
+      attachment: attachmentById.value[m.id],
+      timestampLabel,
       debugEntries,
     }
   })
@@ -218,6 +286,12 @@ async function loadAll() {
 
     // 5. Decrypt normal messages using the active key
     await decryptMessages(detail.messages)
+
+    // 6. Resolve file attachments referenced by CID-pointer messages
+    await hydrateAttachments(detail.messages)
+
+    // 7. Resolve sender profile pictures for incoming messages
+    await loadAvatars(detail.messages)
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Failed to load indexed data"
   } finally {
@@ -314,6 +388,7 @@ async function decryptMessages(msgs: IndexedMessage[]) {
 
   await Promise.all(msgs.map(async m => {
     if (m.tag === keySharingTag) return
+    if (isFileMessage(m)) return
     const p = payloadById.value[m.id]
     if (!p) return
     const t = p.trim()
@@ -331,8 +406,85 @@ async function decryptMessages(msgs: IndexedMessage[]) {
   decryptErrorById.value = nextE
 }
 
+// ── File attachments (CID-pointer messages) ────────────────────────
+const textMessageContentType = "text/plain;charset=utf-8"
+const keySharingContentType = "application/didcomm-encrypted+json"
+
+// A file message carries a real MIME contentType on-chain; its reference points at the encrypted file.
+function isFileMessage(m: IndexedMessage): boolean {
+  if (m.tag === keySharingTag) return false
+  const ct = m.contentType?.trim()
+  return Boolean(ct && ct !== textMessageContentType && ct !== keySharingContentType)
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ""
+  const chunkSize = 0x8000
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
+  }
+  return btoa(binary)
+}
+
+async function hydrateAttachments(msgs: IndexedMessage[]) {
+  const next: Record<string, ChatMessageAttachment> = { ...attachmentById.value }
+  const nextE: Record<string, string> = { ...decryptErrorById.value }
+  const sk = activeSecretJwk.value
+
+  await Promise.all(msgs.map(async m => {
+    if (next[m.id]) return
+    if (!isFileMessage(m)) return
+    const fileJwe = payloadById.value[m.id]?.trim()
+    if (!fileJwe) return
+    try {
+      if (!sk || !isX25519Secret(sk)) throw new Error("No decrypted bucket key available. Decrypt key-sharing first.")
+      if (!looksLikeCompactJwe(fileJwe)) throw new Error("File payload is not an encrypted attachment")
+      const key = await jose.importJWK(sk as jose.JWK, "ECDH-ES+A256KW")
+      const { plaintext, protectedHeader } = await jose.compactDecrypt(fileJwe, key)
+      next[m.id] = {
+        contentType: m.contentType?.trim() || "application/octet-stream",
+        fileName: typeof protectedHeader.filename === "string" ? protectedHeader.filename : undefined,
+        data: bytesToBase64(plaintext)
+      }
+    } catch (e) {
+      nextE[m.id] = e instanceof Error ? e.message : "Attachment unavailable"
+    }
+  }))
+
+  attachmentById.value = next
+  decryptErrorById.value = nextE
+}
+
+// ── Sender avatars and profiles ────────────────────────────────────
+async function loadAvatars(msgs: IndexedMessage[]) {
+  // Incoming senders only: skip messages sent by the connected wallet.
+  const incoming = msgs
+    .map(m => m.contributor)
+    .filter(addr => Boolean(addr) && !(session.accountAddress && addressesEqual(addr, session.accountAddress)))
+
+  try {
+    // Fetch both avatars and profile data (including nicknames)
+    const uniqueAddresses = Array.from(new Set(incoming.filter(Boolean) as string[]))
+    await Promise.all(uniqueAddresses.map(async addr => {
+      try {
+        const profile = await profileClient.getProfile(toSs58Prefix42(addr))
+        if (profile) {
+          profilesByAddress.value[addr] = profile
+          if (profile.profilePicture) {
+            avatarUrlByAddress.value[addr] = profile.profilePicture
+          }
+        }
+      } catch {
+        // Non-fatal: unresolved senders fall back to the default avatar.
+      }
+    }))
+  } catch {
+    // Non-fatal: unresolved senders fall back to the default avatar.
+  }
+}
+
 // ── Send message (encrypted with latest key) ───────────────────────
-async function encryptOutgoing(plaintext: string): Promise<string> {
+async function encryptOutgoing(plaintext: Uint8Array | string, extraProtectedHeader?: Record<string, string>): Promise<string> {
   const sk = activeSecretJwk.value
   if (!sk || !isX25519Secret(sk)) {
     throw new Error("No decrypted bucket key available. Decrypt key-sharing first.")
@@ -343,8 +495,9 @@ async function encryptOutgoing(plaintext: string): Promise<string> {
     kid: typeof sk.kid === "string" ? sk.kid : undefined
   }
   const publicKey = await jose.importJWK(recipientPublicJwk, "ECDH-ES+A256KW")
-  return await new jose.CompactEncrypt(new TextEncoder().encode(plaintext))
-    .setProtectedHeader({ alg: "ECDH-ES+A256KW", enc: "A256GCM", typ: "didcomm/encrypted-message-v1", kid: recipientPublicJwk.kid })
+  const plaintextBytes = typeof plaintext === "string" ? new TextEncoder().encode(plaintext) : plaintext
+  return await new jose.CompactEncrypt(plaintextBytes)
+    .setProtectedHeader({ alg: "ECDH-ES+A256KW", enc: "A256GCM", typ: "didcomm/encrypted-message-v1", kid: recipientPublicJwk.kid, ...extraProtectedHeader })
     .encrypt(publicKey)
 }
 
@@ -379,16 +532,6 @@ function removeAttachment() {
   pendingAttachment.value = null
 }
 
-function buildAttachmentEnvelope(file: File, base64Data: string): string {
-  const base64 = base64Data.includes(",") ? base64Data.split(",")[1]! : base64Data
-  return JSON.stringify({
-    type: "attachment",
-    contentType: file.type || "application/octet-stream",
-    fileName: file.name,
-    data: base64,
-  })
-}
-
 async function sendMessage() {
   sendError.value = ""
   const textPayload = sendText.value.trim()
@@ -402,13 +545,20 @@ async function sendMessage() {
   sendText.value = ""
   pendingAttachment.value = null
   try {
-    const plaintext = attachment
-      ? buildAttachmentEnvelope(attachment.file, attachment.dataUrl)
-      : textPayload
-    const encrypted = await encryptOutgoing(plaintext)
-    const result = await didCommRepository.createMessage(
-      bucketId.value, encrypted, session.accountAddress, logExtrinsicUpdate
-    )
+    let result
+    if (attachment) {
+      const fileContentType = attachment.file.type || "application/octet-stream"
+      const fileBytes = new Uint8Array(await attachment.file.arrayBuffer())
+      const fileJwe = await encryptOutgoing(fileBytes, { cty: fileContentType, filename: attachment.file.name })
+      result = await didCommRepository.createFileMessage(
+        bucketId.value, fileJwe, fileContentType, session.accountAddress, logExtrinsicUpdate
+      )
+    } else {
+      const encrypted = await encryptOutgoing(textPayload)
+      result = await didCommRepository.createMessage(
+        bucketId.value, encrypted, session.accountAddress, logExtrinsicUpdate
+      )
+    }
     operations.add("bucket_write", result.method, "success", `Message submitted: ${result.txHash}`)
     await loadAll()
   } catch (e) {
@@ -611,7 +761,13 @@ watch(() => settings.x25519SecretJwk, async () => {
   await hydratePayloads(keySharingMessages)
   await decryptKeySharingFromMessages(keySharingMessages)
   await decryptMessages(messages.value)
+  await hydrateAttachments(messages.value)
 }, { deep: true })
+
+// Lazy load block timestamps when messages change
+watch(messages, () => {
+  lazyLoadBlockTimestamps()
+}, { immediate: true })
 
 onMounted(async () => {
   settings.initialize()
@@ -645,7 +801,7 @@ onMounted(async () => {
     <!-- Chat viewport -->
     <div class="ib-chat-viewport chat-viewport" role="log" aria-live="polite" aria-label="Indexed bucket messages">
       <div class="ib-container ib-chat-inner">
-        <ChatMessageEntry v-for="msg in chatMessages" :key="msg.id" :message="msg" />
+        <ChatMessageEntry v-for="msg in chatMessages" :key="msg.id" :message="msg" :show-avatars="true" />
 
         <!-- Empty bucket: setup timeline for admins / namespace managers -->
         <div v-if="showSetupTimeline" class="ib-setup-timeline">

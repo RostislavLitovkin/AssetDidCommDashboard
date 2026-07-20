@@ -55,7 +55,8 @@ type MessageExtrinsicSubmitter = (
   ownerAddress: string,
   onUpdate?: ExtrinsicUpdateHandler,
   tag?: string,
-  pinataConfig?: PinataConfig
+  pinataConfig?: PinataConfig,
+  contentType?: string
 ) => Promise<string>
 
 export interface PinataConfig {
@@ -780,7 +781,8 @@ export class DidCommRepository {
     message: string,
     ownerAddress?: string,
     onUpdate?: ExtrinsicUpdateHandler,
-    tag?: string
+    tag?: string,
+    contentType?: string
   ): Promise<CreateMessageResult> {
     const trimmedBucketId = bucketId.trim()
     if (!trimmedBucketId) {
@@ -793,6 +795,7 @@ export class DidCommRepository {
     }
 
     const trimmedTag = typeof tag === "string" ? tag.trim() : ""
+    const trimmedContentType = typeof contentType === "string" ? contentType.trim() : ""
 
     if (!ownerAddress) {
       throw new Error("Wallet must be connected to submit buckets.write extrinsic")
@@ -810,12 +813,32 @@ export class DidCommRepository {
       ownerAddress,
       onUpdate,
       trimmedTag || undefined,
-      this.pinataConfig
+      this.pinataConfig,
+      trimmedContentType || undefined
     )
     return {
       txHash,
       method: "buckets.write"
     }
+  }
+
+  async createFileMessage(
+    bucketId: string,
+    fileJwe: string,
+    fileContentType: string,
+    ownerAddress?: string,
+    onUpdate?: ExtrinsicUpdateHandler
+  ): Promise<CreateMessageResult> {
+    const trimmedFileJwe = fileJwe.trim()
+    if (!trimmedFileJwe) {
+      throw new Error("File payload is required")
+    }
+
+    const trimmedContentType = fileContentType.trim() || "application/octet-stream"
+
+    // The standard write flow uploads the message content to IPFS and stores its
+    // CID as the on-chain reference, so the reference points straight at the file JWE.
+    return this.createMessage(bucketId, trimmedFileJwe, ownerAddress, onUpdate, undefined, trimmedContentType)
   }
 
   async rotateBucketKeyAndShare(
@@ -1501,7 +1524,8 @@ async function submitBucketsAddMessageExtrinsic(
   ownerAddress: string,
   onUpdate?: ExtrinsicUpdateHandler,
   tag?: string,
-  pinataConfig?: PinataConfig
+  pinataConfig?: PinataConfig,
+  contentType?: string
 ): Promise<string> {
   const [{ ApiPromise, WsProvider }, { web3FromAddress }] = await Promise.all([
     import("@polkadot/api"),
@@ -1541,7 +1565,7 @@ async function submitBucketsAddMessageExtrinsic(
         throw new Error(failureMessage)
       }
       console.log(`PinataAdapter: Using CID as on-chain reference: ${cid}`)
-      const messageInput = await buildBucketsWriteMessageInput(cid, message, tag)
+      const messageInput = await buildBucketsWriteMessageInput(cid, message, tag, contentType)
       tx = write(namespaceId, bucketId, messageInput) as SubmittableTx
       submittedCallName = "buckets.write"
     } else {
@@ -2578,7 +2602,7 @@ async function resolveNamespaceIdForBucketWrite(
   throw new Error(`Unable to resolve namespace id for bucket ${bucketId} required by buckets.write`)
 }
 
-async function buildBucketsWriteMessageInput(referenceCid: string, message: string, tag?: string): Promise<{
+async function buildBucketsWriteMessageInput(referenceCid: string, message: string, tag?: string, contentTypeOverride?: string): Promise<{
   reference: `0x${string}`
   tag: `0x${string}` | null
   metadataInput: {
@@ -2597,9 +2621,10 @@ async function buildBucketsWriteMessageInput(referenceCid: string, message: stri
   const messageDigest = await sha256HexUtf8(message)
   const isDidCommKeySharing = normalizedTag === "didcomm/key-sharing-v1"
 
-  const contentType = normalizedTag === "didcomm/key-sharing-v1"
+  const trimmedContentTypeOverride = typeof contentTypeOverride === "string" ? contentTypeOverride.trim() : ""
+  const contentType = trimmedContentTypeOverride || (normalizedTag === "didcomm/key-sharing-v1"
     ? "application/didcomm-encrypted+json"
-    : "text/plain;charset=utf-8"
+    : "text/plain;charset=utf-8")
 
   return {
     reference: utf8ToHexBytes(normalizedReferenceCid),

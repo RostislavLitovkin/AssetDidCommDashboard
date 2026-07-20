@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { DidCommRepository, type BucketMessage, type BucketRecord, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
 import LoadingBar from "../../../../components/common/LoadingBar.vue"
-import ChatMessageEntry, { type ChatMessageProps } from "../../../../components/common/ChatMessageEntry.vue"
+import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } from "../../../../components/common/ChatMessageEntry.vue"
 import { Paperclip, X as XIcon, SendHorizontal } from "lucide-vue-next"
 import { useAddress } from "../../../../composables/useAddress"
 import { hexToU8a } from "@polkadot/util"
@@ -73,6 +73,7 @@ interface ChatMessage {
   reference?: string
   payloadError?: string
   payloadLength?: number
+  attachment?: ChatMessageAttachment
   deliveryState?: DeliveryState
 }
 
@@ -119,6 +120,7 @@ const messagePayloadById = ref<Record<string, string>>({})
 const messagePayloadErrorById = ref<Record<string, string>>({})
 const decryptedMessagePayloadById = ref<Record<string, string>>({})
 const messageDecryptErrorById = ref<Record<string, string>>({})
+const messageAttachmentById = ref<Record<string, ChatMessageAttachment>>({})
 const chatViewport = ref<HTMLElement | null>(null)
 const bucketAdmins = ref<string[]>([])
 const bucketContributors = ref<string[]>([])
@@ -207,6 +209,7 @@ async function loadMessages() {
     await hydrateMessagePayloads(loadedMessages)
     await decryptLatestKeySharingPayload()
     await decryptReceivedMessages(loadedMessages)
+    await hydrateMessageAttachments(loadedMessages)
   } catch (error) {
     messagesError.value = error instanceof Error ? error.message : "Unable to load messages"
   } finally {
@@ -256,7 +259,7 @@ function extractActiveBucketSecretJwk(payload: unknown): jose.JWK | null {
   return null
 }
 
-async function encryptOutgoingBucketMessage(plaintext: string): Promise<string> {
+async function encryptOutgoingBucketMessage(plaintext: Uint8Array | string, extraProtectedHeader?: Record<string, string>): Promise<string> {
   const secretJwk = activeBucketEncryptionSecretJwk.value
   if (!secretJwk || !isX25519SecretJwk(secretJwk)) {
     throw new Error("No decrypted bucket encryption key is available. Decrypt latest key-sharing payload first.")
@@ -271,12 +274,14 @@ async function encryptOutgoingBucketMessage(plaintext: string): Promise<string> 
   }
 
   const publicKey = await jose.importJWK(recipientPublicJwk, "ECDH-ES+A256KW")
-  const encryptor = new jose.CompactEncrypt(new TextEncoder().encode(plaintext))
+  const plaintextBytes = typeof plaintext === "string" ? new TextEncoder().encode(plaintext) : plaintext
+  const encryptor = new jose.CompactEncrypt(plaintextBytes)
     .setProtectedHeader({
       alg: "ECDH-ES+A256KW",
       enc: "A256GCM",
       typ: encryptedMessageTag,
-      kid: recipientPublicJwk.kid
+      kid: recipientPublicJwk.kid,
+      ...extraProtectedHeader
     })
 
   return await encryptor.encrypt(publicKey)
@@ -333,6 +338,7 @@ async function decryptLatestKeySharingPayload(): Promise<void> {
     }
 
     await decryptReceivedMessages(messages.value)
+    await hydrateMessageAttachments(messages.value)
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to decrypt key-sharing payload"
     decryptedKeySharingError.value = message
@@ -348,6 +354,19 @@ async function decryptLatestKeySharingPayload(): Promise<void> {
 function resolveMessageTag(message: BucketMessage): string | undefined {
   const rawRecord = toRecord(message.raw)
   return firstString(rawRecord, ["tag", "messageTag"])
+}
+
+function resolveMessageContentType(message: BucketMessage): string | undefined {
+  const rawRecord = toRecord(message.raw)
+  const metadataRecord =
+    toRecord(rawRecord?.metadataInput) ??
+    toRecord(rawRecord?.metadata) ??
+    toRecord(rawRecord?.messageMetadata)
+
+  return (
+    firstString(metadataRecord, ["contentType", "mimeType", "type"]) ??
+    firstString(rawRecord, ["contentType", "mimeType"])
+  )
 }
 
 function looksLikeCompactJwe(payload: string): boolean {
@@ -373,6 +392,10 @@ async function decryptReceivedMessages(entries: BucketMessage[]): Promise<void> 
   await Promise.all(
     entries.map(async (entry) => {
       if (resolveMessageTag(entry) === keySharingTag) {
+        return
+      }
+
+      if (isFileMessage(entry)) {
         return
       }
 
@@ -404,6 +427,57 @@ async function decryptReceivedMessages(entries: BucketMessage[]): Promise<void> 
 
   decryptedMessagePayloadById.value = nextDecryptedPayloadById
   messageDecryptErrorById.value = nextDecryptErrorById
+}
+
+// ── File attachments (CID-pointer messages) ────────────────────────
+const textMessageContentType = "text/plain;charset=utf-8"
+const keySharingContentType = "application/didcomm-encrypted+json"
+
+// A file message carries a real MIME contentType on-chain; its reference points at the encrypted file.
+function isFileMessage(entry: BucketMessage): boolean {
+  if (resolveMessageTag(entry) === keySharingTag) return false
+  const contentType = resolveMessageContentType(entry)?.trim()
+  return Boolean(contentType && contentType !== textMessageContentType && contentType !== keySharingContentType)
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ""
+  const chunkSize = 0x8000
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
+  }
+  return btoa(binary)
+}
+
+async function hydrateMessageAttachments(entries: BucketMessage[]): Promise<void> {
+  const next: Record<string, ChatMessageAttachment> = { ...messageAttachmentById.value }
+  const nextErrors: Record<string, string> = { ...messageDecryptErrorById.value }
+  const secretJwk = activeBucketEncryptionSecretJwk.value
+
+  await Promise.all(entries.map(async (entry) => {
+    if (next[entry.id]) return
+    if (!isFileMessage(entry)) return
+    const fileJwe = messagePayloadById.value[entry.id]?.trim()
+    if (!fileJwe) return
+    try {
+      if (!secretJwk || !isX25519SecretJwk(secretJwk)) {
+        throw new Error("No active bucket encryption key is available for decrypting attachments")
+      }
+      if (!looksLikeCompactJwe(fileJwe)) throw new Error("File payload is not an encrypted attachment")
+      const privateKey = await jose.importJWK(secretJwk as jose.JWK, "ECDH-ES+A256KW")
+      const { plaintext, protectedHeader } = await jose.compactDecrypt(fileJwe, privateKey)
+      next[entry.id] = {
+        contentType: resolveMessageContentType(entry)?.trim() || "application/octet-stream",
+        fileName: typeof protectedHeader.filename === "string" ? protectedHeader.filename : undefined,
+        data: bytesToBase64(plaintext)
+      }
+    } catch (error) {
+      nextErrors[entry.id] = error instanceof Error ? error.message : "Attachment unavailable"
+    }
+  }))
+
+  messageAttachmentById.value = next
+  messageDecryptErrorById.value = nextErrors
 }
 
 async function loadBucket() {
@@ -1228,18 +1302,12 @@ function extractBucketMetadataEntries(bucketRecord: BucketRecord | null): Metada
 
 function toChatMessage(message: BucketMessage): ChatMessage {
   const rawRecord = toRecord(message.raw)
-  const metadataRecord =
-    toRecord(rawRecord?.metadataInput) ??
-    toRecord(rawRecord?.metadata) ??
-    toRecord(rawRecord?.messageMetadata)
   const reference = resolveMessageReference(message)
   const payload = decryptedMessagePayloadById.value[message.id] ?? messagePayloadById.value[message.id]
   const payloadError = messagePayloadErrorById.value[message.id] ?? messageDecryptErrorById.value[message.id]
   const payloadBody = payload ? summarizeJsonPayload(payload) ?? payload : undefined
   const body = payloadBody ?? firstString(rawRecord, ["message", "content", "payload", "body", "text", "summary"]) ?? message.summary
-  const contentType =
-    firstString(metadataRecord, ["contentType", "mimeType", "type"]) ??
-    firstString(rawRecord, ["contentType", "mimeType"])
+  const contentType = resolveMessageContentType(message)
   const tag = firstString(rawRecord, ["tag", "messageTag"])
   const sender = firstString(rawRecord, ["sender", "from", "author", "owner", "account"])
   const createdAt =
@@ -1263,7 +1331,8 @@ function toChatMessage(message: BucketMessage): ChatMessage {
     reference,
     messageType: resolveMessageType(contentType, tag, payload),
     payloadError,
-    payloadLength: payload ? payload.length : undefined
+    payloadLength: payload ? payload.length : undefined,
+    attachment: messageAttachmentById.value[message.id]
   }
 }
 
@@ -1341,6 +1410,7 @@ function toChatMessageProps(message: ChatMessage): ChatMessageProps {
     senderAddress: message.senderAddress,
     tag: message.tag,
     contentType: message.contentType,
+    attachment: message.attachment,
     reference: message.reference,
     payloadError: message.payloadError,
     timestampLabel: formatMessageMeta(message),
@@ -1401,16 +1471,6 @@ function removeAttachment() {
   pendingAttachment.value = null
 }
 
-function buildAttachmentEnvelope(file: File, base64Data: string): string {
-  const base64 = base64Data.includes(",") ? base64Data.split(",")[1]! : base64Data
-  return JSON.stringify({
-    type: "attachment",
-    contentType: file.type || "application/octet-stream",
-    fileName: file.name,
-    data: base64,
-  })
-}
-
 async function sendMessage() {
   sendError.value = ""
   const textPayload = sendText.value.trim()
@@ -1443,16 +1503,27 @@ async function sendMessage() {
   currentBucketCall.value = "buckets.write"
 
   try {
-    const plaintext = attachment
-      ? buildAttachmentEnvelope(attachment.file, attachment.dataUrl)
-      : textPayload
-    const encryptedPayload = await encryptOutgoingBucketMessage(plaintext)
-    const result = await didCommRepository.createMessage(
-      bucketId.value,
-      encryptedPayload,
-      session.accountAddress,
-      logExtrinsicUpdate
-    )
+    let result
+    if (attachment) {
+      const fileContentType = attachment.file.type || "application/octet-stream"
+      const fileBytes = new Uint8Array(await attachment.file.arrayBuffer())
+      const fileJwe = await encryptOutgoingBucketMessage(fileBytes, { cty: fileContentType, filename: attachment.file.name })
+      result = await didCommRepository.createFileMessage(
+        bucketId.value,
+        fileJwe,
+        fileContentType,
+        session.accountAddress,
+        logExtrinsicUpdate
+      )
+    } else {
+      const encryptedPayload = await encryptOutgoingBucketMessage(textPayload)
+      result = await didCommRepository.createMessage(
+        bucketId.value,
+        encryptedPayload,
+        session.accountAddress,
+        logExtrinsicUpdate
+      )
+    }
     const pending = pendingMessages.value.find((entry) => entry.id === pendingId)
     if (pending) {
       pending.deliveryState = "sent"
@@ -1501,6 +1572,7 @@ watch(
   async () => {
     await decryptLatestKeySharingPayload()
     await decryptReceivedMessages(messages.value)
+    await hydrateMessageAttachments(messages.value)
   },
   { deep: true }
 )

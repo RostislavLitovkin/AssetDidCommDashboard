@@ -223,6 +223,121 @@ describe("DidCommRepository", () => {
     expect(result.txHash).toBe("0xmsg789")
   })
 
+  it("passes contentType override through to the message submitter", async () => {
+    let receivedContentType: string | undefined = "unset"
+    const repository = new DidCommRepository(
+      {
+        rpc: async () => [] as unknown[],
+        getEndpoint: () => "wss://example-chain"
+      },
+      async () => "0xignored",
+      async () => "0xignored-bucket",
+      async () => [],
+      async () => [],
+      async () => [],
+      async (_endpoint, _bucketId, _message, _ownerAddress, _onUpdate, _tag, _pinataConfig, contentType) => {
+        receivedContentType = contentType
+        return "0xmsg790"
+      }
+    )
+
+    await repository.createMessage("bucket-7", "bafy-file-cid", "5F3sa2TJ...owner", undefined, undefined, "image/png")
+
+    expect(receivedContentType).toBe("image/png")
+  })
+
+  it("passes no contentType to the message submitter when none is given", async () => {
+    let receivedContentType: string | undefined = "unset"
+    const repository = new DidCommRepository(
+      {
+        rpc: async () => [] as unknown[],
+        getEndpoint: () => "wss://example-chain"
+      },
+      async () => "0xignored",
+      async () => "0xignored-bucket",
+      async () => [],
+      async () => [],
+      async () => [],
+      async (_endpoint, _bucketId, _message, _ownerAddress, _onUpdate, _tag, _pinataConfig, contentType) => {
+        receivedContentType = contentType
+        return "0xmsg791"
+      }
+    )
+
+    await repository.createMessage("bucket-7", "hello world", "5F3sa2TJ...owner")
+
+    expect(receivedContentType).toBeUndefined()
+  })
+
+  it("submits the file JWE as the message content with the file's real content type", async () => {
+    const submitted: { message?: string; tag?: string; contentType?: string } = {}
+    const repository = new DidCommRepository(
+      {
+        rpc: async () => [] as unknown[],
+        getEndpoint: () => "wss://example-chain"
+      },
+      async () => "0xignored",
+      async () => "0xignored-bucket",
+      async () => [],
+      async () => [],
+      async () => [],
+      async (_endpoint, _bucketId, message, _ownerAddress, _onUpdate, tag, _pinataConfig, contentType) => {
+        submitted.message = message
+        submitted.tag = tag
+        submitted.contentType = contentType
+        return "0xfile123"
+      }
+    )
+
+    const result = await repository.createFileMessage(
+      "bucket-7",
+      "eyJhbGciOiJFQ0RILUVTK0EyNTZLVyJ9.a.b.c.d",
+      "image/png",
+      "5F3sa2TJ...owner"
+    )
+
+    expect(result.method).toBe("buckets.write")
+    expect(result.txHash).toBe("0xfile123")
+    expect(submitted.message).toBe("eyJhbGciOiJFQ0RILUVTK0EyNTZLVyJ9.a.b.c.d")
+    expect(submitted.contentType).toBe("image/png")
+    expect(submitted.tag).toBeUndefined()
+  })
+
+  it("falls back to application/octet-stream when the file content type is blank", async () => {
+    let receivedContentType: string | undefined
+    const repository = new DidCommRepository(
+      {
+        rpc: async () => [] as unknown[],
+        getEndpoint: () => "wss://example-chain"
+      },
+      async () => "0xignored",
+      async () => "0xignored-bucket",
+      async () => [],
+      async () => [],
+      async () => [],
+      async (_endpoint, _bucketId, _message, _ownerAddress, _onUpdate, _tag, _pinataConfig, contentType) => {
+        receivedContentType = contentType
+        return "0xfile124"
+      }
+    )
+
+    await repository.createFileMessage("bucket-7", "eyJhbGciOi.a.b.c.d", "   ", "5F3sa2TJ...owner")
+
+    expect(receivedContentType).toBe("application/octet-stream")
+  })
+
+  it("rejects createFileMessage when the file payload is empty", async () => {
+    const repository = new DidCommRepository(
+      { rpc: async () => "0xignored", getEndpoint: () => "wss://example-chain" },
+      async () => "0xignored",
+      async () => "0xignored-bucket"
+    )
+
+    await expect(
+      repository.createFileMessage("bucket-7", "   ", "image/png", "5F3sa2TJ...owner")
+    ).rejects.toThrow("File payload is required")
+  })
+
   it("rejects message creation when bucket id is empty", async () => {
     const repository = new DidCommRepository(
       { rpc: async () => "0xignored", getEndpoint: () => "wss://example-chain" },
