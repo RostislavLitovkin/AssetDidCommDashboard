@@ -42,8 +42,10 @@ export interface ChatMessageAttachment {
 
 <script setup lang="ts">
 import { computed, ref } from "vue"
-import { Paperclip } from "lucide-vue-next"
+import { Paperclip, KeyRound } from "lucide-vue-next"
 import { useSettingsStore } from "../../stores/settings"
+
+const KEY_SHARING_TAG = "didcomm/key-sharing-v1"
 
 const props = withDefaults(defineProps<{
   message: ChatMessageProps
@@ -53,6 +55,10 @@ const props = withDefaults(defineProps<{
 })
 
 const settings = useSettingsStore()
+
+// Key-sharing messages are protocol events, not conversation — rendered as a
+// centered system notice with a separation line instead of a chat bubble.
+const isKeySharing = computed(() => props.message.tag === KEY_SHARING_TAG)
 
 // Per-instance: flip to the default avatar if the real picture URL fails to load.
 const avatarFailed = ref(false)
@@ -101,7 +107,15 @@ function formatFileSize(base64: string): string {
 </script>
 
 <template>
-  <div class="chat-row" :class="[
+  <!-- Key-sharing: centered system notice with a separation line, no avatar/bubble -->
+  <div v-if="isKeySharing" class="chat-system-notice">
+    <span class="chat-system-notice-text">
+      <KeyRound :size="14" class="chat-system-notice-icon" aria-hidden="true" />
+      {{ message.senderLabel }} has set a new Encryption key at {{ message.timestampLabel }}
+    </span>
+  </div>
+
+  <div v-else class="chat-row" :class="[
     message.outgoing ? 'chat-row-outgoing' : 'chat-row-incoming',
     { 'chat-row-has-avatar': showAvatars && !message.outgoing }
   ]">
@@ -174,15 +188,47 @@ function formatFileSize(base64: string): string {
 </template>
 
 <style scoped>
+/* Key-sharing system notice: centered text flanked by a separation line. */
+.chat-system-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin: 2px 0;
+}
+.chat-system-notice::before,
+.chat-system-notice::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border-default);
+}
+.chat-system-notice-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  max-width: 80%;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+.chat-system-notice-icon { flex-shrink: 0; color: var(--color-primary); }
+
 .chat-row { display: flex; width: 100%; }
 .chat-row-incoming { justify-content: flex-start; }
 .chat-row-outgoing { justify-content: flex-end; }
 
-/* Incoming rows carrying an avatar: bottom-align so the avatar sits by the last line. */
+/* Bottom-align so the avatar rides the bubble as the message scrolls. */
 .chat-row-has-avatar { align-items: flex-end; }
 .chat-row-has-avatar .chat-message { max-width: min(78%, 520px); }
 
-/* Avatar + arrow travel together and stay visible while the bubble is on screen. */
+/* Avatar + arrow travel with the message (sticky) and stay visible while it's on
+   screen. The vertical margins fence their travel area to the bubble alone: they
+   inset the sticky range past the sender label above and the timestamp below —
+   each a 16px line + the 6px column gap = 22px — so the pair rides the bubble's
+   edge instead of drifting up to the nickname or down to the timestamp. Keep in
+   sync with the .chat-sender / .chat-timestamp line-heights and .chat-message gap. */
 .chat-avatar-unit {
   position: sticky;
   top: 8px;
@@ -192,7 +238,10 @@ function formatFileSize(base64: string): string {
   display: flex;
   align-items: center;
   gap: 3px;
-  margin-right: 8px;
+  margin-top: 22px;
+  margin-bottom: 22px;
+  /* No trailing gap: the arrow's base sits flush against the bubble's edge. */
+  margin-right: 0;
 }
 
 .chat-avatar {
@@ -203,17 +252,19 @@ function formatFileSize(base64: string): string {
   display: block;
   flex-shrink: 0;
   background: var(--surface-bg);
-  border: 2px solid color-mix(in srgb, var(--color-primary) 30%, var(--border-default));
 }
 
-/* CSS triangle pointing left, from the bubble toward the avatar bubble. */
+/* Primary-colored tail: base overlaps the bubble edge by 1px so it stays
+   seamlessly joined to the bubble (and its primary border-left) at any
+   scroll position, with the point aimed at the sticky avatar. */
 .chat-avatar-arrow {
   width: 0;
   height: 0;
   flex-shrink: 0;
   border-top: 6px solid transparent;
   border-bottom: 6px solid transparent;
-  border-right: 7px solid color-mix(in srgb, var(--color-primary) 35%, var(--border-default));
+  border-right: 7px solid var(--color-primary);
+  margin-right: -1px;
 }
 
 .chat-message {
@@ -222,7 +273,7 @@ function formatFileSize(base64: string): string {
 }
 .chat-row-outgoing .chat-message { align-items: flex-end; }
 
-.chat-sender { margin: 0; font-size: 12px; font-weight: 600; color: var(--color-primary); }
+.chat-sender { margin: 0; font-size: 12px; line-height: 16px; font-weight: 600; color: var(--color-primary); }
 
 .chat-bubble {
   width: 100%; border-radius: 14px; padding: 12px 14px;
@@ -302,7 +353,7 @@ function formatFileSize(base64: string): string {
 .chat-debug-item dt { margin: 0; font-weight: 600; color: var(--text-secondary); }
 .chat-debug-item dd { margin: 0; color: var(--text-primary); white-space: pre-wrap; }
 
-.chat-timestamp { margin: 0; font-size: 11px; color: var(--text-secondary); }
+.chat-timestamp { margin: 0; font-size: 11px; line-height: 16px; color: var(--text-secondary); }
 
 @media (max-width: 840px) {
   .chat-message { max-width: 100%; }

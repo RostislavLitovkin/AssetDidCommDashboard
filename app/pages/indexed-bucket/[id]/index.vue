@@ -94,6 +94,7 @@ const viewers = ref<IndexedBucketViewer[]>([])
 const namespaceManagers = ref<string[]>([])
 const messages = ref<IndexedMessage[]>([])
 const avatarUrlByAddress = ref<Record<string, string>>({})
+const profilesByAddress = ref<Record<string, import("../../../types/profile").Profile>>({})
 
 const payloadById = ref<Record<string, string>>({})
 const payloadErrorById = ref<Record<string, string>>({})
@@ -102,6 +103,7 @@ const decryptErrorById = ref<Record<string, string>>({})
 const attachmentById = ref<Record<string, ChatMessageAttachment>>({})
 const activeSecretJwk = ref<jose.JWK | null>(null)
 const keySharingError = ref("")
+const blockTimestamps = ref<Record<number, string>>({})
 
 const sendText = ref("")
 const sendError = ref("")
@@ -153,6 +155,46 @@ const addMemberUrl = computed(() => {
   return `/messages/bucket/add-member/${encodeURIComponent(bucketId.value)}?namespaceId=${encodeURIComponent(namespaceId)}`
 })
 
+// ── Block timestamp caching ────────────────────────────────────────
+let timestampLoading = false
+async function loadBlockTimestamp(blockNumber: number): Promise<string> {
+  const cached = blockTimestamps.value[blockNumber]
+  if (cached) return cached
+
+  try {
+    const block = await $papiClient.rpc("chain_getBlock", [`0x${blockNumber.toString(16)}`])
+    const timestamp = block?.block?.header?.timestamp as number | undefined
+    if (timestamp) {
+      const date = new Date(timestamp)
+      const formatted = date.toLocaleString()
+      blockTimestamps.value[blockNumber] = formatted
+      return formatted
+    }
+  } catch {
+    // Fallback to block number if timestamp lookup fails
+  }
+
+  // Fallback: estimate based on ~6 seconds per block from genesis
+  const genesisTime = 1690000000000 // Approximate genesis time (JULY 2023)
+  const estimatedTime = genesisTime + blockNumber * 6000
+  const date = new Date(estimatedTime)
+  return date.toLocaleString()
+}
+
+async function lazyLoadBlockTimestamps() {
+  if (timestampLoading) return
+  timestampLoading = true
+  try {
+    // Load timestamps for all unique blocks in messages
+    const blocks = new Set(messages.value.map(m => m.createdBlock))
+    for (const blockNumber of blocks) {
+      await loadBlockTimestamp(blockNumber)
+    }
+  } finally {
+    timestampLoading = false
+  }
+}
+
 // ── Chat message rendering ─────────────────────────────────────────
 const chatMessages = computed<ChatMessageProps[]>(() => {
   // Sort messages chronologically so oldest is at the top, newest at the bottom
@@ -164,24 +206,43 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
     const body = payloadBody ?? m.description ?? m.ipfsContent ?? `Message #${m.messageId}`
     const outgoing = Boolean(session.accountAddress && addressesEqual(m.contributor, session.accountAddress))
 
+    // Get sender nickname if available, fallback to address
+    const senderAddress = m.contributor ?? ""
+    const profile = profilesByAddress.value[senderAddress]
+    // Key-sharing system notices always name the sender (nickname or address),
+    // never "You" — even for the connected user's own key rotations.
+    let senderLabel = profile?.nickname || formatAddress(senderAddress)
+    if (m.tag !== keySharingTag && outgoing && !profile?.nickname) {
+      senderLabel = "You"
+    }
+
     const debugEntries: { key: string; value: string }[] = []
     debugEntries.push({ key: "ID", value: m.id })
-    if (m.contributor) debugEntries.push({ key: "Sender", value: m.contributor })
+    if (senderAddress) debugEntries.push({ key: "Sender", value: senderAddress })
     if (m.tag) debugEntries.push({ key: "Tag", value: m.tag })
     if (m.contentType) debugEntries.push({ key: "Content Type", value: m.contentType })
     if (m.reference) debugEntries.push({ key: "IPFS Ref", value: m.reference })
-    debugEntries.push({ key: "Block", value: formatBlock(m.createdBlock) })
+    // Show block number only in debug mode
+    if (settings.showMessageDebug) {
+      debugEntries.push({ key: "Block", value: formatBlock(m.createdBlock) })
+    }
+
+    // Use cached timestamp or fallback to block number for display
+    // Lazy loading happens via watcher after initial render
+    const timestampLabel = settings.showMessageDebug
+      ? formatBlock(m.createdBlock)
+      : (blockTimestamps.value[m.createdBlock] ?? formatBlock(m.createdBlock))
 
     return {
       id: m.id, body, outgoing,
-      senderLabel: outgoing ? "You" : formatAddress(m.contributor),
-      senderAddress: m.contributor, tag: m.tag ?? undefined,
-      avatarUrl: outgoing ? undefined : avatarUrlByAddress.value[m.contributor],
+      senderLabel,
+      senderAddress, tag: m.tag ?? undefined,
+      avatarUrl: outgoing ? undefined : avatarUrlByAddress.value[senderAddress],
       reference: m.reference ?? undefined,
       payloadError: payloadErrorById.value[m.id] ?? decryptErrorById.value[m.id],
       contentType: m.contentType ?? undefined,
       attachment: attachmentById.value[m.id],
-      timestampLabel: formatBlock(m.createdBlock),
+      timestampLabel,
       debugEntries,
     }
   })
@@ -394,7 +455,7 @@ async function hydrateAttachments(msgs: IndexedMessage[]) {
   decryptErrorById.value = nextE
 }
 
-// ── Sender avatars ─────────────────────────────────────────────────
+// ── Sender avatars and profiles ────────────────────────────────────
 async function loadAvatars(msgs: IndexedMessage[]) {
   // Incoming senders only: skip messages sent by the connected wallet.
   const incoming = msgs
@@ -402,8 +463,21 @@ async function loadAvatars(msgs: IndexedMessage[]) {
     .filter(addr => Boolean(addr) && !(session.accountAddress && addressesEqual(addr, session.accountAddress)))
 
   try {
-    const resolved = await resolveAvatarUrls(incoming, addr => profileClient.getProfile(toSs58Prefix42(addr)))
-    avatarUrlByAddress.value = { ...avatarUrlByAddress.value, ...resolved }
+    // Fetch both avatars and profile data (including nicknames)
+    const uniqueAddresses = Array.from(new Set(incoming.filter(Boolean) as string[]))
+    await Promise.all(uniqueAddresses.map(async addr => {
+      try {
+        const profile = await profileClient.getProfile(toSs58Prefix42(addr))
+        if (profile) {
+          profilesByAddress.value[addr] = profile
+          if (profile.profilePicture) {
+            avatarUrlByAddress.value[addr] = profile.profilePicture
+          }
+        }
+      } catch {
+        // Non-fatal: unresolved senders fall back to the default avatar.
+      }
+    }))
   } catch {
     // Non-fatal: unresolved senders fall back to the default avatar.
   }
@@ -689,6 +763,11 @@ watch(() => settings.x25519SecretJwk, async () => {
   await decryptMessages(messages.value)
   await hydrateAttachments(messages.value)
 }, { deep: true })
+
+// Lazy load block timestamps when messages change
+watch(messages, () => {
+  lazyLoadBlockTimestamps()
+}, { immediate: true })
 
 onMounted(async () => {
   settings.initialize()
