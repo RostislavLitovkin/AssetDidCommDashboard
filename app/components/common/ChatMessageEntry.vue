@@ -103,7 +103,7 @@ function formatFileSize(base64: string): string {
         <template v-if="attachment">
           <!-- Image -->
           <div v-if="isImage" class="chat-attachment-media">
-            <img :src="dataUrl" :alt="attachment.fileName" class="chat-attachment-img" loading="lazy" />
+            <img :src="dataUrl" :alt="attachment.fileName" class="chat-attachment-img" loading="lazy" @click="downloadAttachment" />
           </div>
           <!-- Video -->
           <div v-else-if="isVideo" class="chat-attachment-media">
@@ -121,11 +121,14 @@ function formatFileSize(base64: string): string {
           <div v-else class="chat-attachment-file" @click="downloadAttachment">
             <Paperclip :size="22" class="chat-attachment-file-icon" />
             <div class="chat-attachment-file-info">
-              <span class="chat-attachment-file-name">{{ attachment.fileName }}</span>
+              <span class="chat-attachment-file-name" :title="attachment.fileName">{{ attachment.fileName }}</span>
               <span class="chat-attachment-file-meta">{{ attachment.contentType }} · {{ formatFileSize(attachment.data) }}</span>
             </div>
           </div>
-          <p class="chat-attachment-label">{{ attachment.fileName }} · {{ formatFileSize(attachment.data) }}</p>
+          <!-- Filename + size caption for media (the generic-file card shows this itself) -->
+          <p v-if="isImage || isVideo || isAudio" class="chat-attachment-caption">
+            <span class="chat-attachment-caption-name">{{ attachment.fileName }}</span> · {{ formatFileSize(attachment.data) }}
+          </p>
         </template>
 
         <!-- Plain text message -->
@@ -182,44 +185,53 @@ function formatFileSize(base64: string): string {
 .chat-bubble-outgoing .chat-debug-item dt,
 .chat-bubble-outgoing .chat-debug-item dd { color: rgba(255, 255, 255, 0.92); }
 .chat-bubble-outgoing .chat-warning { color: rgba(255, 255, 255, 0.9); }
-.chat-bubble-outgoing .chat-attachment-label,
+.chat-bubble-outgoing .chat-attachment-caption { color: rgba(255, 255, 255, 0.8); }
+.chat-bubble-outgoing .chat-attachment-caption-name,
 .chat-bubble-outgoing .chat-attachment-file-name,
-.chat-bubble-outgoing .chat-attachment-file-meta { color: rgba(255, 255, 255, 0.85); }
+.chat-bubble-outgoing .chat-attachment-file-meta { color: rgba(255, 255, 255, 0.92); }
 
 .chat-text { margin: 0; white-space: pre-wrap; word-break: break-word; }
 .chat-warning { margin: 8px 0 0; font-size: 12px; color: var(--status-error); }
 
-/* Attachments */
-.chat-attachment-media { margin: 0 -2px; }
+/* Attachments — media spans the full width of the bubble by bleeding past its padding */
+.chat-attachment-media {
+  margin: 2px -14px 0;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.chat-bubble-incoming .chat-attachment-media { margin-left: -12px; }
+
 .chat-attachment-img {
-  display: block; max-width: 100%; max-height: 320px; border-radius: 8px;
-  object-fit: contain; cursor: pointer;
+  display: block; width: 100%; max-height: 420px;
+  object-fit: cover; cursor: pointer;
 }
 .chat-attachment-img:hover { opacity: 0.92; }
 .chat-attachment-video {
-  display: block; max-width: 100%; max-height: 320px; border-radius: 8px;
+  display: block; width: 100%; max-height: 420px;
 }
-.chat-attachment-audio { margin: 4px 0; }
-.chat-attachment-audio-player { width: 100%; max-width: 320px; }
+.chat-attachment-audio { margin: 6px 0 0; }
+.chat-attachment-audio-player { width: 100%; }
 
 .chat-attachment-file {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px;
   border: 1px solid var(--border-default); border-radius: 10px;
   background: rgba(255,255,255,0.12); cursor: pointer;
   transition: background 150ms ease;
+  max-width: 100%;
 }
 .chat-attachment-file:hover { background: rgba(255,255,255,0.2); }
 .chat-attachment-file-icon { flex-shrink: 0; color: var(--text-secondary); }
-.chat-attachment-file-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.chat-attachment-file-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .chat-attachment-file-name {
   font-size: 13px; font-weight: 600; color: var(--text-primary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .chat-attachment-file-meta { font-size: 11px; color: var(--text-secondary); }
-.chat-attachment-label {
-  margin: 6px 0 0; font-size: 11px; color: var(--text-secondary);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+.chat-attachment-caption {
+  margin: 8px 0 0; font-size: 12px; color: var(--text-secondary);
+  word-break: break-word;
 }
+.chat-attachment-caption-name { font-weight: 600; color: var(--text-primary); }
 
 .chat-debug { margin-top: 10px; font-size: 12px; color: var(--text-secondary); }
 .chat-debug summary { cursor: pointer; font-weight: 600; color: var(--text-primary); }
