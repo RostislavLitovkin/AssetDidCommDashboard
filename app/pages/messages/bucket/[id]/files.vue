@@ -1,40 +1,29 @@
 <script setup lang="ts">
-import { fetchFileMessages, type IndexedMessage } from "../../../../services/indexer/subqueryClient"
-import { DidCommRepository, type BucketRecord } from "../../../../services/papi/didCommRepository"
-import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } from "../../../../components/common/ChatMessageEntry.vue"
+import {
+  fetchFileMessagesPage,
+  fetchIndexedMessagesByTag,
+  isFileMessage,
+  type IndexedMessage
+} from "../../../../services/indexer/subqueryClient"
+import BucketFileCard from "../../../../components/common/BucketFileCard.vue"
+import type { ChatMessageAttachment } from "../../../../components/common/ChatMessageEntry.vue"
 import LoadingBar from "../../../../components/common/LoadingBar.vue"
 import { Paperclip, ArrowLeft } from "lucide-vue-next"
-import { hexToU8a } from "@polkadot/util"
 import * as jose from "jose"
-import { computed, nextTick, onMounted, ref, watch } from "vue"
-import { useNuxtApp, useRoute, useRuntimeConfig } from "nuxt/app"
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { useRoute, useRuntimeConfig } from "nuxt/app"
 import { useSessionStore } from "../../../../stores/session"
 import { useSettingsStore } from "../../../../stores/settings"
 import { useAddress } from "../../../../composables/useAddress"
 
+const PAGE_SIZE = 20
+const keySharingTag = "didcomm/key-sharing-v1"
+
 const route = useRoute()
-const { $papiClient } = useNuxtApp()
 const config = useRuntimeConfig()
 const session = useSessionStore()
 const settings = useSettingsStore()
 const { formatAddress, addressesEqual } = useAddress()
-
-const asOptionalString = (value: unknown): string | undefined => {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined
-}
-
-const didCommRepository = new DidCommRepository(
-  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string },
-  undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
-  { // 16 pinataConfig
-    jwt: asOptionalString(config.public.pinataJwt),
-    apiKey: asOptionalString(config.public.pinataApiKey),
-    apiSecret: asOptionalString(config.public.pinataApiSecret),
-    publicGateway: asOptionalString(config.public.pinataGateway)
-  },
-  undefined, undefined, undefined,
-  String(config.public.subqueryIndexerUrl || "") // 20 indexerUrl
-)
 
 const indexerUrl = computed(() => String(config.public.subqueryIndexerUrl || ""))
 const pinataGateway = computed(() => {
@@ -48,138 +37,26 @@ const bucketId = computed(() => {
   try { return decodeURIComponent(String(v)) } catch { return String(v) }
 })
 
-const textMessageContentType = "text/plain;charset=utf-8"
-const keySharingContentType = "application/didcomm-encrypted+json"
-const keySharingTag = "didcomm/key-sharing-v1"
-
 // ── State ──────────────────────────────────────────────────────────
-const loading = ref(true)
+const files = ref<IndexedMessage[]>([])
+const cursor = ref<string | null>(null)
+const hasNextPage = ref(true)
+const loadingPage = ref(false)
+const initialLoading = ref(true)
 const error = ref("")
-const messages = ref<IndexedMessage[]>([])
+const keyMissing = ref(false)
+
 const payloadById = ref<Record<string, string>>({})
 const payloadErrorById = ref<Record<string, string>>({})
-const decryptedById = ref<Record<string, string>>({})
-const decryptErrorById = ref<Record<string, string>>({})
 const attachmentById = ref<Record<string, ChatMessageAttachment>>({})
+const decryptErrorById = ref<Record<string, string>>({})
 const activeSecretJwk = ref<jose.JWK | null>(null)
 
-// ── File attachments (CID-pointer messages) ────────────────────────
-function isFileMessage(m: IndexedMessage): boolean {
-  if (m.tag === keySharingTag) return false
-  const ct = m.contentType?.trim()
-  return Boolean(ct && ct !== textMessageContentType && ct !== keySharingContentType)
-}
+const viewport = ref<HTMLElement | null>(null)
+const sentinel = ref<HTMLElement | null>(null)
+let observer: IntersectionObserver | null = null
 
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = ""
-  const chunkSize = 0x8000
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
-  }
-  return btoa(binary)
-}
-
-async function decryptKeySharing() {
-  const keySharingMessages = messages.value.filter(m => m.tag === keySharingTag)
-  if (!keySharingMessages.length) {
-    return
-  }
-
-  const secretJwk = settings.x25519SecretJwk
-  if (!secretJwk) {
-    return
-  }
-
-  // Try from latest to earliest to find the most recent working key
-  const reversed = [...keySharingMessages].reverse()
-  for (const ksMsg of reversed) {
-    const raw = payloadById.value[ksMsg.id]
-    if (!raw?.trim()) continue
-
-    try {
-      const parsed = JSON.parse(raw)
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue
-      const key = await jose.importJWK(secretJwk as jose.JWK, "ECDH-ES+A256KW")
-      const { plaintext } = await jose.generalDecrypt(parsed as jose.GeneralJWE, key)
-      const decoded = new TextDecoder().decode(plaintext)
-      const inner = JSON.parse(decoded)
-      if (inner && typeof inner === "object" && !Array.isArray(inner)) {
-        const keys = Array.isArray(inner.keys) ? inner.keys : []
-        for (const k of keys) {
-          if (k && typeof k === "object" && k.kty === "OKP" && k.crv === "X25519" && typeof k.x === "string" && typeof k.d === "string") {
-            activeSecretJwk.value = { ...k, use: "enc" }
-            break
-          }
-        }
-      }
-      if (activeSecretJwk.value) return // found a working key
-    } catch {
-      // This key-sharing message didn't decrypt, try the next one
-    }
-  }
-}
-
-async function decryptFileMessages(msgs: IndexedMessage[]) {
-  const nextD: Record<string, string> = {}
-  const nextE: Record<string, string> = {}
-  const sk = activeSecretJwk.value
-  if (!sk || !isX25519Secret(sk)) {
-    decryptedById.value = {}
-    decryptErrorById.value = {}
-    return
-  }
-
-  await Promise.all(msgs.map(async m => {
-    if (m.tag === keySharingTag) return
-    const p = payloadById.value[m.id]
-    if (!p) return
-    const t = p.trim()
-    if (!looksLikeCompactJwe(t)) {
-      nextD[m.id] = p
-      return
-    }
-    try {
-      const key = await jose.importJWK(sk as jose.JWK, "ECDH-ES+A256KW")
-      const { plaintext } = await jose.compactDecrypt(t, key)
-      nextD[m.id] = new TextDecoder().decode(plaintext)
-    } catch (e) {
-      nextE[m.id] = e instanceof Error ? e.message : "Decrypt failed"
-      nextD[m.id] = p
-    }
-  }))
-  decryptedById.value = nextD
-  decryptErrorById.value = nextE
-}
-
-async function hydrateAttachments(msgs: IndexedMessage[]) {
-  const next: Record<string, ChatMessageAttachment> = { ...attachmentById.value }
-  const nextE: Record<string, string> = { ...decryptErrorById.value }
-  const sk = activeSecretJwk.value
-
-  await Promise.all(msgs.map(async m => {
-    if (next[m.id]) return
-    if (!isFileMessage(m)) return
-    const fileJwe = payloadById.value[m.id]?.trim()
-    if (!fileJwe) return
-    try {
-      if (!sk || !isX25519Secret(sk)) throw new Error("No decrypted bucket key available. Decrypt key-sharing first.")
-      if (!looksLikeCompactJwe(fileJwe)) throw new Error("File payload is not an encrypted attachment")
-      const key = await jose.importJWK(sk as jose.JWK, "ECDH-ES+A256KW")
-      const { plaintext, protectedHeader } = await jose.compactDecrypt(fileJwe, key)
-      next[m.id] = {
-        contentType: m.contentType?.trim() || "application/octet-stream",
-        fileName: typeof protectedHeader.filename === "string" ? protectedHeader.filename : undefined,
-        data: bytesToBase64(plaintext)
-      }
-    } catch (e) {
-      nextE[m.id] = e instanceof Error ? e.message : "Attachment unavailable"
-    }
-  }))
-
-  attachmentById.value = next
-  decryptErrorById.value = nextE
-}
-
+// ── Crypto helpers ─────────────────────────────────────────────────
 function isX25519Secret(v: unknown): v is jose.JWK {
   if (!v || typeof v !== "object" || Array.isArray(v)) return false
   const c = v as Record<string, unknown>
@@ -191,12 +68,22 @@ function looksLikeCompactJwe(s: string): boolean {
   return p.length === 5 && p.every(x => x.length > 0)
 }
 
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ""
+  const chunkSize = 0x8000
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
+  }
+  return btoa(binary)
+}
+
 function resolveUrl(ref: string): string {
   const t = ref.trim()
   if (/^https?:\/\//i.test(t)) return t
   return `${pinataGateway.value}/ipfs/${t}`
 }
 
+// ── IPFS payload hydration ─────────────────────────────────────────
 async function hydratePayloads(msgs: IndexedMessage[]) {
   const nextP: Record<string, string> = { ...payloadById.value }
   const nextE: Record<string, string> = { ...payloadErrorById.value }
@@ -219,149 +106,283 @@ async function hydratePayloads(msgs: IndexedMessage[]) {
   payloadErrorById.value = nextE
 }
 
-// ── Load everything via GraphQL ────────────────────────────────────
-async function loadAll() {
+// ── Bucket key recovery (from key-sharing messages) ────────────────
+async function decryptKeySharing(keySharingMessages: IndexedMessage[]) {
+  const secretJwk = settings.x25519SecretJwk
+  if (!secretJwk) return
+
+  // Try from latest to earliest to find the most recent working key.
+  const reversed = [...keySharingMessages].reverse()
+  for (const ksMsg of reversed) {
+    const raw = payloadById.value[ksMsg.id]
+    if (!raw?.trim()) continue
+    try {
+      const parsed = JSON.parse(raw)
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue
+      const key = await jose.importJWK(secretJwk as jose.JWK, "ECDH-ES+A256KW")
+      const { plaintext } = await jose.generalDecrypt(parsed as jose.GeneralJWE, key)
+      const inner = JSON.parse(new TextDecoder().decode(plaintext))
+      if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+        const keys = Array.isArray(inner.keys) ? inner.keys : []
+        for (const k of keys) {
+          if (isX25519Secret(k)) {
+            activeSecretJwk.value = { ...k, use: "enc" }
+            break
+          }
+        }
+      }
+      if (activeSecretJwk.value) return // found a working key
+    } catch {
+      // This key-sharing message didn't decrypt; try the next one.
+    }
+  }
+}
+
+// The bucket's decryption secret lives in its key-sharing messages, which the
+// file-only query deliberately excludes — so we fetch them separately here.
+async function loadKeySharing() {
+  const url = indexerUrl.value
+  if (!url) return
+  keyMissing.value = !settings.x25519SecretJwk
+  try {
+    const keySharingMessages = await fetchIndexedMessagesByTag(url, bucketId.value, keySharingTag)
+    await hydratePayloads(keySharingMessages)
+    await decryptKeySharing(keySharingMessages)
+  } catch {
+    // A failed key-sharing load just leaves files locked; the list still renders.
+  }
+}
+
+// ── File attachment decryption ─────────────────────────────────────
+async function hydrateAttachments(msgs: IndexedMessage[]) {
+  const sk = activeSecretJwk.value
+  if (!sk || !isX25519Secret(sk)) return // locked: no bucket key yet
+
+  const next: Record<string, ChatMessageAttachment> = { ...attachmentById.value }
+  const nextE: Record<string, string> = { ...decryptErrorById.value }
+
+  await Promise.all(msgs.map(async m => {
+    if (next[m.id]) return
+    const fileJwe = payloadById.value[m.id]?.trim()
+    if (!fileJwe) {
+      // No payload to decrypt: surface it rather than spinning forever.
+      if (!payloadErrorById.value[m.id]) nextE[m.id] = "File payload unavailable"
+      return
+    }
+    try {
+      if (!looksLikeCompactJwe(fileJwe)) throw new Error("File payload is not an encrypted attachment")
+      const key = await jose.importJWK(sk as jose.JWK, "ECDH-ES+A256KW")
+      const { plaintext, protectedHeader } = await jose.compactDecrypt(fileJwe, key)
+      next[m.id] = {
+        contentType: m.contentType?.trim() || "application/octet-stream",
+        fileName: typeof protectedHeader.filename === "string" ? protectedHeader.filename : undefined,
+        data: bytesToBase64(plaintext)
+      }
+    } catch (e) {
+      nextE[m.id] = e instanceof Error ? e.message : "Attachment unavailable"
+    }
+  }))
+
+  attachmentById.value = next
+  decryptErrorById.value = nextE
+}
+
+// ── Infinite scroll paging ─────────────────────────────────────────
+async function loadNextPage() {
+  if (loadingPage.value || !hasNextPage.value) return
+  loadingPage.value = true
   error.value = ""
-  loading.value = true
   try {
     const url = indexerUrl.value
     if (!url) throw new Error("SubQuery indexer URL is not configured")
 
-    // 1. Fetch file messages (only files, not text messages)
-    const fileMessages = await fetchFileMessages(url, bucketId.value)
+    const page = await fetchFileMessagesPage(url, bucketId.value, { first: PAGE_SIZE, after: cursor.value })
+    const pageFiles = page.nodes.filter(isFileMessage)
 
-    // 2. Filter to only file messages (non-text, non-key-sharing)
-    const fileMsgs = fileMessages.filter(isFileMessage)
-
-    // 3. Also get key-sharing messages to decrypt the bucket key
-    const keySharingMessages = fileMessages.filter(m => m.tag === keySharingTag)
-
-    // 4. Hydrate their payloads so we can decrypt them
-    await hydratePayloads(keySharingMessages)
-
-    // 5. Decrypt key-sharing messages to find active key
-    await decryptKeySharing()
-
-    // 6. Hydrate all file message payloads
-    await hydratePayloads(fileMsgs)
-
-    // 7. Decrypt file messages
-    await decryptFileMessages(fileMsgs)
-
-    // 8. Hydrate file attachments
-    await hydrateAttachments(fileMsgs)
-
-    messages.value = fileMsgs
+    // Show the cards immediately; their previews fill in as decryption resolves,
+    // so the page never blocks on IPFS fetches + decryption before rendering.
+    files.value.push(...pageFiles)
+    cursor.value = page.endCursor
+    hasNextPage.value = page.hasNextPage && Boolean(page.endCursor)
+    void hydratePageContent(pageFiles)
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "Failed to load file messages"
+    error.value = e instanceof Error ? e.message : "Failed to load files"
   } finally {
-    loading.value = false
+    loadingPage.value = false
+    initialLoading.value = false
   }
 }
 
-// ── Chat message rendering ─────────────────────────────────────────
-const chatMessages = computed<ChatMessageProps[]>(() => {
-  // Sort messages chronologically so oldest is at the top, newest at the bottom
-  const sortedMessages = [...messages.value].sort((a, b) => a.createdBlock - b.createdBlock)
+// Fetch and decrypt a page's file payloads in the background, after the cards are
+// already on screen. Thumbnails and filenames appear as each page resolves.
+async function hydratePageContent(pageFiles: IndexedMessage[]) {
+  await hydratePayloads(pageFiles)
+  await hydrateAttachments(pageFiles)
+}
 
-  return sortedMessages.map(m => {
-    const payload = decryptedById.value[m.id] ?? payloadById.value[m.id]
-    const payloadBody = payload ? payload : undefined
-    const body = payloadBody ?? m.description ?? m.ipfsContent ?? `Message #${m.messageId}`
+function sentinelNearViewport(): boolean {
+  const s = sentinel.value
+  const v = viewport.value
+  if (!s || !v) return false
+  const sr = s.getBoundingClientRect()
+  const vr = v.getBoundingClientRect()
+  return sr.top <= vr.bottom + 300
+}
+
+async function maybeLoadMore() {
+  if (loadingPage.value || !hasNextPage.value || error.value) return
+  await loadNextPage()
+  // Keep pulling while the sentinel is still on screen (tall viewport / short page),
+  // until it scrolls out of view or the pages run out.
+  await nextTick()
+  if (!error.value && hasNextPage.value && sentinelNearViewport()) {
+    await maybeLoadMore()
+  }
+}
+
+function setupObserver() {
+  if (!sentinel.value) return
+  observer = new IntersectionObserver(
+    entries => { if (entries.some(e => e.isIntersecting)) void maybeLoadMore() },
+    { root: viewport.value, rootMargin: "300px" }
+  )
+  observer.observe(sentinel.value)
+}
+
+function retry() {
+  error.value = ""
+  void maybeLoadMore()
+}
+
+// ── View model ─────────────────────────────────────────────────────
+interface FileCardVm {
+  id: string
+  attachment?: ChatMessageAttachment
+  contentType: string
+  senderLabel: string
+  timestampLabel: string
+  cid?: string
+  error?: string
+}
+
+// Whether we hold the bucket secret needed to decrypt files. False both when the
+// user has no personal key loaded and when no bucket key was shared with their key.
+const canDecrypt = computed(() => Boolean(activeSecretJwk.value))
+
+const fileCards = computed<FileCardVm[]>(() =>
+  files.value.map(m => {
     const outgoing = Boolean(session.accountAddress && addressesEqual(m.contributor, session.accountAddress))
-
-    // Get sender nickname if available, fallback to address
-    const senderAddress = m.contributor ?? ""
-    const senderLabel = outgoing ? "You" : formatAddress(senderAddress)
-
     return {
-      id: m.id, body, outgoing,
-      senderLabel,
-      senderAddress, tag: m.tag ?? undefined,
-      reference: m.reference ?? undefined,
-      payloadError: payloadErrorById.value[m.id] ?? decryptErrorById.value[m.id],
-      contentType: m.contentType ?? undefined,
+      id: m.id,
       attachment: attachmentById.value[m.id],
+      contentType: m.contentType?.trim() || "application/octet-stream",
+      senderLabel: outgoing ? "You" : formatAddress(m.contributor ?? ""),
       timestampLabel: `Block #${m.createdBlock}`,
-      debugEntries: [],
+      cid: m.reference ?? undefined,
+      error: payloadErrorById.value[m.id] ?? decryptErrorById.value[m.id]
     }
   })
-})
-
-// ── Utility ────────────────────────────────────────────────────────
-function formatAddressShort(address: string): string {
-  if (!address) return ""
-  return `${address.slice(0, 8)}...${address.slice(-8)}`
-}
+)
 
 // ── Lifecycle ──────────────────────────────────────────────────────
-async function scrollToBottom() {
-  await nextTick()
-  const el = document.getElementById("chat-bottom-anchor")
-  if (el) el.scrollIntoView({ behavior: "auto", block: "end" })
-}
-
-watch(() => chatMessages.value.length, () => scrollToBottom())
-
 watch(() => settings.x25519SecretJwk, async () => {
-  const url = indexerUrl.value
-  if (!url) return
-  await loadAll()
+  // A new personal key can unlock (or re-key) every file already on screen.
+  keyMissing.value = !settings.x25519SecretJwk
+  activeSecretJwk.value = null
+  attachmentById.value = {}
+  decryptErrorById.value = {}
+  await loadKeySharing()
+  await hydrateAttachments(files.value)
 }, { deep: true })
 
 onMounted(async () => {
   settings.initialize()
-  await loadAll()
-  await scrollToBottom()
+  await loadKeySharing()
+  await loadNextPage()
+  await nextTick()
+  setupObserver()
+  // If the first page didn't fill the viewport, keep loading.
+  if (sentinelNearViewport()) void maybeLoadMore()
+})
+
+onBeforeUnmount(() => {
+  observer?.disconnect()
+  observer = null
 })
 </script>
 
 <template>
-  <div class="chat-page-container ib-custom-page">
-    <!-- Header -->
+  <div class="files-page ib-custom-page">
     <header class="buckets-header ib-header-row">
       <div class="ib-container ib-header-inner">
         <div class="row ib-header-left">
-          <div class="stack" style="gap: 2px">
-            <h3 class="ib-title">Bucket Files</h3>
-            <span class="muted ib-subtitle">Files and images from bucket {{ bucketId }}</span>
+          <div class="stack">
+            <h3 class="ib-title">Files</h3>
           </div>
-        </div>
-        <div class="row ib-header-actions">
-          <NuxtLink class="btn" :to="`/messages/bucket/${encodeURIComponent(bucketId)}/info`">
-            <ArrowLeft :size="16" />
-            Back to Info
-          </NuxtLink>
         </div>
       </div>
     </header>
 
-    <div class="ib-container">
-      <LoadingBar v-if="loading" label="Querying SubQuery indexer..." style="flex-shrink:0;" />
-      <p v-if="error" class="ib-error">{{ error }}</p>
+    <div v-if="!initialLoading && (keyMissing || (!canDecrypt && fileCards.length))" class="ib-container">
+      <p class="files-key-banner">
+        <template v-if="keyMissing">
+          🔒 Load your X25519 secret key in Settings to preview and download these files.
+        </template>
+        <template v-else>
+          🔒 No bucket key has been shared with your key yet, so these files can't be decrypted.
+        </template>
+      </p>
     </div>
 
     <!-- Files viewport -->
-    <div class="ib-chat-viewport chat-viewport" role="log" aria-live="polite" aria-label="Bucket file messages">
-      <div class="ib-container ib-chat-inner">
-        <!-- File messages -->
-        <ChatMessageEntry v-for="msg in chatMessages" :key="msg.id" :message="msg" :show-avatars="false" />
+    <div ref="viewport" class="files-viewport" role="list" aria-label="Bucket files">
+      <div class="ib-container files-grid">
+        <!-- Initial load: a single centered indicator, no double bars -->
+        <div v-if="initialLoading" class="files-loading">
+          <LoadingBar label="Loading files..." />
+        </div>
 
-        <!-- Empty state -->
-        <p v-if="!loading && !chatMessages.length" class="muted" style="text-align:center; padding: 40px 0;">
-          <Paperclip :size="48" class="muted" style="opacity: 0.3; margin-bottom: 16px;" />
-          <br>
-          No files found for this bucket in the indexer.
-        </p>
+        <template v-else>
+          <BucketFileCard
+            v-for="card in fileCards"
+            :key="card.id"
+            role="listitem"
+            :attachment="card.attachment"
+            :content-type="card.contentType"
+            :sender-label="card.senderLabel"
+            :timestamp-label="card.timestampLabel"
+            :cid="card.cid"
+            :error="card.error"
+            :locked="!canDecrypt && !card.attachment"
+          />
 
-        <div id="chat-bottom-anchor"></div>
+          <!-- Empty state -->
+          <div v-if="!fileCards.length && !error" class="files-empty muted">
+            <Paperclip :size="48" class="files-empty-icon" />
+            <p style="margin: 0;">No files found for this bucket in the indexer.</p>
+          </div>
+
+          <!-- First-load error (no cards to show) -->
+          <div v-if="error && !fileCards.length" class="files-page-error" style="justify-content:center; padding: 40px 0;">
+            <span>{{ error }}</span>
+            <button type="button" class="btn" @click="retry">Retry</button>
+          </div>
+        </template>
+
+        <!-- Infinite-scroll sentinel + paging feedback -->
+        <div ref="sentinel" class="files-sentinel">
+          <LoadingBar v-if="loadingPage && !initialLoading" label="Loading more files..." />
+          <div v-else-if="error && fileCards.length" class="files-page-error">
+            <span>{{ error }}</span>
+            <button type="button" class="btn" @click="retry">Retry</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-/* Main Full-Height Container */
 .ib-custom-page {
   display: flex;
   flex-direction: column;
@@ -420,11 +441,19 @@ onMounted(async () => {
   font-size: 14px;
 }
 
+.files-key-banner {
+  margin: 12px 0 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-primary) 8%, var(--color-white));
+  border: 1px solid color-mix(in srgb, var(--color-primary) 30%, var(--border-default));
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
 /* Scrollable area */
-.ib-chat-viewport {
+.files-viewport {
   flex: 1;
-  display: flex;
-  flex-direction: column;
   overflow-y: auto;
   background: transparent;
   overscroll-behavior: contain;
@@ -432,26 +461,41 @@ onMounted(async () => {
   -webkit-overflow-scrolling: touch;
 }
 
-.ib-chat-inner {
+.files-grid {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding-top: 32px;
+  gap: 12px;
+  padding-top: 24px;
   padding-bottom: 24px;
-  flex: 1;
 }
 
-/* File message styles */
-.chat-message {
-  max-width: min(78%, 560px);
+.files-loading {
+  padding: 40px 0;
 }
 
-.chat-row-outgoing .chat-message {
-  align-items: flex-end;
+.files-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+  padding: 56px 0;
+}
+.files-empty-icon {
+  opacity: 0.3;
 }
 
-.chat-attachment-file {
-  max-width: 100%;
+.files-sentinel {
+  min-height: 8px;
+  display: flex;
+  justify-content: center;
+}
+.files-page-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--status-error);
+  font-size: 13px;
 }
 
 @media (max-width: 960px) {
@@ -461,13 +505,9 @@ onMounted(async () => {
 }
 
 @media (max-width: 840px) {
-  .ib-chat-inner {
+  .files-grid {
     padding-top: 16px;
     padding-bottom: 16px;
-  }
-
-  .chat-message {
-    max-width: 100%;
   }
 }
 </style>
