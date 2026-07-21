@@ -319,14 +319,7 @@ onBeforeUnmount(() => {
         <div class="row ib-header-left">
           <div class="stack" style="gap: 2px">
             <h3 class="ib-title">Bucket Files</h3>
-            <span class="muted ib-subtitle">Files and images shared in bucket {{ bucketId }}</span>
           </div>
-        </div>
-        <div class="row ib-header-actions">
-          <NuxtLink class="btn" :to="`/messages/bucket/${encodeURIComponent(bucketId)}/info`">
-            <ArrowLeft :size="16" />
-            Back to Info
-          </NuxtLink>
         </div>
       </div>
     </header>

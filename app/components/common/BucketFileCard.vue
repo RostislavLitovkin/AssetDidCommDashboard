@@ -95,7 +95,6 @@ function download() {
       <span class="file-meta">{{ metaLabel }}</span>
       <span class="file-sub">
         {{ senderLabel }} · {{ timestampLabel }}
-        <template v-if="shortCid"> · {{ shortCid }}</template>
       </span>
       <span v-if="error" class="file-status file-status-error">⚠ {{ error }}</span>
       <span v-else-if="!attachment && locked" class="file-status">🔒 Load your X25519 key to view this file</span>
