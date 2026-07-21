@@ -117,14 +117,15 @@ const sending = ref(false)
 // ── Optimistic outgoing messages ───────────────────────────────────
 // A pending message is rendered as a normal outgoing bubble whose timestamp
 // slot shows the send status until the indexer picks the message up.
-type PendingStatus = "signing" | "submitting" | "processing" | "finalizing" | "indexing"
+type PendingStatus = "signing" | "submitting" | "processing" | "finalizing" | "indexing" | "failed"
 
 const pendingStatusLabels: Record<PendingStatus, string> = {
   signing: "signing…",
   submitting: "submitting…",
   processing: "processing…",
   finalizing: "finalizing…",
-  indexing: "indexing…"
+  indexing: "indexing…",
+  failed: "failed"
 }
 
 interface PendingOutgoingMessage {
@@ -132,6 +133,7 @@ interface PendingOutgoingMessage {
   body: string
   attachment?: ChatMessageAttachment
   status: PendingStatus
+  errorMessage?: string
   senderAddress: string
   /** Indexed message ids that existed when the send started. */
   baselineIds: Set<string>
@@ -286,9 +288,14 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
   // is hidden immediately so the message never renders twice while the
   // tracker finishes reloading.
   for (const p of pendingMessages.value) {
-    const indexedOwn = messages.value
-      .filter(m => !p.baselineIds.has(m.id) && addressesEqual(m.contributor, p.senderAddress)).length
-    if (indexedOwn >= p.requiredNewCount) continue
+    const failed = p.status === "failed"
+    // Failed entries never went on-chain — the arrival check is meaningless
+    // for them (a later successful send would wrongly satisfy it).
+    if (!failed) {
+      const indexedOwn = messages.value
+        .filter(m => !p.baselineIds.has(m.id) && addressesEqual(m.contributor, p.senderAddress)).length
+      if (indexedOwn >= p.requiredNewCount) continue
+    }
     entries.push({
       id: p.id,
       body: p.body,
@@ -297,7 +304,9 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
       senderAddress: p.senderAddress,
       attachment: p.attachment,
       timestampLabel: pendingStatusLabels[p.status],
-      pending: true
+      pending: true,
+      failed,
+      payloadError: p.errorMessage
     })
   }
 
@@ -657,37 +666,18 @@ async function trackPendingMessage(pending: PendingOutgoingMessage, inBlockHash:
   }
 }
 
-async function sendMessage() {
-  sendError.value = ""
-  const textPayload = sendText.value.trim()
-  const attachment = pendingAttachment.value
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}
 
-  if (!textPayload && !attachment) { sendError.value = "Enter a message or attach a file"; return }
-  if (!session.accountAddress) { sendError.value = "Connect wallet before sending"; return }
-
+// Signs and submits a pending entry's payload, driving its status through the
+// extrinsic lifecycle. On failure the entry stays in the chat as "failed"
+// with Retry/Discard actions instead of being dropped.
+async function submitPending(pending: PendingOutgoingMessage): Promise<void> {
   sending.value = true
-  const savedText = sendText.value
-  sendText.value = ""
-  pendingAttachment.value = null
-
-  const senderAddress = session.accountAddress
-  const pending: PendingOutgoingMessage = {
-    id: `pending-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    body: attachment ? "" : textPayload,
-    attachment: attachment
-      ? {
-          contentType: attachment.file.type || "application/octet-stream",
-          fileName: attachment.file.name,
-          // readAsDataURL always yields "data:<type>;base64,<data>"
-          data: attachment.dataUrl.slice(attachment.dataUrl.indexOf(",") + 1)
-        }
-      : undefined,
-    status: "signing",
-    senderAddress,
-    baselineIds: new Set(messages.value.map(m => m.id)),
-    requiredNewCount: pendingMessages.value.length + 1
-  }
-  pendingMessages.value = [...pendingMessages.value, pending]
 
   let inBlockHash: string | undefined
   const onExtrinsicUpdate = (update: ExtrinsicUpdate): void => {
@@ -700,30 +690,82 @@ async function sendMessage() {
 
   try {
     let result
-    if (attachment) {
-      const fileContentType = attachment.file.type || "application/octet-stream"
-      const fileBytes = new Uint8Array(await attachment.file.arrayBuffer())
-      const fileJwe = await encryptOutgoing(fileBytes, { cty: fileContentType, filename: attachment.file.name })
+    if (pending.attachment) {
+      const fileBytes = base64ToBytes(pending.attachment.data)
+      const fileJwe = await encryptOutgoing(fileBytes, {
+        cty: pending.attachment.contentType,
+        filename: pending.attachment.fileName ?? "attachment"
+      })
       result = await didCommRepository.createFileMessage(
-        bucketId.value, fileJwe, fileContentType, senderAddress, onExtrinsicUpdate
+        bucketId.value, fileJwe, pending.attachment.contentType, pending.senderAddress, onExtrinsicUpdate
       )
     } else {
-      const encrypted = await encryptOutgoing(textPayload)
+      const encrypted = await encryptOutgoing(pending.body)
       result = await didCommRepository.createMessage(
-        bucketId.value, encrypted, senderAddress, onExtrinsicUpdate
+        bucketId.value, encrypted, pending.senderAddress, onExtrinsicUpdate
       )
     }
     operations.add("bucket_write", result.method, "success", `Message submitted: ${result.txHash}`)
     // The composer unlocks now; the bubble keeps reporting finalization/indexing.
     void trackPendingMessage(pending, inBlockHash)
   } catch (e) {
-    pendingMessages.value = pendingMessages.value.filter(p => p.id !== pending.id)
-    sendError.value = e instanceof Error ? e.message : "Unable to send"
-    if (!sendText.value) sendText.value = savedText
-    if (attachment) pendingAttachment.value = attachment
+    const entry = pendingMessages.value.find(p => p.id === pending.id)
+    if (entry) {
+      entry.status = "failed"
+      entry.errorMessage = e instanceof Error ? e.message : "Unable to send"
+    }
   } finally {
     sending.value = false
   }
+}
+
+async function sendMessage() {
+  sendError.value = ""
+  const textPayload = sendText.value.trim()
+  const attachment = pendingAttachment.value
+
+  if (!textPayload && !attachment) { sendError.value = "Enter a message or attach a file"; return }
+  if (!session.accountAddress) { sendError.value = "Connect wallet before sending"; return }
+
+  sendText.value = ""
+  pendingAttachment.value = null
+
+  const pending: PendingOutgoingMessage = {
+    id: `pending-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    body: attachment ? "" : textPayload,
+    attachment: attachment
+      ? {
+          contentType: attachment.file.type || "application/octet-stream",
+          fileName: attachment.file.name,
+          // readAsDataURL always yields "data:<type>;base64,<data>"
+          data: attachment.dataUrl.slice(attachment.dataUrl.indexOf(",") + 1)
+        }
+      : undefined,
+    status: "signing",
+    senderAddress: session.accountAddress,
+    baselineIds: new Set(messages.value.map(m => m.id)),
+    requiredNewCount: pendingMessages.value.filter(p => p.status !== "failed").length + 1
+  }
+  pendingMessages.value = [...pendingMessages.value, pending]
+
+  await submitPending(pending)
+}
+
+async function retryFailedMessage(id: string): Promise<void> {
+  const entry = pendingMessages.value.find(p => p.id === id)
+  if (!entry || entry.status !== "failed" || sending.value) return
+  entry.status = "signing"
+  entry.errorMessage = undefined
+  // The chat may have moved on since the failed attempt — re-baseline.
+  entry.baselineIds = new Set(messages.value.map(m => m.id))
+  entry.requiredNewCount = pendingMessages.value.filter(p => p.id !== id && p.status !== "failed").length + 1
+  await submitPending(entry)
+}
+
+function discardFailedMessage(id: string): void {
+  const entry = pendingMessages.value.find(p => p.id === id)
+  if (!entry || entry.status !== "failed") return
+  pendingMessages.value = pendingMessages.value.filter(p => p.id !== id)
 }
 
 // ── Create & share bucket encryption key (setup timeline step 2) ───
@@ -993,7 +1035,8 @@ onMounted(async () => {
     <!-- Chat viewport -->
     <div class="ib-chat-viewport chat-viewport" role="log" aria-live="polite" aria-label="Indexed bucket messages">
       <div class="ib-container ib-chat-inner">
-        <ChatMessageEntry v-for="msg in chatMessages" :key="msg.id" :message="msg" :show-avatars="true" />
+        <ChatMessageEntry v-for="msg in chatMessages" :key="msg.id" :message="msg" :show-avatars="true"
+          @retry="retryFailedMessage(msg.id)" @discard="discardFailedMessage(msg.id)" />
 
         <!-- Empty bucket: setup timeline for admins / namespace managers -->
         <div v-if="showSetupTimeline" class="ib-setup-timeline">

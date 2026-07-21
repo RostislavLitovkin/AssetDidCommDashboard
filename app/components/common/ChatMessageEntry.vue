@@ -15,6 +15,8 @@ export interface ChatMessageProps {
   avatarUrl?: string
   /** Optimistic message still in flight — timestampLabel carries its send status. */
   pending?: boolean
+  /** Pending message whose send failed — shows Retry/Discard actions. */
+  failed?: boolean
 }
 
 /** Try to parse the body as a file-attachment envelope. */
@@ -55,6 +57,8 @@ const props = withDefaults(defineProps<{
 }>(), {
   showAvatars: false
 })
+
+const emit = defineEmits<{ retry: []; discard: [] }>()
 
 const settings = useSettingsStore()
 
@@ -136,7 +140,7 @@ function formatFileSize(base64: string): string {
       <p v-if="!message.outgoing" class="chat-sender">{{ message.senderLabel }}</p>
       <article class="chat-bubble" :class="[
         message.outgoing ? 'chat-bubble-outgoing' : 'chat-bubble-incoming',
-        { 'chat-bubble-pending': message.pending }
+        { 'chat-bubble-pending': message.pending, 'chat-bubble-failed': message.failed }
       ]">
 
         <!-- Attachment rendering -->
@@ -187,7 +191,13 @@ function formatFileSize(base64: string): string {
           </dl>
         </details>
       </article>
-      <p class="chat-timestamp" :class="{ 'chat-timestamp-pending': message.pending }">{{ message.timestampLabel }}</p>
+      <div v-if="message.failed" class="chat-timestamp-failed-row">
+        <span class="chat-timestamp chat-timestamp-failed">{{ message.timestampLabel }}</span>
+        <button type="button" class="chat-failed-action" @click="emit('retry')">Retry</button>
+        <span class="chat-failed-sep" aria-hidden="true">·</span>
+        <button type="button" class="chat-failed-action" @click="emit('discard')">Discard</button>
+      </div>
+      <p v-else class="chat-timestamp" :class="{ 'chat-timestamp-pending': message.pending }">{{ message.timestampLabel }}</p>
     </div>
   </div>
 </template>
@@ -372,6 +382,21 @@ function formatFileSize(base64: string): string {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.45; }
 }
+
+.chat-bubble-failed {
+  opacity: 1;
+  border-color: var(--status-error);
+  box-shadow: 0 3px 8px color-mix(in srgb, var(--status-error) 18%, transparent);
+}
+.chat-timestamp-failed-row { display: flex; align-items: center; gap: 6px; }
+.chat-timestamp-failed { color: var(--status-error); font-weight: 600; }
+.chat-failed-sep { font-size: 11px; line-height: 16px; color: var(--text-secondary); }
+.chat-failed-action {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font-size: 11px; line-height: 16px; font-weight: 600;
+  color: var(--color-primary); text-decoration: underline;
+}
+.chat-failed-action:hover { opacity: 0.75; }
 
 @media (max-width: 840px) {
   .chat-message { max-width: 100%; }
