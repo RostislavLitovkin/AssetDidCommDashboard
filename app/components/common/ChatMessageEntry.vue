@@ -13,6 +13,8 @@ export interface ChatMessageProps {
   timestampLabel: string
   debugEntries?: { key: string; value: string }[]
   avatarUrl?: string
+  /** Optimistic message still in flight — timestampLabel carries its send status. */
+  pending?: boolean
 }
 
 /** Try to parse the body as a file-attachment envelope. */
@@ -132,7 +134,10 @@ function formatFileSize(base64: string): string {
     </div>
     <div class="chat-message">
       <p v-if="!message.outgoing" class="chat-sender">{{ message.senderLabel }}</p>
-      <article class="chat-bubble" :class="message.outgoing ? 'chat-bubble-outgoing' : 'chat-bubble-incoming'">
+      <article class="chat-bubble" :class="[
+        message.outgoing ? 'chat-bubble-outgoing' : 'chat-bubble-incoming',
+        { 'chat-bubble-pending': message.pending }
+      ]">
 
         <!-- Attachment rendering -->
         <template v-if="attachment">
@@ -182,7 +187,7 @@ function formatFileSize(base64: string): string {
           </dl>
         </details>
       </article>
-      <p class="chat-timestamp">{{ message.timestampLabel }}</p>
+      <p class="chat-timestamp" :class="{ 'chat-timestamp-pending': message.pending }">{{ message.timestampLabel }}</p>
     </div>
   </div>
 </template>
@@ -357,6 +362,16 @@ function formatFileSize(base64: string): string {
 .chat-debug-item dd { margin: 0; color: var(--text-primary); white-space: pre-wrap; }
 
 .chat-timestamp { margin: 0; font-size: 11px; line-height: 16px; color: var(--text-secondary); }
+
+.chat-bubble-pending { opacity: 0.85; }
+.chat-timestamp-pending {
+  font-style: italic;
+  animation: chat-pending-pulse 1.4s ease-in-out infinite;
+}
+@keyframes chat-pending-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
 
 @media (max-width: 840px) {
   .chat-message { max-width: 100%; }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { fetchIndexedBucketDetail, fetchIndexedMessagesByTag, fetchIndexedNamespaceManagers, type IndexedBucket, type IndexedMessage, type IndexedBucketMember, type IndexedBucketViewer } from "../../../services/indexer/subqueryClient"
+import { fetchIndexedBucketDetail, fetchIndexedMessages, fetchIndexedMessagesByTag, fetchIndexedNamespaceManagers, type IndexedBucket, type IndexedMessage, type IndexedBucketMember, type IndexedBucketViewer } from "../../../services/indexer/subqueryClient"
 import { DidCommRepository, type ExtrinsicUpdate } from "../../../services/papi/didCommRepository"
 import { ProfileClient } from "../../../services/profile/profileClient"
 import { findViewersWithoutKeyAccess } from "../../../services/messages/keySharingCoverage"
@@ -11,7 +11,7 @@ import { hexToU8a } from "@polkadot/util"
 import { useAddress } from "../../../composables/useAddress"
 import { useWallet } from "../../../composables/useWallet"
 import * as jose from "jose"
-import { computed, nextTick, onMounted, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useNuxtApp, useRoute, useRuntimeConfig } from "nuxt/app"
 import { useOperationsStore } from "../../../stores/operations"
 import { useSessionStore } from "../../../stores/session"
@@ -113,6 +113,34 @@ const blockTimestamps = ref<Record<number, string>>({})
 const sendText = ref("")
 const sendError = ref("")
 const sending = ref(false)
+
+// ── Optimistic outgoing messages ───────────────────────────────────
+// A pending message is rendered as a normal outgoing bubble whose timestamp
+// slot shows the send status until the indexer picks the message up.
+type PendingStatus = "signing" | "submitting" | "processing" | "finalizing" | "indexing"
+
+const pendingStatusLabels: Record<PendingStatus, string> = {
+  signing: "signing…",
+  submitting: "submitting…",
+  processing: "processing…",
+  finalizing: "finalizing…",
+  indexing: "indexing…"
+}
+
+interface PendingOutgoingMessage {
+  id: string
+  body: string
+  attachment?: ChatMessageAttachment
+  status: PendingStatus
+  senderAddress: string
+  /** Indexed message ids that existed when the send started. */
+  baselineIds: Set<string>
+  /** How many new own messages must appear before this one counts as indexed
+   *  (covers earlier sends that were still in flight when this one started). */
+  requiredNewCount: number
+}
+
+const pendingMessages = ref<PendingOutgoingMessage[]>([])
 const creatingKey = ref(false)
 const createKeyError = ref("")
 const pendingAttachment = ref<{ file: File; dataUrl: string } | null>(null)
@@ -152,7 +180,8 @@ const viewerRecipients = computed(() => {
 
 const keyStepActive = computed(() => memberCount.value >= 2)
 const showSetupTimeline = computed(() =>
-  !loading.value && !error.value && Boolean(bucket.value) && !messages.value.length && canManageBucket.value
+  !loading.value && !error.value && Boolean(bucket.value) && !messages.value.length
+  && !pendingMessages.value.length && canManageBucket.value
 )
 
 const addMemberUrl = computed(() => {
@@ -205,7 +234,7 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
   // Sort messages chronologically so oldest is at the top, newest at the bottom
   const sortedMessages = [...messages.value].sort((a, b) => a.createdBlock - b.createdBlock)
 
-  return sortedMessages.map(m => {
+  const entries = sortedMessages.map(m => {
     const payload = decryptedById.value[m.id] ?? payloadById.value[m.id]
     const payloadBody = payload ? summarize(payload) ?? payload : undefined
     const body = payloadBody ?? m.description ?? m.ipfsContent ?? `Message #${m.messageId}`
@@ -251,6 +280,28 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
       debugEntries,
     }
   })
+
+  // Optimistic in-flight messages sit at the bottom, newest last. Once the
+  // indexed copy of a pending message lands in `messages`, the pending bubble
+  // is hidden immediately so the message never renders twice while the
+  // tracker finishes reloading.
+  for (const p of pendingMessages.value) {
+    const indexedOwn = messages.value
+      .filter(m => !p.baselineIds.has(m.id) && addressesEqual(m.contributor, p.senderAddress)).length
+    if (indexedOwn >= p.requiredNewCount) continue
+    entries.push({
+      id: p.id,
+      body: p.body,
+      outgoing: true,
+      senderLabel: "You",
+      senderAddress: p.senderAddress,
+      attachment: p.attachment,
+      timestampLabel: pendingStatusLabels[p.status],
+      pending: true
+    })
+  }
+
+  return entries
 })
 
 // ── Load everything via GraphQL ────────────────────────────────────
@@ -538,6 +589,74 @@ function removeAttachment() {
   pendingAttachment.value = null
 }
 
+function updatePendingStatus(id: string, status: PendingStatus): void {
+  const entry = pendingMessages.value.find(p => p.id === id)
+  if (entry) entry.status = status
+}
+
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+
+// Stops in-flight trackers from polling and mutating state after navigation.
+let pageDisposed = false
+onBeforeUnmount(() => { pageDisposed = true })
+
+function parseHeaderNumber(header: unknown): number {
+  const number = (header as { number?: string } | null)?.number
+  return typeof number === "string" ? parseInt(number, 16) : NaN
+}
+
+// The repository resolves (and unsubscribes) at inBlock, so finalization is
+// tracked here by polling the finalized head until it reaches the inclusion block.
+async function waitForFinalization(inBlockHash: string | undefined): Promise<void> {
+  if (!inBlockHash) return
+  try {
+    const inclusionNumber = parseHeaderNumber(await $papiClient.rpc("chain_getHeader", [inBlockHash]))
+    if (!Number.isFinite(inclusionNumber)) return
+    const deadline = Date.now() + 90_000
+    while (!pageDisposed && Date.now() < deadline) {
+      const finalizedHash = await $papiClient.rpc("chain_getFinalizedHead") as string | null
+      if (finalizedHash) {
+        const finalizedNumber = parseHeaderNumber(await $papiClient.rpc("chain_getHeader", [finalizedHash]))
+        if (Number.isFinite(finalizedNumber) && finalizedNumber >= inclusionNumber) return
+      }
+      await sleep(3000)
+    }
+  } catch {
+    // Finalization tracking is best-effort; fall through to the indexing phase.
+  }
+}
+
+async function trackPendingMessage(pending: PendingOutgoingMessage, inBlockHash: string | undefined): Promise<void> {
+  const isNewOwnMessage = (m: IndexedMessage) =>
+    !pending.baselineIds.has(m.id) && addressesEqual(m.contributor, pending.senderAddress)
+
+  try {
+    await waitForFinalization(inBlockHash)
+    if (pageDisposed) return
+    updatePendingStatus(pending.id, "indexing")
+
+    let arrived = false
+    const deadline = Date.now() + 120_000
+    while (!pageDisposed && Date.now() < deadline) {
+      try {
+        const indexed = await fetchIndexedMessages(indexerUrl.value, bucketId.value)
+        if (indexed.filter(isNewOwnMessage).length >= pending.requiredNewCount) { arrived = true; break }
+      } catch {
+        // Transient indexer error — keep polling until the deadline.
+      }
+      await sleep(3000)
+    }
+
+    if (pageDisposed) return
+    await loadAll()
+    if (!arrived && messages.value.filter(isNewOwnMessage).length < pending.requiredNewCount) {
+      sendError.value = "Message submitted, but the indexer has not picked it up yet. Use Reload to check again."
+    }
+  } finally {
+    pendingMessages.value = pendingMessages.value.filter(p => p.id !== pending.id)
+  }
+}
+
 async function sendMessage() {
   sendError.value = ""
   const textPayload = sendText.value.trim()
@@ -550,6 +669,35 @@ async function sendMessage() {
   const savedText = sendText.value
   sendText.value = ""
   pendingAttachment.value = null
+
+  const senderAddress = session.accountAddress
+  const pending: PendingOutgoingMessage = {
+    id: `pending-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    body: attachment ? "" : textPayload,
+    attachment: attachment
+      ? {
+          contentType: attachment.file.type || "application/octet-stream",
+          fileName: attachment.file.name,
+          // readAsDataURL always yields "data:<type>;base64,<data>"
+          data: attachment.dataUrl.slice(attachment.dataUrl.indexOf(",") + 1)
+        }
+      : undefined,
+    status: "signing",
+    senderAddress,
+    baselineIds: new Set(messages.value.map(m => m.id)),
+    requiredNewCount: pendingMessages.value.length + 1
+  }
+  pendingMessages.value = [...pendingMessages.value, pending]
+
+  let inBlockHash: string | undefined
+  const onExtrinsicUpdate = (update: ExtrinsicUpdate): void => {
+    logExtrinsicUpdate(update)
+    if (update.stage === "submitted") updatePendingStatus(pending.id, "submitting")
+    else if (update.stage === "broadcast") updatePendingStatus(pending.id, "processing")
+    else if (update.stage === "inBlock") { inBlockHash = update.blockHash; updatePendingStatus(pending.id, "finalizing") }
+    else if (update.stage === "finalized") updatePendingStatus(pending.id, "indexing")
+  }
+
   try {
     let result
     if (attachment) {
@@ -557,17 +705,19 @@ async function sendMessage() {
       const fileBytes = new Uint8Array(await attachment.file.arrayBuffer())
       const fileJwe = await encryptOutgoing(fileBytes, { cty: fileContentType, filename: attachment.file.name })
       result = await didCommRepository.createFileMessage(
-        bucketId.value, fileJwe, fileContentType, session.accountAddress, logExtrinsicUpdate
+        bucketId.value, fileJwe, fileContentType, senderAddress, onExtrinsicUpdate
       )
     } else {
       const encrypted = await encryptOutgoing(textPayload)
       result = await didCommRepository.createMessage(
-        bucketId.value, encrypted, session.accountAddress, logExtrinsicUpdate
+        bucketId.value, encrypted, senderAddress, onExtrinsicUpdate
       )
     }
     operations.add("bucket_write", result.method, "success", `Message submitted: ${result.txHash}`)
-    await loadAll()
+    // The composer unlocks now; the bubble keeps reporting finalization/indexing.
+    void trackPendingMessage(pending, inBlockHash)
   } catch (e) {
+    pendingMessages.value = pendingMessages.value.filter(p => p.id !== pending.id)
     sendError.value = e instanceof Error ? e.message : "Unable to send"
     if (!sendText.value) sendText.value = savedText
     if (attachment) pendingAttachment.value = attachment
