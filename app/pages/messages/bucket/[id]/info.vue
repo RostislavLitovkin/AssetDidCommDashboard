@@ -1610,7 +1610,7 @@ const allMembers = computed<MemberEntry[]>(() => {
           </NuxtLink>
         </div>
         <p class="muted" style="margin: 0;">
-          Browse all files and images shared in this bucket. Files are displayed with their encrypted metadata.
+          Browse all files and images shared in this bucket in an infinite-scrolling gallery. Files are decrypted with your bucket key so you can preview and download them.
         </p>
       </div>
     </div>

@@ -261,6 +261,86 @@ export async function fetchFileMessages(
   return all
 }
 
+// -- Paged file messages (infinite scroll) --
+
+/** A single page of indexed messages plus the cursor needed to fetch the next one. */
+export interface MessagePage {
+  nodes: IndexedMessage[]
+  hasNextPage: boolean
+  endCursor: string | null
+}
+
+// Content-type discriminators shared with the message-sending path. A file message
+// carries a real MIME content type; text and key-sharing payloads use these reserved
+// values and are never treated as files.
+const TEXT_CONTENT_TYPE = "text/plain;charset=utf-8"
+const KEY_SHARING_CONTENT_TYPE = "application/didcomm-encrypted+json"
+const KEY_SHARING_MESSAGE_TAG = "didcomm/key-sharing-v1"
+
+/**
+ * True when an indexed message is a file/image attachment (not a text message or a
+ * key-sharing event). Mirrors the server-side filter so callers can guard against
+ * any unexpected rows.
+ */
+export function isFileMessage(message: Pick<IndexedMessage, "contentType" | "tag">): boolean {
+  if (message.tag === KEY_SHARING_MESSAGE_TAG) {
+    return false
+  }
+
+  const contentType = message.contentType?.trim()
+  return Boolean(contentType && contentType !== TEXT_CONTENT_TYPE && contentType !== KEY_SHARING_CONTENT_TYPE)
+}
+
+// Files only: a non-null contentType that is neither the text nor key-sharing reserved
+// value. Discriminating on contentType alone (rather than `tag != key-sharing`) avoids
+// the SQL trap where `tag <> 'x'` is NULL — and therefore falsey — for null-tagged
+// rows, which would silently drop legitimate files. Newest-first so recent files sit at
+// the top and scrolling down pulls older pages.
+const FILE_MESSAGES_PAGE_QUERY = `
+query FileMessagesPage($bucketId: String!, $first: Int, $after: Cursor) {
+  messages(
+    filter: {
+      bucketId: { equalTo: $bucketId },
+      contentType: { isNull: false, notIn: ["${TEXT_CONTENT_TYPE}", "${KEY_SHARING_CONTENT_TYPE}"] }
+    },
+    orderBy: [CREATED_BLOCK_DESC],
+    first: $first,
+    after: $after
+  ) {
+    nodes { id bucketId messageId contributor reference tag description contentType contentHash createdBlock ipfsContent }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+`
+
+/**
+ * Fetch one page of file messages for a bucket, newest-first, for infinite scroll.
+ * Returns the page nodes plus `{ hasNextPage, endCursor }` so the caller can advance.
+ */
+export async function fetchFileMessagesPage(
+  endpoint: string,
+  bucketId: string,
+  opts?: { first?: number; after?: string | null }
+): Promise<MessagePage> {
+  interface Raw {
+    messages: {
+      nodes: IndexedMessage[]
+      pageInfo: { hasNextPage: boolean; endCursor: string | null }
+    }
+  }
+
+  const vars: Record<string, unknown> = { bucketId, first: opts?.first ?? 20 }
+  if (opts?.after) vars.after = opts.after
+
+  const data = await gql<Raw>(endpoint, FILE_MESSAGES_PAGE_QUERY, vars)
+
+  return {
+    nodes: data.messages.nodes,
+    hasNextPage: data.messages.pageInfo.hasNextPage,
+    endCursor: data.messages.pageInfo.endCursor
+  }
+}
+
 const MESSAGES_BY_TAG_QUERY = `
 query BucketMessagesByTag($bucketId: String!, $tag: String!, $after: Cursor) {
   messages(

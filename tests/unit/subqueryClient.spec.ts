@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
+  fetchFileMessagesPage,
   fetchIndexedBucketsByNamespace,
   fetchIndexedNamespaceManagers,
-  fetchIndexedNamespaces
+  fetchIndexedNamespaces,
+  isFileMessage
 } from "../../app/services/indexer/subqueryClient"
 
 function getRequestBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknown> {
@@ -102,5 +104,78 @@ describe("subqueryClient", () => {
 
     const body = getRequestBody(fetchMock) as { variables: { namespaceId: number } }
     expect(body.variables.namespaceId).toBe(7)
+  })
+
+  it("fetches a single page of file messages and returns its cursor info", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        data: {
+          messages: {
+            nodes: [
+              {
+                id: "3-5",
+                bucketId: "3",
+                messageId: 5,
+                contributor: "5Sender",
+                reference: "bafyFileCid",
+                tag: null,
+                description: null,
+                contentType: "image/png",
+                contentHash: null,
+                createdBlock: 7200,
+                ipfsContent: null
+              }
+            ],
+            pageInfo: { hasNextPage: true, endCursor: "cursor-2" }
+          }
+        }
+      })
+    }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const page = await fetchFileMessagesPage("https://indexer.example/graphql", "3", { first: 20, after: "cursor-1" })
+
+    expect(page.nodes).toHaveLength(1)
+    expect(page.nodes[0]).toMatchObject({ id: "3-5", contentType: "image/png" })
+    expect(page.hasNextPage).toBe(true)
+    expect(page.endCursor).toBe("cursor-2")
+
+    const body = getRequestBody(fetchMock) as { query: string; variables: { bucketId: string; first: number; after: string } }
+    expect(body.variables.bucketId).toBe("3")
+    expect(body.variables.first).toBe(20)
+    expect(body.variables.after).toBe("cursor-1")
+    // Newest-first ordering and server-side exclusion of text + key-sharing payloads.
+    expect(body.query).toContain("CREATED_BLOCK_DESC")
+    expect(body.query).toContain("text/plain;charset=utf-8")
+    expect(body.query).toContain("application/didcomm-encrypted+json")
+  })
+
+  it("defaults to first=20 and omits after on the initial file page", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        data: { messages: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } }
+      })
+    }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const page = await fetchFileMessagesPage("https://indexer.example/graphql", "3")
+
+    expect(page).toEqual({ nodes: [], hasNextPage: false, endCursor: null })
+
+    const body = getRequestBody(fetchMock) as { variables: Record<string, unknown> }
+    expect(body.variables.first).toBe(20)
+    expect("after" in body.variables).toBe(false)
+  })
+
+  it("isFileMessage keeps real files and rejects text and key-sharing messages", () => {
+    expect(isFileMessage({ contentType: "image/png", tag: null })).toBe(true)
+    expect(isFileMessage({ contentType: "application/pdf", tag: null })).toBe(true)
+    expect(isFileMessage({ contentType: "text/plain;charset=utf-8", tag: null })).toBe(false)
+    expect(isFileMessage({ contentType: "application/didcomm-encrypted+json", tag: null })).toBe(false)
+    // Key-sharing carries a real content type but must never count as a file.
+    expect(isFileMessage({ contentType: "image/png", tag: "didcomm/key-sharing-v1" })).toBe(false)
+    expect(isFileMessage({ contentType: null, tag: null })).toBe(false)
   })
 })
