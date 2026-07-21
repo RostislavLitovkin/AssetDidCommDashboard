@@ -7,6 +7,34 @@
   box-sizing: border-box;
 }
 
+/* --- App-like text selection --------------------------------------------
+   Kill the click-caret and drag-to-select on UI chrome so the app feels
+   native. Content the user genuinely copies opts back in below. Add the
+   `.selectable` class (or use <code>/<pre>) for any future content. */
+:root {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input,
+textarea,
+select,
+[contenteditable="true"],
+[contenteditable=""],
+code,
+pre,
+.selectable,
+.chat-bubble,            /* message text, debug keys/values, file names */
+.chat-sender,            /* sender label — can be a full SS58 address */
+.address-card,
+.address-value,          /* DID JSON, signatures, JWKs, SS58 addresses */
+.notification-title,
+.notification-message,
+.notification-meta {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 html,
 body {
   margin: 0;
