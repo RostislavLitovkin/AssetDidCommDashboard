@@ -4,7 +4,7 @@ import { DidCommRepository, type ExtrinsicUpdate } from "../../../services/papi/
 import { ProfileClient } from "../../../services/profile/profileClient"
 import { findViewersWithoutKeyAccess } from "../../../services/messages/keySharingCoverage"
 import { resolveAvatarUrls, toSs58Prefix42 } from "../../../services/profile/avatarResolver"
-import LoadingBar from "../../../components/common/LoadingBar.vue"
+import ParticleLoader from "../../../components/common/ParticleLoader.vue"
 import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } from "../../../components/common/ChatMessageEntry.vue"
 import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, Check } from "lucide-vue-next"
 import { hexToU8a } from "@polkadot/util"
@@ -1075,7 +1075,7 @@ onMounted(async () => {
     </header>
 
     <div class="ib-container">
-      <LoadingBar v-if="loading" label="Querying SubQuery indexer..." style="flex-shrink:0;" />
+      <ParticleLoader v-if="loading" label="Querying SubQuery indexer..." style="flex-shrink:0;" />
       <p v-if="error" class="ib-error">{{ error }}</p>
 
       <!-- Admin-only: some viewers are missing from the latest key-sharing message -->
@@ -1256,14 +1256,14 @@ onMounted(async () => {
           </button>
         </div>
 
-        <LoadingBar v-if="loadingWalletAccounts" label="Loading wallets..." />
+        <ParticleLoader v-if="loadingWalletAccounts" label="Loading wallets..." />
 
         <div v-else-if="walletAccounts.length" class="stack" style="max-height: 300px; overflow: auto; gap: 8px">
           <button v-for="account in walletAccounts" :key="account.address" class="btn" type="button"
             :disabled="selectingWallet"
             style="display: flex; justify-content: space-between; align-items: center; text-align: left"
             @click="selectWalletAccount(account.address)">
-            <LoadingBar v-if="selectingWallet" label="" style="min-width: 0" />
+            <ParticleLoader v-if="selectingWallet" size="inline" label="Connecting wallet" style="min-width: 0" />
             <span v-else class="stack" style="gap: 2px; min-width: 0; flex: 1">
               <strong>{{ account.name }}</strong>
               <span class="muted" style="font-size: 12px">{{ account.address.slice(0, 10) }}...{{

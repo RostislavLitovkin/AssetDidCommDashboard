@@ -7,7 +7,7 @@ import {
 } from "../../../../services/indexer/subqueryClient"
 import BucketFileCard from "../../../../components/common/BucketFileCard.vue"
 import type { ChatMessageAttachment } from "../../../../components/common/ChatMessageEntry.vue"
-import LoadingBar from "../../../../components/common/LoadingBar.vue"
+import ParticleLoader from "../../../../components/common/ParticleLoader.vue"
 import { Paperclip, ArrowLeft } from "lucide-vue-next"
 import * as jose from "jose"
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
@@ -339,7 +339,7 @@ onBeforeUnmount(() => {
       <div class="ib-container files-grid">
         <!-- Initial load: a single centered indicator, no double bars -->
         <div v-if="initialLoading" class="files-loading">
-          <LoadingBar label="Loading files..." />
+          <ParticleLoader size="page" label="Loading files..." />
         </div>
 
         <template v-else>
@@ -371,7 +371,7 @@ onBeforeUnmount(() => {
 
         <!-- Infinite-scroll sentinel + paging feedback -->
         <div ref="sentinel" class="files-sentinel">
-          <LoadingBar v-if="loadingPage && !initialLoading" label="Loading more files..." />
+          <ParticleLoader v-if="loadingPage && !initialLoading" label="Loading more files..." />
           <div v-else-if="error && fileCards.length" class="files-page-error">
             <span>{{ error }}</span>
             <button type="button" class="btn" @click="retry">Retry</button>

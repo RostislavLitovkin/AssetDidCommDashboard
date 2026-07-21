@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { DidCommRepository, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
 import WalletConnectPrompt from "../../../../components/common/WalletConnectPrompt.vue"
-import LoadingBar from "../../../../components/common/LoadingBar.vue"
+import ParticleLoader from "../../../../components/common/ParticleLoader.vue"
 import { ShieldAlert } from "lucide-vue-next"
 import { computed, onMounted, ref } from "vue"
 import { useNuxtApp, useRoute } from "nuxt/app"
@@ -164,7 +164,7 @@ onMounted(async () => {
 
       <template v-else>
         <!-- Manager check loading -->
-        <LoadingBar v-if="managersLoading" label="Checking namespace permissions..." />
+        <ParticleLoader v-if="managersLoading" label="Checking namespace permissions..." />
 
         <!-- Not a manager warning -->
         <div v-else-if="!isManager" class="not-manager-notice">

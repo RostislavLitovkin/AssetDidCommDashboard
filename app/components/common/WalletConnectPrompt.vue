@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue"
 import { Link, Wallet } from "lucide-vue-next"
-import LoadingBar from "./LoadingBar.vue"
+import ParticleLoader from "./ParticleLoader.vue"
 import { useWallet } from "../../composables/useWallet"
 
 const props = withDefaults(
@@ -91,7 +91,7 @@ async function selectWallet(address: string): Promise<void> {
           </button>
         </div>
 
-        <LoadingBar v-if="loadingWallet" label="Loading wallets..." />
+        <ParticleLoader v-if="loadingWallet" label="Loading wallets..." />
 
         <div v-else-if="walletAccounts.length" class="stack" style="max-height: 300px; overflow: auto; gap: 8px">
           <button
@@ -103,7 +103,7 @@ async function selectWallet(address: string): Promise<void> {
             style="display: flex; justify-content: space-between; align-items: center; text-align: left"
             @click="selectWallet(account.address)"
           >
-            <LoadingBar v-if="selectingWallet" label="" style="min-width: 0" />
+            <ParticleLoader v-if="selectingWallet" size="inline" label="Connecting wallet" style="min-width: 0" />
             <span v-else class="stack" style="gap: 2px; min-width: 0; flex: 1">
               <strong>{{ account.name }}</strong>
               <span class="muted" style="font-size: 12px">{{ account.address.slice(0, 10) }}...{{ account.address.slice(-10) }}</span>

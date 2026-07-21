@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { DidRecord } from "~/app/types/did"
-import LoadingBar from "../common/LoadingBar.vue"
+import ParticleLoader from "../common/ParticleLoader.vue"
 
 const props = defineProps<{
   loading: boolean
@@ -19,7 +19,7 @@ const emit = defineEmits<{ refresh: [] }>()
       </button>
     </div>
 
-    <LoadingBar v-if="loading" label="Refreshing DID record..." />
+    <ParticleLoader v-if="loading" label="Refreshing DID record..." />
 
     <template v-if="didRecord">
       <div class="row" style="align-items: center">

@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import LoadingBar from "../../components/common/LoadingBar.vue"
 import SkeletonCard from "../../components/common/SkeletonCard.vue"
 import WalletConnectPrompt from "../../components/common/WalletConnectPrompt.vue"
 import { computed, onMounted, ref, watch } from "vue"

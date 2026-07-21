@@ -2,7 +2,6 @@
 import { DidCommRepository, type BucketMemberRole, type BucketMessage, type BucketRecord, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
 import { ProfileClient } from "../../../../services/profile/profileClient"
 import type { Profile } from "../../../../types/profile"
-import LoadingBar from "../../../../components/common/LoadingBar.vue"
 import SkeletonCard from "../../../../components/common/SkeletonCard.vue"
 import { useAddress } from "../../../../composables/useAddress"
 import { Trash2, File } from "lucide-vue-next"

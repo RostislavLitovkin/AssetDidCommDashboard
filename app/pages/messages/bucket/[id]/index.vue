@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { DidCommRepository, type BucketMessage, type BucketRecord, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
-import LoadingBar from "../../../../components/common/LoadingBar.vue"
+import ParticleLoader from "../../../../components/common/ParticleLoader.vue"
 import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } from "../../../../components/common/ChatMessageEntry.vue"
 import { Paperclip, X as XIcon, SendHorizontal } from "lucide-vue-next"
 import { useAddress } from "../../../../composables/useAddress"
@@ -1602,7 +1602,7 @@ onMounted(async () => {
       </div>
     </div>
 
-    <LoadingBar v-if="messagesLoading || bucketLoading" label="Loading..." style="flex-shrink: 0;" />
+    <ParticleLoader v-if="messagesLoading || bucketLoading" label="Loading..." style="flex-shrink: 0;" />
     <p v-if="bucketError" style="margin: 12px 18px 0; color: var(--status-error); flex-shrink: 0;">{{ bucketError }}</p>
     <p v-if="messagesError" style="margin: 12px 18px 0; color: var(--status-error); flex-shrink: 0;">{{ messagesError }}</p>
 

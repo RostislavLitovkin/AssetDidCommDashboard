@@ -6,7 +6,6 @@ import {
   type IndexedBucketWithCounts
 } from "../../../services/indexer/subqueryClient"
 import { DidCommRepository } from "../../../services/papi/didCommRepository"
-import LoadingBar from "../../../components/common/LoadingBar.vue"
 import SkeletonCard from "../../../components/common/SkeletonCard.vue"
 import WalletConnectPrompt from "../../../components/common/WalletConnectPrompt.vue"
 import { Trash2, UserPlus, Users } from "lucide-vue-next"
