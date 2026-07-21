@@ -313,12 +313,11 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="files-page ib-custom-page">
-    <!-- Header -->
     <header class="buckets-header ib-header-row">
       <div class="ib-container ib-header-inner">
         <div class="row ib-header-left">
-          <div class="stack" style="gap: 2px">
-            <h3 class="ib-title">Bucket Files</h3>
+          <div class="stack">
+            <h3 class="ib-title">Files</h3>
           </div>
         </div>
       </div>
