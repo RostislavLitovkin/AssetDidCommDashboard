@@ -273,7 +273,10 @@ function formatFileSize(base64: string): string {
 }
 .chat-row-outgoing .chat-message { align-items: flex-end; }
 
-.chat-sender { margin: 0; font-size: 12px; line-height: 16px; font-weight: 600; color: var(--color-primary); }
+/* Sender labels can be full SS58 addresses — one unbreakable word. `anywhere`
+   (unlike break-word) also shrinks the flex min-content size, so the label can
+   never widen the chat column past its max-width on narrow screens. */
+.chat-sender { margin: 0; max-width: 100%; overflow-wrap: anywhere; font-size: 12px; line-height: 16px; font-weight: 600; color: var(--color-primary); }
 
 .chat-bubble {
   width: 100%; border-radius: 14px; padding: 12px 14px;

@@ -2,6 +2,7 @@
 import { fetchIndexedBucketDetail, fetchIndexedMessagesByTag, fetchIndexedNamespaceManagers, type IndexedBucket, type IndexedMessage, type IndexedBucketMember, type IndexedBucketViewer } from "../../../services/indexer/subqueryClient"
 import { DidCommRepository, type ExtrinsicUpdate } from "../../../services/papi/didCommRepository"
 import { ProfileClient } from "../../../services/profile/profileClient"
+import { findViewersWithoutKeyAccess } from "../../../services/messages/keySharingCoverage"
 import { resolveAvatarUrls, toSs58Prefix42 } from "../../../services/profile/avatarResolver"
 import LoadingBar from "../../../components/common/LoadingBar.vue"
 import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } from "../../../components/common/ChatMessageEntry.vue"
@@ -103,6 +104,10 @@ const decryptErrorById = ref<Record<string, string>>({})
 const attachmentById = ref<Record<string, ChatMessageAttachment>>({})
 const activeSecretJwk = ref<jose.JWK | null>(null)
 const keySharingError = ref("")
+const keySharingMessages = ref<IndexedMessage[]>([])
+// null = not yet checked (lazy, admins only); a number is the count of viewers
+// whose X25519 key is missing from the latest key-sharing message.
+const viewersMissingKeyCount = ref<number | null>(null)
 const blockTimestamps = ref<Record<number, string>>({})
 
 const sendText = ref("")
@@ -273,13 +278,14 @@ async function loadAll() {
     }
 
     // 1. Fetch key-sharing messages by tag first
-    const keySharingMessages = await fetchIndexedMessagesByTag(url, bucketId.value, keySharingTag)
+    keySharingMessages.value = await fetchIndexedMessagesByTag(url, bucketId.value, keySharingTag)
+    viewersMissingKeyCount.value = null // data changed — the lazy viewer check must re-run
 
     // 2. Hydrate their payloads so we can decrypt them
-    await hydratePayloads(keySharingMessages)
+    await hydratePayloads(keySharingMessages.value)
 
     // 3. Decrypt all key-sharing messages (latest first) to find the active key
-    await decryptKeySharingFromMessages(keySharingMessages)
+    await decryptKeySharingFromMessages(keySharingMessages.value)
 
     // 4. Now hydrate all remaining message payloads
     await hydratePayloads(detail.messages)
@@ -733,6 +739,25 @@ async function createAndShareEncryptionKey(): Promise<void> {
   }
 }
 
+// ── Viewer key-access check (lazy, admins only) ────────────────────
+// Compares each viewer's X25519 key against the recipient kids of the latest
+// key-sharing JWE. Purely structural — needs no decryption capability.
+async function checkViewerKeyAccess(): Promise<void> {
+  const latest = keySharingMessages.value[keySharingMessages.value.length - 1]
+  if (!latest) return // no key shared yet — the setup timeline covers that case
+
+  if (payloadById.value[latest.id] === undefined) await hydratePayloads([latest])
+  const payload = payloadById.value[latest.id]
+  if (!payload) return
+
+  const missing = findViewersWithoutKeyAccess(payload, viewerRecipients.value.map(r => r.x25519))
+  if (missing !== null) viewersMissingKeyCount.value = missing.length
+}
+
+watch([loading, connectedAdmin], ([isLoading, isAdmin]) => {
+  if (!isLoading && isAdmin && viewersMissingKeyCount.value === null) void checkViewerKeyAccess()
+})
+
 // ── Utility ────────────────────────────────────────────────────────
 function summarize(payload: string): string | undefined {
   const p = parseJson(payload)
@@ -757,9 +782,9 @@ watch(() => chatMessages.value.length, () => scrollToBottom())
 watch(() => settings.x25519SecretJwk, async () => {
   const url = indexerUrl.value
   if (!url) return
-  const keySharingMessages = await fetchIndexedMessagesByTag(url, bucketId.value, keySharingTag)
-  await hydratePayloads(keySharingMessages)
-  await decryptKeySharingFromMessages(keySharingMessages)
+  keySharingMessages.value = await fetchIndexedMessagesByTag(url, bucketId.value, keySharingTag)
+  await hydratePayloads(keySharingMessages.value)
+  await decryptKeySharingFromMessages(keySharingMessages.value)
   await decryptMessages(messages.value)
   await hydrateAttachments(messages.value)
 }, { deep: true })
@@ -796,6 +821,23 @@ onMounted(async () => {
     <div class="ib-container">
       <LoadingBar v-if="loading" label="Querying SubQuery indexer..." style="flex-shrink:0;" />
       <p v-if="error" class="ib-error">{{ error }}</p>
+
+      <!-- Admin-only: some viewers are missing from the latest key-sharing message -->
+      <div v-if="!loading && connectedAdmin && viewersMissingKeyCount" class="ib-key-status ib-key-warning"
+        role="alert">
+        <ShieldAlert :size="18" class="ib-key-warning-icon" />
+        <span class="ib-key-warning-text">
+          {{ viewersMissingKeyCount }} {{ viewersMissingKeyCount === 1 ? "viewer does" : "viewers do" }}
+          not have access to the encryption key.
+        </span>
+        <button class="btn btn-primary ib-key-warning-btn" type="button" :disabled="creatingKey"
+          @click="createAndShareEncryptionKey">
+          <span v-if="creatingKey" class="ib-tl-btn-spinner" aria-hidden="true"></span>
+          <KeyRound v-else :size="14" />
+          {{ creatingKey ? "Regenerating..." : "Regenerate Encryption Key" }}
+        </button>
+      </div>
+      <p v-if="createKeyError && viewersMissingKeyCount" class="ib-error">{{ createKeyError }}</p>
     </div>
 
     <!-- Chat viewport -->
@@ -1225,7 +1267,7 @@ onMounted(async () => {
 
 /* Key status */
 .ib-key-status {
-  margin: 4px 0 8px;
+  margin: 8px 0 0px;
   padding: 8px 14px;
   border-radius: 8px;
   font-size: 13px;
@@ -1241,12 +1283,40 @@ onMounted(async () => {
   border-color: color-mix(in srgb, var(--color-primary) 25%, transparent);
 }
 
+.ib-key-warning {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 14px;
+}
+
+.ib-key-warning-icon {
+  flex-shrink: 0;
+}
+
+.ib-key-warning-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.ib-key-warning-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
 /* Chat Viewport: Matches reference chat-viewport */
 .ib-chat-viewport {
   flex: 1;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  /* Never horizontally scrollable: overflow-y alone would compute overflow-x
+     to auto, turning any over-wide message into a horizontal scrollbar. */
+  overflow-x: hidden;
   background: transparent;
   overscroll-behavior: contain;
   min-height: 0;
