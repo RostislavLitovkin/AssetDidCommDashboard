@@ -11,7 +11,7 @@ import { hexToU8a } from "@polkadot/util"
 import { useAddress } from "../../../composables/useAddress"
 import { useWallet } from "../../../composables/useWallet"
 import * as jose from "jose"
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue"
 import { useNuxtApp, useRoute, useRuntimeConfig } from "nuxt/app"
 import { useOperationsStore } from "../../../stores/operations"
 import { useSessionStore } from "../../../stores/session"
@@ -102,7 +102,23 @@ const payloadErrorById = ref<Record<string, string>>({})
 const decryptedById = ref<Record<string, string>>({})
 const decryptErrorById = ref<Record<string, string>>({})
 const attachmentById = ref<Record<string, ChatMessageAttachment>>({})
-const activeSecretJwk = ref<jose.JWK | null>(null)
+
+// Every bucket key we could recover from key-sharing messages, sorted
+// chronologically. Messages are decrypted with the key of their era (the most
+// recent key shared before them); sending always uses the latest key.
+interface BucketKeyEntry {
+  createdBlock: number
+  messageId: number
+  jwk: jose.JWK
+  key: Awaited<ReturnType<typeof jose.importJWK>>
+}
+// shallowRef: entries hold WebCrypto CryptoKey objects, which must not be
+// wrapped in reactive proxies.
+const bucketKeyEntries = shallowRef<BucketKeyEntry[]>([])
+const activeSecretJwk = computed<jose.JWK | null>(() => {
+  const entries = bucketKeyEntries.value
+  return entries.length ? entries[entries.length - 1]!.jwk : null
+})
 const keySharingError = ref("")
 const keySharingMessages = ref<IndexedMessage[]>([])
 // null = not yet checked (lazy, admins only); a number is the count of viewers
@@ -410,7 +426,7 @@ function parseJson(s: string): unknown { try { return JSON.parse(s) } catch { re
 
 async function decryptKeySharingFromMessages(keySharingMessages: IndexedMessage[]) {
   keySharingError.value = ""
-  activeSecretJwk.value = null
+  bucketKeyEntries.value = []
 
   if (!keySharingMessages.length) {
     keySharingError.value = "No key-sharing message found"
@@ -420,37 +436,89 @@ async function decryptKeySharingFromMessages(keySharingMessages: IndexedMessage[
   const secretJwk = settings.x25519SecretJwk
   if (!secretJwk) { keySharingError.value = "Load X25519 secret in sidebar to decrypt"; return }
 
-  // Try from latest to earliest to find the most recent working key
-  const reversed = [...keySharingMessages].reverse()
-  for (const ksMsg of reversed) {
+  // Decrypt every key-sharing message we can: rotations replace the bucket
+  // key, so older messages need the older keys.
+  const readerKey = await jose.importJWK(secretJwk as jose.JWK, "ECDH-ES+A256KW")
+  const entries: BucketKeyEntry[] = []
+
+  await Promise.all(keySharingMessages.map(async ksMsg => {
     const raw = payloadById.value[ksMsg.id]
-    if (!raw?.trim()) continue
+    if (!raw?.trim()) return
 
     try {
       const parsed = parseJson(raw)
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue
-      const key = await jose.importJWK(secretJwk as jose.JWK, "ECDH-ES+A256KW")
-      const { plaintext } = await jose.generalDecrypt(parsed as jose.GeneralJWE, key)
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return
+      const { plaintext } = await jose.generalDecrypt(parsed as jose.GeneralJWE, readerKey)
       const decoded = new TextDecoder().decode(plaintext)
       const inner = parseJson(decoded)
-      if (inner && typeof inner === "object" && !Array.isArray(inner)) {
-        const keys = Array.isArray((inner as Record<string, unknown>).keys) ? (inner as Record<string, unknown>).keys as unknown[] : []
-        for (const k of keys) { if (isX25519Secret(k)) { activeSecretJwk.value = { ...k, use: "enc" }; break } }
+      if (!inner || typeof inner !== "object" || Array.isArray(inner)) return
+      const keys = Array.isArray((inner as Record<string, unknown>).keys) ? (inner as Record<string, unknown>).keys as unknown[] : []
+      for (const k of keys) {
+        if (isX25519Secret(k)) {
+          const jwk: jose.JWK = { ...k, use: "enc" }
+          entries.push({
+            createdBlock: ksMsg.createdBlock,
+            messageId: ksMsg.messageId,
+            jwk,
+            key: await jose.importJWK(jwk, "ECDH-ES+A256KW")
+          })
+          break
+        }
       }
-      if (activeSecretJwk.value) return // found a working key
     } catch {
-      // This key-sharing message didn't decrypt, try the next one
+      // Not addressed to us (e.g. shared before we became a viewer) — skip.
     }
+  }))
+
+  entries.sort((a, b) => a.createdBlock - b.createdBlock || a.messageId - b.messageId)
+  bucketKeyEntries.value = entries
+
+  if (!entries.length) {
+    keySharingError.value = "Could not decrypt any key-sharing message"
+  }
+}
+
+// The key that was current when the message was written: the most recent
+// key-sharing entry strictly before it (by block, then on-chain messageId for
+// same-block ordering). Falls back to the earliest known key for messages
+// older than anything we could decrypt.
+function keyEntryForMessage(m: IndexedMessage): BucketKeyEntry | null {
+  const entries = bucketKeyEntries.value
+  let match: BucketKeyEntry | null = null
+  for (const entry of entries) {
+    const sharedBefore = entry.createdBlock < m.createdBlock
+      || (entry.createdBlock === m.createdBlock && entry.messageId < m.messageId)
+    if (sharedBefore) match = entry
+  }
+  return match ?? entries[0] ?? null
+}
+
+// Decrypts with the message's era key first, then falls back to the remaining
+// keys (newest first) — defensive against share/rotation edge cases.
+async function decryptCompactWithEraKey(m: IndexedMessage, compactJwe: string): Promise<jose.CompactDecryptResult> {
+  const entries = bucketKeyEntries.value
+  const primary = keyEntryForMessage(m)
+  const candidates: BucketKeyEntry[] = primary ? [primary] : []
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i]!
+    if (entry !== primary) candidates.push(entry)
   }
 
-  keySharingError.value = "Could not decrypt any key-sharing message"
+  let lastError: unknown = new Error("No decrypted bucket key available. Decrypt key-sharing first.")
+  for (const candidate of candidates) {
+    try {
+      return await jose.compactDecrypt(compactJwe, candidate.key)
+    } catch (e) {
+      lastError = e
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Decrypt failed")
 }
 
 async function decryptMessages(msgs: IndexedMessage[]) {
   const nextD: Record<string, string> = {}
   const nextE: Record<string, string> = {}
-  const sk = activeSecretJwk.value
-  if (!sk || !isX25519Secret(sk)) { decryptedById.value = {}; decryptErrorById.value = {}; return }
+  if (!bucketKeyEntries.value.length) { decryptedById.value = {}; decryptErrorById.value = {}; return }
 
   await Promise.all(msgs.map(async m => {
     if (m.tag === keySharingTag) return
@@ -460,8 +528,7 @@ async function decryptMessages(msgs: IndexedMessage[]) {
     const t = p.trim()
     if (!looksLikeCompactJwe(t)) { nextD[m.id] = p; return }
     try {
-      const key = await jose.importJWK(sk as jose.JWK, "ECDH-ES+A256KW")
-      const { plaintext } = await jose.compactDecrypt(t, key)
+      const { plaintext } = await decryptCompactWithEraKey(m, t)
       nextD[m.id] = new TextDecoder().decode(plaintext)
     } catch (e) {
       nextE[m.id] = e instanceof Error ? e.message : "Decrypt failed"
@@ -495,7 +562,6 @@ function bytesToBase64(bytes: Uint8Array): string {
 async function hydrateAttachments(msgs: IndexedMessage[]) {
   const next: Record<string, ChatMessageAttachment> = { ...attachmentById.value }
   const nextE: Record<string, string> = { ...decryptErrorById.value }
-  const sk = activeSecretJwk.value
 
   await Promise.all(msgs.map(async m => {
     if (next[m.id]) return
@@ -503,10 +569,8 @@ async function hydrateAttachments(msgs: IndexedMessage[]) {
     const fileJwe = payloadById.value[m.id]?.trim()
     if (!fileJwe) return
     try {
-      if (!sk || !isX25519Secret(sk)) throw new Error("No decrypted bucket key available. Decrypt key-sharing first.")
       if (!looksLikeCompactJwe(fileJwe)) throw new Error("File payload is not an encrypted attachment")
-      const key = await jose.importJWK(sk as jose.JWK, "ECDH-ES+A256KW")
-      const { plaintext, protectedHeader } = await jose.compactDecrypt(fileJwe, key)
+      const { plaintext, protectedHeader } = await decryptCompactWithEraKey(m, fileJwe)
       next[m.id] = {
         contentType: m.contentType?.trim() || "application/octet-stream",
         fileName: typeof protectedHeader.filename === "string" ? protectedHeader.filename : undefined,
