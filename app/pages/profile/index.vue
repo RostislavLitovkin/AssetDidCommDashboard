@@ -125,7 +125,7 @@ onMounted(loadProfile)
 .profile-identity { display: flex; align-items: flex-end; gap: 16px; min-width: 0; margin-top: -48px; }
 .profile-avatar { width: 104px; height: 104px; border-radius: 50%; object-fit: cover; flex: 0 0 104px; border: 5px solid var(--surface-bg); background: var(--surface-bg); }
 .profile-title { min-width: 0; padding-bottom: 8px; }
-.profile-edit { margin-left: auto; margin-bottom: 8px; }
+.profile-edit { margin-top: 50px; margin-left: auto; margin-bottom: 8px; }
 .profile-name-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .profile-name-row h4 { font-size: 24px; line-height: 1.1; }
 .profile-badge { padding: 4px 10px; border-radius: 999px; background: color-mix(in srgb, var(--color-primary) 12%, var(--color-white)); color: var(--color-primary); font-size: 12px; font-weight: 600; }
