@@ -40,16 +40,6 @@ onMounted(loadProfile)
 
 <template>
   <main class="profile-page stack">
-    <div class="row buckets-header profile-header">
-      <div class="stack" style="gap: 4px">
-        <h3>Profile</h3>
-      </div>
-      <NuxtLink v-if="profile" class="btn btn-primary profile-action" to="/profile/edit">
-        <Pencil :size="16" />
-        Edit profile
-      </NuxtLink>
-    </div>
-
     <section v-if="!hasConnectedWallet" class="card profile-empty stack">
       <UserRound :size="28" aria-hidden="true" />
       <div class="stack" style="gap: 4px">
@@ -81,17 +71,19 @@ onMounted(loadProfile)
     </section>
 
     <section v-else class="profile-card">
-      <div class="profile-cover" aria-hidden="true"></div>
+      <img class="profile-cover" src="@/assets/Images/xcavatelandscape.png" alt="" aria-hidden="true" />
       <div class="profile-content stack">
         <div class="profile-identity">
           <img v-if="profile.profilePicture" class="profile-avatar" :src="profile.profilePicture" alt="Profile picture" />
           <img v-else class="profile-avatar" src="@/assets/Images/xcavateprofilepicture.png" alt="Profile picture" />
           <div class="profile-title stack" style="gap: 4px">
             <div class="profile-name-row">
-              <h4>{{ profile.nickname || "Unnamed profile" }}</h4>
-              <span class="profile-badge">Profile</span>
             </div>
           </div>
+          <NuxtLink class="btn btn-primary profile-action profile-edit" to="/profile/edit">
+            <Pencil :size="16" />
+            Edit profile
+          </NuxtLink>
         </div>
 
         <p v-if="profile.bio" class="profile-bio">{{ profile.bio }}</p>
@@ -107,7 +99,7 @@ onMounted(loadProfile)
             <dd>{{ formatAddress(profile.ss58Address) }}</dd>
           </div>
           <div v-if="profile.x25519Key">
-            <dt>X25519 public key</dt>
+            <dt>X25519 key</dt>
             <dd>{{ profile.x25519Key }}</dd>
           </div>
         </dl>
@@ -116,19 +108,24 @@ onMounted(loadProfile)
   </main>
 </template>
 
+<style>
+/* Full-bleed cover: uncap the shell container while the profile page is shown; the
+   cover itself escapes the shell's padding via negative margins (see .profile-cover) */
+.app-shell-content:has(.profile-page) .container { width: 100%; max-width: none; margin: 0; padding: 0; }
+</style>
+
 <style scoped>
-.profile-page { max-width: 760px; }
-.profile-header { justify-content: space-between; align-items: center; }
-.profile-header h3, .profile-header p, .profile-empty h4, .profile-empty p, .profile-card h4 { margin: 0; }
+.profile-empty h4, .profile-empty p, .profile-card h4 { margin: 0; }
 .profile-action { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
-.profile-empty { align-items: flex-start; padding: 28px; }
+.profile-empty { align-items: flex-start; padding: 28px; width: min(1100px, 100%); margin: 0 auto; }
 .profile-error { margin: 0; color: var(--status-error); }
-.profile-card { overflow: hidden; background: var(--surface-card); border: 1px solid var(--border-default); border-radius: 12px; }
-.profile-cover { height: 148px; background: var(--color-gray-400); border-bottom: 1px solid var(--border-default); }
-.profile-content { gap: 20px; padding: 0 20px 20px; }
+/* Escapes the app shell's content padding (24px desktop / 16px mobile) — cover only */
+.profile-cover { display: block; width: calc(100% + 48px); margin: -24px -24px 0; aspect-ratio: 3 / 1; object-fit: cover; border-bottom: 1px solid var(--border-default); }
+.profile-content { gap: 20px; padding: 0 24px 20px; width: min(1100px, 100%); margin: 0 auto; }
 .profile-identity { display: flex; align-items: flex-end; gap: 16px; min-width: 0; margin-top: -48px; }
-.profile-avatar { width: 104px; height: 104px; border-radius: 50%; object-fit: cover; flex: 0 0 104px; border: 5px solid var(--surface-card); background: var(--surface-card); }
+.profile-avatar { width: 104px; height: 104px; border-radius: 50%; object-fit: cover; flex: 0 0 104px; border: 5px solid var(--surface-bg); background: var(--surface-bg); }
 .profile-title { min-width: 0; padding-bottom: 8px; }
+.profile-edit { margin-left: auto; margin-bottom: 8px; }
 .profile-name-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .profile-name-row h4 { font-size: 24px; line-height: 1.1; }
 .profile-badge { padding: 4px 10px; border-radius: 999px; background: color-mix(in srgb, var(--color-primary) 12%, var(--color-white)); color: var(--color-primary); font-size: 12px; font-weight: 600; }
@@ -138,12 +135,13 @@ onMounted(loadProfile)
 .profile-details div { display: grid; grid-template-columns: minmax(140px, 0.45fr) minmax(0, 1fr); gap: 18px; align-items: center; min-height: 58px; padding: 12px 16px; border: 1px solid var(--border-default); border-radius: 8px; }
 .profile-details dt { color: var(--text-secondary); font-size: 14px; font-weight: 600; }
 .profile-details dd { margin: 0; font-size: 14px; font-weight: 600; }
+@media (max-width: 960px) {
+  .profile-cover { width: calc(100% + 32px); margin: -16px -16px 0; }
+}
 @media (max-width: 720px) {
-  .profile-header { flex-direction: row !important; }
   .profile-empty { padding: 20px; }
-  .profile-cover { height: 112px; }
-  .profile-content { padding: 0 14px 14px; }
-  .profile-identity { gap: 12px; margin-top: -40px; align-items: flex-end; }
+  .profile-content { padding: 0 20px 14px; }
+  .profile-identity { gap: 12px; margin-top: -40px; align-items: flex-end; flex-wrap: wrap; }
   .profile-avatar { width: 88px; height: 88px; flex-basis: 88px; }
   .profile-name-row h4 { font-size: 20px; }
   .profile-details div { grid-template-columns: 1fr; gap: 4px; }

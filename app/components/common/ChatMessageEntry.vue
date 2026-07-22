@@ -304,7 +304,6 @@ function formatFileSize(base64: string): string {
 }
 .chat-bubble-outgoing {
   background: var(--color-primary);
-  border: 1px solid color-mix(in srgb, var(--color-primary) 70%, #000);
 }
 
 .chat-bubble-outgoing .chat-text,
