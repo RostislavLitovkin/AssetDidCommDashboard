@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { Pencil, Plus, UserRound } from "lucide-vue-next"
 import { computed, onMounted, ref, watch } from "vue"
+import { useAddress } from "../../composables/useAddress"
 import { useWallet } from "../../composables/useWallet"
 import { ProfileClient } from "../../services/profile/profileClient"
 import type { Profile } from "../../types/profile"
 
 const wallet = useWallet()
+const { formatAddress } = useAddress()
 const profileClient = new ProfileClient()
 const profile = ref<Profile | null>(null)
 const loading = ref(false)
@@ -83,9 +85,7 @@ onMounted(loadProfile)
       <div class="profile-content stack">
         <div class="profile-identity">
           <img v-if="profile.profilePicture" class="profile-avatar" :src="profile.profilePicture" alt="Profile picture" />
-          <div v-else class="profile-avatar profile-avatar-placeholder" aria-hidden="true">
-            <UserRound :size="34" />
-          </div>
+          <img v-else class="profile-avatar" src="@/assets/Images/xcavateprofilepicture.png" alt="Profile picture" />
           <div class="profile-title stack" style="gap: 4px">
             <div class="profile-name-row">
               <h4>{{ profile.nickname || "Unnamed profile" }}</h4>
@@ -104,7 +104,7 @@ onMounted(loadProfile)
           </div>
           <div>
             <dt>Wallet address</dt>
-            <dd>{{ profile.ss58Address }}</dd>
+            <dd>{{ formatAddress(profile.ss58Address) }}</dd>
           </div>
           <div v-if="profile.x25519Key">
             <dt>X25519 public key</dt>
@@ -128,7 +128,6 @@ onMounted(loadProfile)
 .profile-content { gap: 20px; padding: 0 20px 20px; }
 .profile-identity { display: flex; align-items: flex-end; gap: 16px; min-width: 0; margin-top: -48px; }
 .profile-avatar { width: 104px; height: 104px; border-radius: 50%; object-fit: cover; flex: 0 0 104px; border: 5px solid var(--surface-card); background: var(--surface-card); }
-.profile-avatar-placeholder { display: grid; place-items: center; background: var(--color-gray-100); color: var(--color-primary); }
 .profile-title { min-width: 0; padding-bottom: 8px; }
 .profile-name-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .profile-name-row h4 { font-size: 24px; line-height: 1.1; }

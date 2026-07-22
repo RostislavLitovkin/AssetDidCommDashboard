@@ -8,6 +8,7 @@ import ParticleLoader from "../../../components/common/ParticleLoader.vue"
 import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } from "../../../components/common/ChatMessageEntry.vue"
 import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, Check } from "lucide-vue-next"
 import { hexToU8a } from "@polkadot/util"
+import { deriveBlockTimestampMs, parseTimestampU64, TIMESTAMP_STORAGE_KEY } from "../../../services/chain/blockTime"
 import { useAddress } from "../../../composables/useAddress"
 import { useWallet } from "../../../composables/useWallet"
 import * as jose from "jose"
@@ -208,40 +209,52 @@ const addMemberUrl = computed(() => {
 })
 
 // ── Block timestamp caching ────────────────────────────────────────
+// Substrate block headers carry no timestamp — it lives in the Timestamp::Now
+// storage item. Rather than querying every message block (each RPC opens its own
+// WebSocket), we fetch the real timestamp of the newest message block once and
+// derive the rest at a fixed 6s block time.
 let timestampLoading = false
-async function loadBlockTimestamp(blockNumber: number): Promise<string> {
-  const cached = blockTimestamps.value[blockNumber]
-  if (cached) return cached
+// Real on-chain timestamp (ms) for blocks we've actually queried, keyed by block
+// number. Kept separate from `blockTimestamps` (formatted display strings) so a
+// fetched anchor is never mistaken for a derived estimate.
+const anchorTimestampMsByBlock = new Map<number, number>()
 
+async function fetchBlockTimestampMs(blockNumber: number): Promise<number | null> {
   try {
-    const block = await $papiClient.rpc("chain_getBlock", [`0x${blockNumber.toString(16)}`])
-    const timestamp = block?.block?.header?.timestamp as number | undefined
-    if (timestamp) {
-      const date = new Date(timestamp)
-      const formatted = date.toLocaleString()
-      blockTimestamps.value[blockNumber] = formatted
-      return formatted
-    }
+    const blockHash = await $papiClient.rpc("chain_getBlockHash", [blockNumber]) as string | null
+    if (!blockHash) return null
+    const storage = await $papiClient.rpc("state_getStorage", [TIMESTAMP_STORAGE_KEY, blockHash]) as string | null
+    return parseTimestampU64(storage)
   } catch {
-    // Fallback to block number if timestamp lookup fails
+    return null
   }
-
-  // Fallback: estimate based on ~6 seconds per block from genesis
-  const genesisTime = 1690000000000 // Approximate genesis time (JULY 2023)
-  const estimatedTime = genesisTime + blockNumber * 6000
-  const date = new Date(estimatedTime)
-  return date.toLocaleString()
 }
 
 async function lazyLoadBlockTimestamps() {
   if (timestampLoading) return
   timestampLoading = true
   try {
-    // Load timestamps for all unique blocks in messages
-    const blocks = new Set(messages.value.map(m => m.createdBlock))
-    for (const blockNumber of blocks) {
-      await loadBlockTimestamp(blockNumber)
+    const blocks = Array.from(new Set(messages.value.map(m => m.createdBlock)))
+      .filter(n => Number.isFinite(n) && n > 0)
+    if (!blocks.length) return
+
+    // Anchor on the newest message block: fetch its real timestamp once, then
+    // derive every other block's time from it (1 block ≈ 6 seconds).
+    const anchorBlock = Math.max(...blocks)
+    let anchorMs = anchorTimestampMsByBlock.get(anchorBlock)
+    if (anchorMs === undefined) {
+      const fetched = await fetchBlockTimestampMs(anchorBlock)
+      if (fetched === null) return // leave the block-number fallback showing
+      anchorMs = fetched
+      anchorTimestampMsByBlock.set(anchorBlock, anchorMs)
     }
+
+    const next = { ...blockTimestamps.value }
+    for (const blockNumber of blocks) {
+      const estimatedMs = deriveBlockTimestampMs(anchorBlock, anchorMs, blockNumber)
+      next[blockNumber] = new Date(estimatedMs).toLocaleString()
+    }
+    blockTimestamps.value = next
   } finally {
     timestampLoading = false
   }
