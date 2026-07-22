@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from "vue"
+import { Check } from "lucide-vue-next"
 import { useSettingsStore } from "../stores/settings"
+import { PRIMARY_COLOR_OPTIONS } from "../services/theme/primaryColor"
 
 const settings = useSettingsStore()
 settings.initialize()
@@ -31,6 +33,10 @@ function saveSettings(): void {
   } catch (error) {
     saveError.value = error instanceof Error ? error.message : "Unable to save"
   }
+}
+
+function selectPrimaryColor(color: string): void {
+  settings.setPrimaryColor(color)
 }
 </script>
 
@@ -67,6 +73,30 @@ function saveSettings(): void {
       </label>
       <p v-if="saveError" class="error-text">{{ saveError }}</p>
       <p v-if="saveSuccess" class="success-text">{{ saveSuccess }}</p>
+    </section>
+
+    <section class="card stack" style="gap: 10px">
+      <h4 style="margin: 0; font-size: 16px;">Appearance</h4>
+      <span style="font-weight: 600; font-size: 14px;">Primary color</span>
+      <div class="swatch-row">
+        <button
+          v-for="option in PRIMARY_COLOR_OPTIONS"
+          :key="option.value"
+          type="button"
+          class="swatch"
+          :class="{ 'swatch-active': option.value === settings.primaryColor }"
+          :style="`--swatch-color: ${option.value}`"
+          :aria-label="option.name"
+          :aria-pressed="option.value === settings.primaryColor"
+          @click="selectPrimaryColor(option.value)"
+        >
+          <span class="swatch-chip" aria-hidden="true">
+            <Check v-if="option.value === settings.primaryColor" class="swatch-check" :size="14" />
+          </span>
+          <span>{{ option.name }}</span>
+        </button>
+      </div>
+      <span class="muted" style="font-size: 13px;">Sets the app's accent color. Applied immediately.</span>
     </section>
 
     <section class="card stack" style="gap: 10px">
@@ -113,6 +143,50 @@ function saveSettings(): void {
 .toggle-row input {
   width: 18px;
   height: 18px;
+}
+
+.swatch-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.swatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.swatch:hover,
+.swatch:focus-visible {
+  border-color: var(--swatch-color);
+}
+
+.swatch-active {
+  border-color: var(--swatch-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--swatch-color) 30%, transparent);
+}
+
+.swatch-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--swatch-color);
+}
+
+.swatch-check {
+  color: var(--color-white);
 }
 
 @media (max-width: 720px) {
