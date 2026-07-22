@@ -24,14 +24,18 @@ type Particle = {
   killDist: number
   travel: number
   dist: number
-  width: number
+  size: number
   maxAlpha: number
 }
 
-/** Flight time in "travels per second" so speed scales with the loader's size:
- *  a tiny inline loader and a full page loader take the same ~1s per particle. */
+/** Speed as a fraction of the area's half-diagonal per second, so motion scales
+ *  with the loader's size instead of with each particle's own path length —
+ *  otherwise particles spawning near the text would crawl. */
 const RATE_MIN = 0.35
 const RATE_MAX = 2.4
+/** Squares, in CSS px. */
+const SIZE_MIN = 1.5
+const SIZE_MAX = 4
 /** Particles per sqrt(px area). Tuned so `block` gets ~45 and `page` ~130. */
 const DENSITY = 0.22
 const COUNT_MIN = 6
@@ -58,6 +62,8 @@ let height = 0
 /** Half-extents of the rectangle particles must not enter, centred on the canvas. */
 let holdW = 8
 let holdH = 8
+/** Half the canvas diagonal — the reference length all speeds are scaled by. */
+let refDist = 100
 
 function readPrimaryColor(): string {
   if (!root.value) return rgb
@@ -77,23 +83,50 @@ function exitDistance(dirX: number, dirY: number, halfW: number, halfH: number):
 }
 
 function spawn(p: Particle): void {
-  const angle = Math.random() * Math.PI * 2
-  const dirX = Math.cos(angle)
-  const dirY = Math.sin(angle)
-  const kill = exitDistance(dirX, dirY, holdW, holdH)
-  const edge = exitDistance(dirX, dirY, width / 2, height / 2)
-  const inner = Math.min(kill * 1.25, edge * 0.9)
-  // sqrt keeps the spawn density even across the area instead of clustering
-  // near the centre, where a uniform radius would pile them up.
-  const start = inner + (edge - inner) * Math.sqrt(Math.random())
+  const halfW = width / 2
+  const halfH = height / 2
+  // Enough runway that a particle is never born already dissolving.
+  const minTravel = Math.max(8, refDist * 0.06)
 
-  p.dirX = dirX
-  p.dirY = dirY
+  // Sample uniformly over the rectangle and reject anything landing inside the
+  // keep-out box. Picking an angle first would bias towards the short axis,
+  // bunching particles above and below a wide label instead of spreading them.
+  let x = 0
+  let y = 0
+  let dist = 0
+  let kill = 0
+  let placed = false
+  for (let i = 0; i < 12; i++) {
+    x = (Math.random() * 2 - 1) * halfW
+    y = (Math.random() * 2 - 1) * halfH
+    dist = Math.hypot(x, y)
+    if (dist < 1) continue
+    kill = exitDistance(x / dist, y / dist, holdW, holdH)
+    if (dist - kill >= minTravel) {
+      placed = true
+      break
+    }
+  }
+  if (!placed) {
+    // Cramped area (the label nearly fills it): fall back to a ring just
+    // outside the keep-out box rather than looping forever.
+    const angle = Math.random() * Math.PI * 2
+    const dirX = Math.cos(angle)
+    const dirY = Math.sin(angle)
+    kill = exitDistance(dirX, dirY, holdW, holdH)
+    const edge = exitDistance(dirX, dirY, halfW, halfH)
+    dist = Math.max(Math.min(kill + minTravel, edge), kill + 1)
+    x = dirX * dist
+    y = dirY * dist
+  }
+
+  p.dirX = x / dist
+  p.dirY = y / dist
   p.killDist = kill
-  p.startDist = start
-  p.travel = Math.max(start - kill, 1)
-  p.dist = start
-  p.width = 1 + Math.random() * 1.6
+  p.startDist = dist
+  p.travel = Math.max(dist - kill, 1)
+  p.dist = dist
+  p.size = SIZE_MIN + Math.random() * (SIZE_MAX - SIZE_MIN)
   p.maxAlpha = 0.45 + Math.random() * 0.55
 }
 
@@ -131,6 +164,8 @@ function resize(): void {
   holdW = Math.min(holdW, width * 0.44)
   holdH = Math.min(holdH, height * 0.44)
 
+  refDist = Math.hypot(width, height) / 2
+
   rgb = readPrimaryColor()
 
   const target = Math.round(
@@ -145,7 +180,7 @@ function resize(): void {
       killDist: 0,
       travel: 1,
       dist: 0,
-      width: 1,
+      size: SIZE_MIN,
       maxAlpha: 1
     }
     spawn(p)
@@ -165,7 +200,6 @@ function render(now: number): void {
   if (dt <= 0) return
 
   ctx.clearRect(0, 0, width, height)
-  ctx.lineCap = "round"
 
   const cx = width / 2
   const cy = height / 2
@@ -177,7 +211,7 @@ function render(now: number): void {
       continue
     }
 
-    const speed = p.travel * (RATE_MIN + (RATE_MAX - RATE_MIN) * progress * progress)
+    const speed = refDist * (RATE_MIN + (RATE_MAX - RATE_MIN) * progress * progress)
     p.dist -= speed * dt
 
     const fadeIn = progress < FADE_IN_END ? progress / FADE_IN_END : 1
@@ -186,17 +220,9 @@ function render(now: number): void {
     const alpha = p.maxAlpha * fadeIn * fadeOut
     if (alpha <= 0.01) continue
 
-    // Trail length follows current speed, so particles stretch into streaks
-    // as they accelerate inward.
-    const trail = Math.min(speed * 0.045, p.startDist - p.dist + 1)
-    const tailDist = p.dist + trail
-
-    ctx.strokeStyle = `rgba(${rgb}, ${alpha})`
-    ctx.lineWidth = p.width
-    ctx.beginPath()
-    ctx.moveTo(cx + p.dirX * tailDist, cy + p.dirY * tailDist)
-    ctx.lineTo(cx + p.dirX * p.dist, cy + p.dirY * p.dist)
-    ctx.stroke()
+    const half = p.size / 2
+    ctx.fillStyle = `rgba(${rgb}, ${alpha})`
+    ctx.fillRect(cx + p.dirX * p.dist - half, cy + p.dirY * p.dist - half, p.size, p.size)
   }
 }
 
