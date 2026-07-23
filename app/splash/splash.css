@@ -1,7 +1,5 @@
-/* Poppins ExtraBold, subset to digits + % (Google Fonts), inlined as base64
-   so the splash percentage renders in the right font with no network request. */
 @font-face {
-  font-family: "PoppinsSplash";
+  font-family: "Xcavate";
   font-style: normal;
   font-weight: 800;
   font-display: block;
@@ -58,10 +56,10 @@
 }
 
 .rx-splash__pct {
-  font-family: "PoppinsSplash", "Xcavate", Inter, Arial, sans-serif;
+  font-family: "Xcavate", Inter, Arial, sans-serif;
   font-size: clamp(18px, 3vw, 24px);
   font-weight: 800;
   letter-spacing: 0.6px;
   font-variant-numeric: tabular-nums;
-  color: #57a0c5; /* --color-primary */
+  color: #000; /* --color-primary */
 }
