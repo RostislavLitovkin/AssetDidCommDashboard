@@ -337,6 +337,7 @@ function formatFileSize(base64: string): string {
   border-left: 3px solid var(--color-primary);
   padding-left: 12px;
   min-height: 44px;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.06);
 }
 
 .chat-bubble-outgoing {
