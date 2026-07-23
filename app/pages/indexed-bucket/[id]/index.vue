@@ -8,6 +8,7 @@ import ParticleLoader from "../../../components/common/ParticleLoader.vue"
 import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } from "../../../components/common/ChatMessageEntry.vue"
 import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, Check } from "lucide-vue-next"
 import { hexToU8a } from "@polkadot/util"
+import { deriveBlockTimestampMs, parseTimestampU64, TIMESTAMP_STORAGE_KEY } from "../../../services/chain/blockTime"
 import { useAddress } from "../../../composables/useAddress"
 import { useWallet } from "../../../composables/useWallet"
 import * as jose from "jose"
@@ -208,40 +209,52 @@ const addMemberUrl = computed(() => {
 })
 
 // ── Block timestamp caching ────────────────────────────────────────
+// Substrate block headers carry no timestamp — it lives in the Timestamp::Now
+// storage item. Rather than querying every message block (each RPC opens its own
+// WebSocket), we fetch the real timestamp of the newest message block once and
+// derive the rest at a fixed 6s block time.
 let timestampLoading = false
-async function loadBlockTimestamp(blockNumber: number): Promise<string> {
-  const cached = blockTimestamps.value[blockNumber]
-  if (cached) return cached
+// Real on-chain timestamp (ms) for blocks we've actually queried, keyed by block
+// number. Kept separate from `blockTimestamps` (formatted display strings) so a
+// fetched anchor is never mistaken for a derived estimate.
+const anchorTimestampMsByBlock = new Map<number, number>()
 
+async function fetchBlockTimestampMs(blockNumber: number): Promise<number | null> {
   try {
-    const block = await $papiClient.rpc("chain_getBlock", [`0x${blockNumber.toString(16)}`])
-    const timestamp = block?.block?.header?.timestamp as number | undefined
-    if (timestamp) {
-      const date = new Date(timestamp)
-      const formatted = date.toLocaleString()
-      blockTimestamps.value[blockNumber] = formatted
-      return formatted
-    }
+    const blockHash = await $papiClient.rpc("chain_getBlockHash", [blockNumber]) as string | null
+    if (!blockHash) return null
+    const storage = await $papiClient.rpc("state_getStorage", [TIMESTAMP_STORAGE_KEY, blockHash]) as string | null
+    return parseTimestampU64(storage)
   } catch {
-    // Fallback to block number if timestamp lookup fails
+    return null
   }
-
-  // Fallback: estimate based on ~6 seconds per block from genesis
-  const genesisTime = 1690000000000 // Approximate genesis time (JULY 2023)
-  const estimatedTime = genesisTime + blockNumber * 6000
-  const date = new Date(estimatedTime)
-  return date.toLocaleString()
 }
 
 async function lazyLoadBlockTimestamps() {
   if (timestampLoading) return
   timestampLoading = true
   try {
-    // Load timestamps for all unique blocks in messages
-    const blocks = new Set(messages.value.map(m => m.createdBlock))
-    for (const blockNumber of blocks) {
-      await loadBlockTimestamp(blockNumber)
+    const blocks = Array.from(new Set(messages.value.map(m => m.createdBlock)))
+      .filter(n => Number.isFinite(n) && n > 0)
+    if (!blocks.length) return
+
+    // Anchor on the newest message block: fetch its real timestamp once, then
+    // derive every other block's time from it (1 block ≈ 6 seconds).
+    const anchorBlock = Math.max(...blocks)
+    let anchorMs = anchorTimestampMsByBlock.get(anchorBlock)
+    if (anchorMs === undefined) {
+      const fetched = await fetchBlockTimestampMs(anchorBlock)
+      if (fetched === null) return // leave the block-number fallback showing
+      anchorMs = fetched
+      anchorTimestampMsByBlock.set(anchorBlock, anchorMs)
     }
+
+    const next = { ...blockTimestamps.value }
+    for (const blockNumber of blocks) {
+      const estimatedMs = deriveBlockTimestampMs(anchorBlock, anchorMs, blockNumber)
+      next[blockNumber] = new Date(estimatedMs).toLocaleString()
+    }
+    blockTimestamps.value = next
   } finally {
     timestampLoading = false
   }
@@ -258,15 +271,14 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
     const body = payloadBody ?? m.description ?? m.ipfsContent ?? `Message #${m.messageId}`
     const outgoing = Boolean(session.accountAddress && addressesEqual(m.contributor, session.accountAddress))
 
-    // Get sender nickname if available, fallback to address
+    // Key-sharing system notices always name the sender — by profile nickname
+    // when there is one, otherwise the address — never "You", even for the
+    // connected user's own key rotations.
     const senderAddress = m.contributor ?? ""
     const profile = profilesByAddress.value[senderAddress]
-    // Key-sharing system notices always name the sender (nickname or address),
-    // never "You" — even for the connected user's own key rotations.
-    let senderLabel = profile?.nickname || formatAddress(senderAddress)
-    if (m.tag !== keySharingTag && outgoing && !profile?.nickname) {
-      senderLabel = "You"
-    }
+    const senderLabel = m.tag !== keySharingTag && outgoing
+      ? "You"
+      : profile?.nickname || formatAddress(senderAddress)
 
     const debugEntries: { key: string; value: string }[] = []
     debugEntries.push({ key: "ID", value: m.id })
@@ -372,8 +384,8 @@ async function loadAll() {
     // 6. Resolve file attachments referenced by CID-pointer messages
     await hydrateAttachments(detail.messages)
 
-    // 7. Resolve sender profile pictures for incoming messages
-    await loadAvatars(detail.messages)
+    // 7. Resolve sender profiles (nicknames + pictures) for every message sender
+    await loadSenderProfiles([...detail.messages, ...keySharingMessages.value])
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Failed to load indexed data"
   } finally {
@@ -586,31 +598,27 @@ async function hydrateAttachments(msgs: IndexedMessage[]) {
 }
 
 // ── Sender avatars and profiles ────────────────────────────────────
-async function loadAvatars(msgs: IndexedMessage[]) {
-  // Incoming senders only: skip messages sent by the connected wallet.
-  const incoming = msgs
-    .map(m => m.contributor)
-    .filter(addr => Boolean(addr) && !(session.accountAddress && addressesEqual(addr, session.accountAddress)))
+// Resolves every sender, including the connected wallet: key-sharing notices
+// name their sender by nickname even when that sender is you. Avatars are only
+// rendered for incoming messages, so the extra own-profile lookup costs one
+// request and nothing else.
+async function loadSenderProfiles(msgs: IndexedMessage[]) {
+  const senders = Array.from(new Set(
+    msgs.map(m => m.contributor).filter((addr): addr is string => Boolean(addr))
+  ))
 
-  try {
-    // Fetch both avatars and profile data (including nicknames)
-    const uniqueAddresses = Array.from(new Set(incoming.filter(Boolean) as string[]))
-    await Promise.all(uniqueAddresses.map(async addr => {
-      try {
-        const profile = await profileClient.getProfile(toSs58Prefix42(addr))
-        if (profile) {
-          profilesByAddress.value[addr] = profile
-          if (profile.profilePicture) {
-            avatarUrlByAddress.value[addr] = profile.profilePicture
-          }
-        }
-      } catch {
-        // Non-fatal: unresolved senders fall back to the default avatar.
+  await Promise.all(senders.map(async addr => {
+    try {
+      const profile = await profileClient.getProfile(toSs58Prefix42(addr))
+      if (!profile) return
+      profilesByAddress.value[addr] = profile
+      if (profile.profilePicture) {
+        avatarUrlByAddress.value[addr] = profile.profilePicture
       }
-    }))
-  } catch {
-    // Non-fatal: unresolved senders fall back to the default avatar.
-  }
+    } catch {
+      // Non-fatal: unresolved senders fall back to the address and default avatar.
+    }
+  }))
 }
 
 // ── Send message (encrypted with latest key) ───────────────────────
@@ -1676,6 +1684,7 @@ onMounted(async () => {
   padding: 8px 14px;
   background: var(--surface-bg);
   border: 1px solid var(--border-default);
+  border-width: 2px;
   resize: none;
   line-height: 22px;
   font-size: 14px;
@@ -1684,8 +1693,8 @@ onMounted(async () => {
 
 .ib-composer-input:focus {
   border-color: var(--color-primary);
+  border-width: 2px;
   outline: none;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 20%, transparent);
 }
 
 .ib-composer-send {

@@ -1,4 +1,11 @@
 import { defineStore } from "pinia"
+import {
+  DEFAULT_PRIMARY_COLOR,
+  PRIMARY_COLORS,
+  PRIMARY_COLOR_STORAGE_KEY,
+  normalizePrimaryColor,
+  resolvePrimaryColor
+} from "../services/theme/primaryColor"
 
 const SETTINGS_STORAGE_KEY = "asset-didcomm.ss58-prefix"
 const X25519_SECRET_JWK_STORAGE_KEY = "asset-didcomm.x25519-secret-jwk"
@@ -119,13 +126,30 @@ function loadStoredNotificationsEnabled(): boolean {
   return raw === "true"
 }
 
+function loadStoredPrimaryColor(): string {
+  if (!import.meta.client) {
+    return DEFAULT_PRIMARY_COLOR
+  }
+
+  return resolvePrimaryColor(window.localStorage.getItem(PRIMARY_COLOR_STORAGE_KEY))
+}
+
+function applyPrimaryColor(value: string): void {
+  if (!import.meta.client) {
+    return
+  }
+
+  document.documentElement.style.setProperty("--color-primary", value)
+}
+
 export const useSettingsStore = defineStore("settings", {
   state: () => ({
     initialized: false,
     ss58Prefix: DEFAULT_SS58_PREFIX,
     x25519SecretJwk: null as X25519SecretJwk | null,
     showMessageDebug: false,
-    notificationsEnabled: false
+    notificationsEnabled: false,
+    primaryColor: DEFAULT_PRIMARY_COLOR
   }),
   actions: {
     initialize(): void {
@@ -137,6 +161,8 @@ export const useSettingsStore = defineStore("settings", {
       this.x25519SecretJwk = loadStoredX25519SecretJwk()
       this.showMessageDebug = loadStoredMessageDebug()
       this.notificationsEnabled = loadStoredNotificationsEnabled()
+      this.primaryColor = loadStoredPrimaryColor()
+      applyPrimaryColor(this.primaryColor)
       this.initialized = true
     },
     setSs58Prefix(prefix: number): void {
@@ -187,6 +213,19 @@ export const useSettingsStore = defineStore("settings", {
 
       if (import.meta.client) {
         window.localStorage.setItem(NOTIFICATIONS_ENABLED_STORAGE_KEY, String(value))
+      }
+    },
+    setPrimaryColor(value: string): void {
+      const nextColor = normalizePrimaryColor(value)
+      if (nextColor === undefined) {
+        throw new Error(`Primary color must be one of: ${PRIMARY_COLORS.join(", ")}.`)
+      }
+
+      this.primaryColor = nextColor
+      applyPrimaryColor(nextColor)
+
+      if (import.meta.client) {
+        window.localStorage.setItem(PRIMARY_COLOR_STORAGE_KEY, nextColor)
       }
     }
   }
