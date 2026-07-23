@@ -271,15 +271,14 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
     const body = payloadBody ?? m.description ?? m.ipfsContent ?? `Message #${m.messageId}`
     const outgoing = Boolean(session.accountAddress && addressesEqual(m.contributor, session.accountAddress))
 
-    // Get sender nickname if available, fallback to address
+    // Key-sharing system notices always name the sender — by profile nickname
+    // when there is one, otherwise the address — never "You", even for the
+    // connected user's own key rotations.
     const senderAddress = m.contributor ?? ""
     const profile = profilesByAddress.value[senderAddress]
-    // Key-sharing system notices always name the sender (nickname or address),
-    // never "You" — even for the connected user's own key rotations.
-    let senderLabel = profile?.nickname || formatAddress(senderAddress)
-    if (m.tag !== keySharingTag && outgoing && !profile?.nickname) {
-      senderLabel = "You"
-    }
+    const senderLabel = m.tag !== keySharingTag && outgoing
+      ? "You"
+      : profile?.nickname || formatAddress(senderAddress)
 
     const debugEntries: { key: string; value: string }[] = []
     debugEntries.push({ key: "ID", value: m.id })
@@ -385,8 +384,8 @@ async function loadAll() {
     // 6. Resolve file attachments referenced by CID-pointer messages
     await hydrateAttachments(detail.messages)
 
-    // 7. Resolve sender profile pictures for incoming messages
-    await loadAvatars(detail.messages)
+    // 7. Resolve sender profiles (nicknames + pictures) for every message sender
+    await loadSenderProfiles([...detail.messages, ...keySharingMessages.value])
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Failed to load indexed data"
   } finally {
@@ -599,31 +598,27 @@ async function hydrateAttachments(msgs: IndexedMessage[]) {
 }
 
 // ── Sender avatars and profiles ────────────────────────────────────
-async function loadAvatars(msgs: IndexedMessage[]) {
-  // Incoming senders only: skip messages sent by the connected wallet.
-  const incoming = msgs
-    .map(m => m.contributor)
-    .filter(addr => Boolean(addr) && !(session.accountAddress && addressesEqual(addr, session.accountAddress)))
+// Resolves every sender, including the connected wallet: key-sharing notices
+// name their sender by nickname even when that sender is you. Avatars are only
+// rendered for incoming messages, so the extra own-profile lookup costs one
+// request and nothing else.
+async function loadSenderProfiles(msgs: IndexedMessage[]) {
+  const senders = Array.from(new Set(
+    msgs.map(m => m.contributor).filter((addr): addr is string => Boolean(addr))
+  ))
 
-  try {
-    // Fetch both avatars and profile data (including nicknames)
-    const uniqueAddresses = Array.from(new Set(incoming.filter(Boolean) as string[]))
-    await Promise.all(uniqueAddresses.map(async addr => {
-      try {
-        const profile = await profileClient.getProfile(toSs58Prefix42(addr))
-        if (profile) {
-          profilesByAddress.value[addr] = profile
-          if (profile.profilePicture) {
-            avatarUrlByAddress.value[addr] = profile.profilePicture
-          }
-        }
-      } catch {
-        // Non-fatal: unresolved senders fall back to the default avatar.
+  await Promise.all(senders.map(async addr => {
+    try {
+      const profile = await profileClient.getProfile(toSs58Prefix42(addr))
+      if (!profile) return
+      profilesByAddress.value[addr] = profile
+      if (profile.profilePicture) {
+        avatarUrlByAddress.value[addr] = profile.profilePicture
       }
-    }))
-  } catch {
-    // Non-fatal: unresolved senders fall back to the default avatar.
-  }
+    } catch {
+      // Non-fatal: unresolved senders fall back to the address and default avatar.
+    }
+  }))
 }
 
 // ── Send message (encrypted with latest key) ───────────────────────
@@ -1689,6 +1684,7 @@ onMounted(async () => {
   padding: 8px 14px;
   background: var(--surface-bg);
   border: 1px solid var(--border-default);
+  border-width: 2px;
   resize: none;
   line-height: 22px;
   font-size: 14px;
@@ -1697,8 +1693,8 @@ onMounted(async () => {
 
 .ib-composer-input:focus {
   border-color: var(--color-primary);
+  border-width: 2px;
   outline: none;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 20%, transparent);
 }
 
 .ib-composer-send {
