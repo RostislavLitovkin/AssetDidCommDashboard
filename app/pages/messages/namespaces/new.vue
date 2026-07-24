@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { DidCommRepository, type ExtrinsicUpdate } from "../../../services/papi/didCommRepository"
 import WalletConnectPrompt from "../../../components/common/WalletConnectPrompt.vue"
+import PageHeader from "../../../components/common/PageHeader.vue"
 import { computed, ref } from "vue"
 import { useNuxtApp, useRuntimeConfig } from "nuxt/app"
 import { useOperationsStore } from "../../../stores/operations"
@@ -96,9 +97,7 @@ async function submitCreateNamespace(): Promise<void> {
 
 <template>
   <main class="stack namespace-create-page">
-    <div class="row buckets-header" style="justify-content: space-between; align-items: center">
-        <h3 style="margin: 0">Add namespace</h3>
-      </div>
+    <PageHeader title="Add namespace" />
     <WalletConnectPrompt
       v-if="!isWalletConnected"
       title="Connect Your Wallet"

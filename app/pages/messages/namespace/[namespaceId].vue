@@ -8,6 +8,7 @@ import {
 import { DidCommRepository } from "../../../services/papi/didCommRepository"
 import SkeletonCard from "../../../components/common/SkeletonCard.vue"
 import WalletConnectPrompt from "../../../components/common/WalletConnectPrompt.vue"
+import PageHeader from "../../../components/common/PageHeader.vue"
 import { Trash2, UserPlus, Users } from "lucide-vue-next"
 import { useAddress } from "../../../composables/useAddress"
 import { computed, onMounted, ref } from "vue"
@@ -134,14 +135,11 @@ onMounted(async () => {
 <template>
   <div class="stack">
     <section class="stack" aria-live="polite">
-      <div class="row buckets-header" style="justify-content: space-between; align-items: center">
-        <div class="stack" style="gap: 4px">
-          <h3 style="margin: 0">{{ namespaceDisplayName }}</h3>
-        </div>
-        <div class="row" style="gap: 8px">
+      <PageHeader :title="namespaceDisplayName">
+        <template #actions>
           <NuxtLink class="btn" :to="`/messages/bucket/create/${encodeURIComponent(namespaceId)}`">Add Bucket</NuxtLink>
-        </div>
-      </div>
+        </template>
+      </PageHeader>
 
       <SkeletonCard v-if="bucketsLoading" :count="3" :lines="2" />
 

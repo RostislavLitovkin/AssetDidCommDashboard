@@ -3,6 +3,7 @@ import { DidCommRepository, type BucketMemberRole, type BucketMessage, type Buck
 import { ProfileClient } from "../../../../services/profile/profileClient"
 import type { Profile } from "../../../../types/profile"
 import SkeletonCard from "../../../../components/common/SkeletonCard.vue"
+import PageHeader from "../../../../components/common/PageHeader.vue"
 import { useAddress } from "../../../../composables/useAddress"
 import { Trash2, File } from "lucide-vue-next"
 import { hexToU8a } from "@polkadot/util"
@@ -1477,13 +1478,7 @@ const allMembers = computed<MemberEntry[]>(() => {
   <div class="chat-custom-page">
     <div class="info-content-scroll stack">
       <section class="stack" aria-live="polite">
-        <div class="row buckets-header" style="justify-content: space-between; align-items: center">
-          <div class="row" style="gap: 12px; align-items: center">
-            <div class="stack" style="gap: 4px">
-              <h3 style="margin: 0">{{ bucketDisplayName }}</h3>
-            </div>
-          </div>
-        </div>
+        <PageHeader :title="bucketDisplayName" />
 
         <div class="card stack" style="gap: 16px;">
           <div class="row" style="justify-content: space-between; align-items: center">

@@ -5,6 +5,7 @@ import { DidCommRepository, type ExtrinsicUpdate } from "../../../../services/pa
 import { useOperationsStore } from "../../../../stores/operations"
 import { useSessionStore } from "../../../../stores/session"
 import WalletConnectPrompt from "../../../../components/common/WalletConnectPrompt.vue"
+import PageHeader from "../../../../components/common/PageHeader.vue"
 import { ShieldCheck, UserPlus } from "lucide-vue-next"
 
 const route = useRoute()
@@ -118,11 +119,7 @@ async function submitAddManager(): Promise<void> {
   <div class="chat-custom-page">
     <div class="info-content-scroll stack">
       <section class="stack" aria-live="polite">
-        <div class="row buckets-header" style="justify-content: space-between; align-items: center">
-          <div class="row" style="gap: 12px; align-items: center">
-            <h3 style="margin: 0">Add Manager</h3>
-          </div>
-        </div>
+        <PageHeader title="Add Manager" />
 
         <WalletConnectPrompt v-if="!session.accountAddress" title="Connect Wallet to Manage Namespace"
           description="You must connect your wallet to submit manager management extrinsics." />

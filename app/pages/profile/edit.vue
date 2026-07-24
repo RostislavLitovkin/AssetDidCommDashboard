@@ -6,6 +6,7 @@ import { useWallet } from "../../composables/useWallet"
 import { ProfileClient } from "../../services/profile/profileClient"
 import { resizeProfileImage } from "../../services/profile/imageResize"
 import { useSettingsStore } from "../../stores/settings"
+import PageHeader from "../../components/common/PageHeader.vue"
 
 const wallet = useWallet()
 const settings = useSettingsStore()
@@ -117,15 +118,16 @@ onMounted(() => {
 
 <template>
   <main class="profile-edit-page stack">
-    <div class="row buckets-header profile-edit-header">
-      <div class="stack" style="gap: 4px">
-        <h3>{{ profileExists ? "Edit profile" : "Create profile" }}</h3>
-        <p class="muted">Manage the public profile for your connected wallet.</p>
-      </div>
-      <NuxtLink class="btn icon-button" to="/profile" aria-label="Back to profile" title="Back to profile">
-        <ArrowLeft :size="18" />
-      </NuxtLink>
-    </div>
+    <PageHeader
+      :title="profileExists ? 'Edit profile' : 'Create profile'"
+      subtitle="Manage the public profile for your connected wallet."
+    >
+      <template #actions>
+        <NuxtLink class="btn icon-button" to="/profile" aria-label="Back to profile" title="Back to profile">
+          <ArrowLeft :size="18" />
+        </NuxtLink>
+      </template>
+    </PageHeader>
 
     <section v-if="!hasConnectedWallet" class="card profile-edit-empty stack">
       <UserRound :size="28" aria-hidden="true" />
@@ -178,8 +180,7 @@ onMounted(() => {
 
 <style scoped>
 .profile-edit-page { max-width: 760px; }
-.profile-edit-header { align-items: center; justify-content: space-between; }
-.profile-edit-header h3, .profile-edit-header p, .profile-edit-empty h4 { margin: 0; }
+.profile-edit-empty h4 { margin: 0; }
 .icon-button { display: inline-grid; place-items: center; width: 38px; height: 38px; padding: 0; }
 .profile-edit-empty { align-items: flex-start; padding: 28px; }
 .profile-form { gap: 18px; }
@@ -194,5 +195,5 @@ onMounted(() => {
 .profile-form-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
 .profile-save { display: inline-flex; align-items: center; gap: 8px; }
 .form-error { margin: 0; font-size: 14px; }
-@media (max-width: 720px) { .profile-edit-header { flex-direction: row !important; } .profile-form-actions { flex-direction: column-reverse; } .profile-form-actions .btn { width: 100%; justify-content: center; } }
+@media (max-width: 720px) { .profile-form-actions { flex-direction: column-reverse; } .profile-form-actions .btn { width: 100%; justify-content: center; } }
 </style>

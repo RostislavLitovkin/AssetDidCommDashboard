@@ -3,6 +3,7 @@ import { computed, ref } from "vue"
 import { Check } from "lucide-vue-next"
 import { useSettingsStore } from "../stores/settings"
 import { PRIMARY_COLOR_OPTIONS } from "../services/theme/primaryColor"
+import PageHeader from "../components/common/PageHeader.vue"
 
 const settings = useSettingsStore()
 settings.initialize()
@@ -42,13 +43,7 @@ function selectPrimaryColor(color: string): void {
 
 <template>
   <main class="stack">
-    <div class="row buckets-header" style="justify-content: space-between; align-items: center">
-      <div class="row" style="gap: 12px; align-items: center">
-        <div class="stack" style="gap: 4px">
-          <h3 style="margin: 0">Settings</h3>
-        </div>
-      </div>
-    </div>
+    <PageHeader title="Settings" />
 
     <section class="card stack" style="gap: 10px" aria-live="polite">
       <h4 style="margin: 0; font-size: 16px;">Chain Configuration</h4>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { DidCommRepository, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
 import WalletConnectPrompt from "../../../../components/common/WalletConnectPrompt.vue"
+import PageHeader from "../../../../components/common/PageHeader.vue"
 import ParticleLoader from "../../../../components/common/ParticleLoader.vue"
 import { ShieldAlert } from "lucide-vue-next"
 import { computed, onMounted, ref } from "vue"
@@ -153,11 +154,7 @@ onMounted(async () => {
 <template>
   <div class="chat-custom-page">
     <div class="info-content-scroll stack">
-      <div class="row buckets-header" style="justify-content: space-between; align-items: center">
-        <div class="stack" style="gap: 4px">
-          <h3 style="margin: 0">Add Bucket</h3>
-        </div>
-      </div>
+      <PageHeader title="Add Bucket" />
 
       <WalletConnectPrompt v-if="!isWalletConnected" title="Connect Your Wallet"
         description="Connect your wallet to create a bucket in this namespace." />

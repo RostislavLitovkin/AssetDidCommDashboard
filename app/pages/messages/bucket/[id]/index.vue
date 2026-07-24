@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { DidCommRepository, type BucketMessage, type BucketRecord, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
 import ParticleLoader from "../../../../components/common/ParticleLoader.vue"
+import PageHeader from "../../../../components/common/PageHeader.vue"
 import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } from "../../../../components/common/ChatMessageEntry.vue"
 import { Paperclip, X as XIcon, SendHorizontal } from "lucide-vue-next"
 import { useAddress } from "../../../../composables/useAddress"
@@ -1586,21 +1587,16 @@ onMounted(async () => {
 
 <template>
   <div class="chat-page-container" style="display: flex; flex-direction: column; height: 100%; flex: 1; background: #f7f8fa;">
-    <div class="row buckets-header" style="justify-content: space-between; align-items: center; flex-shrink: 0; padding: 16px 18px; background: transparent; border-bottom: none;">
-      <div class="row" style="gap: 12px; align-items: center">
-        <div class="stack" style="gap: 4px">
-          <h3 style="margin: 0">{{ bucketDisplayName }}</h3>
-        </div>
-      </div>
-      <div class="row" style="gap: 8px">
+    <PageHeader :title="bucketDisplayName" class="bucket-chat-header">
+      <template #actions>
         <button class="btn" type="button" :disabled="messagesLoading || bucketLoading" @click="loadBucketPage">
           Reload
         </button>
         <NuxtLink class="btn" :to="`/messages/bucket/${encodeURIComponent(bucketId)}/info`">
           Info
         </NuxtLink>
-      </div>
-    </div>
+      </template>
+    </PageHeader>
 
     <ParticleLoader v-if="messagesLoading || bucketLoading" label="Loading..." style="flex-shrink: 0;" />
     <p v-if="bucketError" style="margin: 12px 18px 0; color: var(--status-error); flex-shrink: 0;">{{ bucketError }}</p>
@@ -1653,6 +1649,12 @@ onMounted(async () => {
 <style scoped>
 .message-page {
   min-height: 0;
+}
+
+/* Align the shared header's content with the 18px-inset chat column below. */
+.bucket-chat-header :deep(.page-header__inner) {
+  padding-left: 18px;
+  padding-right: 18px;
 }
 
 .collapsible-card {

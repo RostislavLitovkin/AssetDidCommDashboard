@@ -8,6 +8,7 @@ import type { Profile } from "../../../../types/profile"
 import { useOperationsStore } from "../../../../stores/operations"
 import { useSessionStore } from "../../../../stores/session"
 import WalletConnectPrompt from "../../../../components/common/WalletConnectPrompt.vue"
+import PageHeader from "../../../../components/common/PageHeader.vue"
 
 const route = useRoute()
 const { $papiClient } = useNuxtApp()
@@ -315,13 +316,7 @@ async function submitAddMember(): Promise<void> {
   <div class="chat-custom-page">
     <div class="info-content-scroll stack">
     <section class="stack" aria-live="polite">
-      <div class="row buckets-header" style="justify-content: space-between; align-items: center">
-        <div class="row" style="gap: 12px; align-items: center">
-          <div class="stack" style="gap: 4px">
-            <h3 style="margin: 0">Add Member</h3>
-          </div>
-        </div>
-      </div>
+      <PageHeader title="Add Member" />
 
       <WalletConnectPrompt
         v-if="!session.accountAddress"

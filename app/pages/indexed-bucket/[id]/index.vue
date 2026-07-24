@@ -5,6 +5,7 @@ import { ProfileClient } from "../../../services/profile/profileClient"
 import { findViewersWithoutKeyAccess } from "../../../services/messages/keySharingCoverage"
 import { resolveAvatarUrls, toSs58Prefix42 } from "../../../services/profile/avatarResolver"
 import ParticleLoader from "../../../components/common/ParticleLoader.vue"
+import PageHeader from "../../../components/common/PageHeader.vue"
 import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } from "../../../components/common/ChatMessageEntry.vue"
 import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, Check } from "lucide-vue-next"
 import { hexToU8a } from "@polkadot/util"
@@ -1068,19 +1069,12 @@ onMounted(async () => {
 <template>
   <div class="chat-page-container ib-custom-page">
     <!-- Header -->
-    <header class="buckets-header ib-header-row">
-      <div class="ib-container ib-header-inner">
-        <div class="row ib-header-left">
-          <div class="stack" style="gap: 2px">
-            <h3 class="ib-title">{{ bucketDisplayName }}</h3>
-          </div>
-        </div>
-        <div class="row ib-header-actions">
-          <button class="btn" :disabled="loading" @click="loadAll">Reload</button>
-          <NuxtLink class="btn" :to="`/messages/bucket/${encodeURIComponent(bucketId)}/info`">Info</NuxtLink>
-        </div>
-      </div>
-    </header>
+    <PageHeader :title="bucketDisplayName" contained>
+      <template #actions>
+        <button class="btn" :disabled="loading" @click="loadAll">Reload</button>
+        <NuxtLink class="btn" :to="`/messages/bucket/${encodeURIComponent(bucketId)}/info`">Info</NuxtLink>
+      </template>
+    </PageHeader>
 
     <div class="ib-container">
       <ParticleLoader v-if="loading" label="Querying SubQuery indexer..." style="flex-shrink:0;" />
@@ -1349,59 +1343,6 @@ onMounted(async () => {
   margin: 0 auto;
   width: 100%;
   padding: 0 48px;
-}
-
-.ib-header-row {
-  background: transparent;
-  flex-shrink: 0;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
-}
-
-.ib-header-inner {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding-top: 16px;
-  padding-bottom: 16px;
-}
-
-.ib-header-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.ib-title {
-  margin: 10px 0;
-}
-
-.ib-subtitle-text {
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.ib-source-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  padding: 2px 8px;
-  border-radius: 999px;
-  flex-shrink: 0;
-  text-transform: uppercase;
-}
-
-.ib-header-actions {
-  display: flex;
-  gap: 8px;
-  flex-shrink: 0;
 }
 
 .ib-error {

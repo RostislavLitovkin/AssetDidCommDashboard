@@ -8,6 +8,7 @@ import {
 import BucketFileCard from "../../../../components/common/BucketFileCard.vue"
 import type { ChatMessageAttachment } from "../../../../components/common/ChatMessageEntry.vue"
 import ParticleLoader from "../../../../components/common/ParticleLoader.vue"
+import PageHeader from "../../../../components/common/PageHeader.vue"
 import { Paperclip, ArrowLeft } from "lucide-vue-next"
 import * as jose from "jose"
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
@@ -313,15 +314,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="files-page ib-custom-page">
-    <header class="buckets-header ib-header-row">
-      <div class="ib-container ib-header-inner">
-        <div class="row ib-header-left">
-          <div class="stack">
-            <h3 class="ib-title">Files</h3>
-          </div>
-        </div>
-      </div>
-    </header>
+    <PageHeader title="Files" contained />
 
     <div v-if="!initialLoading && (keyMissing || (!canDecrypt && fileCards.length))" class="ib-container">
       <p class="files-key-banner">
@@ -398,42 +391,6 @@ onBeforeUnmount(() => {
   margin: 0 auto;
   width: 100%;
   padding: 0 48px;
-}
-
-.ib-header-row {
-  background: transparent;
-  flex-shrink: 0;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
-}
-
-.ib-header-inner {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding-top: 16px;
-  padding-bottom: 16px;
-}
-
-.ib-header-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.ib-title {
-  margin: 10px 0;
-}
-
-.ib-subtitle {
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.ib-header-actions {
-  display: flex;
-  gap: 8px;
-  flex-shrink: 0;
 }
 
 .ib-error {

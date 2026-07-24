@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import SkeletonCard from "../../components/common/SkeletonCard.vue"
 import WalletConnectPrompt from "../../components/common/WalletConnectPrompt.vue"
+import PageHeader from "../../components/common/PageHeader.vue"
 import { computed, onMounted, ref, watch } from "vue"
 import { useNuxtApp, useRuntimeConfig } from "nuxt/app"
 import { useSessionStore } from "../../stores/session"
@@ -342,14 +343,11 @@ onMounted(() => {
   <div class="chat-custom-page">
     <div class="info-content-scroll stack">
     <section class="stack" aria-live="polite">
-      <div class="row buckets-header" style="justify-content: space-between; align-items: center">
-        <div class="stack" style="gap: 4px">
-          <h3 style="margin: 0">My messages</h3>
-        </div>
-        <div class="row" style="gap: 8px">
+      <PageHeader title="My messages">
+        <template #actions>
           <NuxtLink class="btn" :to="`/messages/bucket/create/${runtimeConfig.public.publicFreeCommunicationBucket}`">Add Bucket</NuxtLink>
-        </div>
-      </div>
+        </template>
+      </PageHeader>
 
       <WalletConnectPrompt
         v-if="!isWalletConnected"

@@ -261,51 +261,6 @@ select:focus-visible {
   }
 }
 
-/* Ensure header stays a single row (desktop-like) on small screens */
-@media (max-width: 720px) {
-  .buckets-header {
-    flex-direction: row !important;
-    align-items: center !important;
-    justify-content: space-between !important;
-  }
-
-  .buckets-header .row {
-    flex-direction: row !important;
-    align-items: center !important;
-  }
-}
-
-/* Keep header (title + add button) layout non-wrapping and truncate text on small screens */
-@media (max-width: 720px) {
-  .buckets-header {
-    width: 100%;
-  }
-
-  .buckets-header .stack {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-
-  .buckets-header h3 {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    margin: 0;
-  }
-
-  .buckets-header .row {
-    flex: 0 0 auto;
-    gap: 8px;
-    align-items: center;
-  }
-
-  .buckets-header .btn {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-}
-
 .notification-center {
   position: fixed;
   bottom: 16px;

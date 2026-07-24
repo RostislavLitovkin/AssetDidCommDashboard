@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { fetchIndexedNamespaces, type IndexedNamespace } from "../../services/indexer/subqueryClient"
 import SkeletonCard from "../../components/common/SkeletonCard.vue"
+import PageHeader from "../../components/common/PageHeader.vue"
 import { useRuntimeConfig } from "nuxt/app"
 import { useKeys } from "../../composables/useKeys"
 import { useOperationsStore } from "../../stores/operations"
@@ -80,15 +81,14 @@ onMounted(async () => {
 <template>
   <div class="stack">
     <section class="stack" aria-live="polite">
-      <div class="row buckets-header" style="justify-content: space-between; align-items: center">
-        <h3 style="margin: 0">Namespaces</h3>
-        <div class="row" style="gap: 8px">
+      <PageHeader title="Namespaces">
+        <template #actions>
           <NuxtLink v-if="isWalletConnected" class="btn" to="/messages/namespaces/new">Add Namespace</NuxtLink>
           <button class="btn" type="button" :disabled="namespacesLoading" @click="loadNamespaces">
             {{ namespacesLoading ? "Loading..." : "Reload" }}
           </button>
-        </div>
-      </div>
+        </template>
+      </PageHeader>
 
       <div v-if="namespacesLoading" class="stack" style="gap: 12px">
         <SkeletonCard :count="3" :lines="2" />

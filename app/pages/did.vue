@@ -3,6 +3,7 @@ import { Keyring } from "@polkadot/keyring"
 import { hexToU8a, u8aToHex } from "@polkadot/util"
 import { cryptoWaitReady, decodeAddress, encodeAddress, mnemonicGenerate } from "@polkadot/util-crypto"
 import { base64url } from "jose"
+import PageHeader from "../components/common/PageHeader.vue"
 import { computed } from "vue"
 import { ref } from "vue"
 import { useRuntimeConfig } from "nuxt/app"
@@ -1042,11 +1043,7 @@ const displayedDerivedDidAddress = computed(() => formatAddress(derivedDidAddres
 
 <template>
   <main class="container did-page stack">
-    <div class="row buckets-header" style="justify-content: space-between; align-items: center">
-      <div class="stack" style="gap: 4px">
-        <h3 style="margin: 0">DID Management</h3>
-      </div>
-    </div>
+    <PageHeader title="DID Management" />
 
     <section class="card stack">
       <div class="row section-header">
