@@ -2,6 +2,7 @@ import { defineStore } from "pinia"
 import {
   DEFAULT_PRIMARY_COLOR,
   PRIMARY_COLORS,
+  PRIMARY_COLOR_QUERY_KEY,
   PRIMARY_COLOR_STORAGE_KEY,
   normalizePrimaryColor,
   resolvePrimaryColor
@@ -126,6 +127,20 @@ function loadStoredNotificationsEnabled(): boolean {
   return raw === "true"
 }
 
+/**
+ * Reads `?primaryColor=` off the address bar rather than through `useRoute()`:
+ * `initialize()` is called from plugins, component setup and lifecycle hooks
+ * alike, and not all of those have a Nuxt context to resolve a route from.
+ */
+function loadQueryPrimaryColor(): string | undefined {
+  if (!import.meta.client) {
+    return undefined
+  }
+
+  const search = new URLSearchParams(window.location.search)
+  return normalizePrimaryColor(search.get(PRIMARY_COLOR_QUERY_KEY))
+}
+
 function loadStoredPrimaryColor(): string {
   if (!import.meta.client) {
     return DEFAULT_PRIMARY_COLOR
@@ -163,6 +178,7 @@ export const useSettingsStore = defineStore("settings", {
       this.notificationsEnabled = loadStoredNotificationsEnabled()
       this.primaryColor = loadStoredPrimaryColor()
       applyPrimaryColor(this.primaryColor)
+      this.applyQueryPrimaryColor(loadQueryPrimaryColor())
       this.initialized = true
     },
     setSs58Prefix(prefix: number): void {
@@ -227,6 +243,22 @@ export const useSettingsStore = defineStore("settings", {
       if (import.meta.client) {
         window.localStorage.setItem(PRIMARY_COLOR_STORAGE_KEY, nextColor)
       }
+    },
+    /**
+     * Applies a primary color handed over in the URL, overriding the saved
+     * preference. Missing or unknown values are ignored so a stray parameter
+     * never resets the color (and never throws — this runs during app startup).
+     * The value is persisted like an explicit pick, so the color also survives
+     * the in-app navigations that drop the parameter from the URL.
+     */
+    applyQueryPrimaryColor(value: unknown): void {
+      const nextColor = normalizePrimaryColor(Array.isArray(value) ? value[0] : value)
+
+      if (nextColor === undefined || nextColor === this.primaryColor) {
+        return
+      }
+
+      this.setPrimaryColor(nextColor)
     }
   }
 })

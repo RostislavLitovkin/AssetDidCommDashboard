@@ -6,6 +6,9 @@
 
 export const PRIMARY_COLOR_STORAGE_KEY = "asset-didcomm.primary-color"
 
+/** URL query parameter a host uses to brand the app, e.g. `?primaryColor=%23f7cb4d`. */
+export const PRIMARY_COLOR_QUERY_KEY = "primaryColor"
+
 export interface PrimaryColorOption {
   value: string
   name: string

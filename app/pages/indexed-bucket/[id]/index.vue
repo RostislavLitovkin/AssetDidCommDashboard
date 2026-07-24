@@ -1338,6 +1338,12 @@ onMounted(async () => {
   position: relative;
 }
 
+/* Kill PageHeader's vertical padding so no gap sits above the first message. */
+.chat-page-container .page-header__inner {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
 .ib-container {
   max-width: 1000px;
   margin: 0 auto;
@@ -1533,7 +1539,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding-top: 32px;
+  padding-top: 0;
   padding-bottom: 24px;
   flex: 1;
 }
