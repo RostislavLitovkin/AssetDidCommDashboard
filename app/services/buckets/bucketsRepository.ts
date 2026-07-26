@@ -1,11 +1,13 @@
 import { BucketsGraphqlClient } from "./bucketsApiClient"
-import { KEY_SHARING_CONTENT_TYPE, TEXT_CONTENT_TYPE, normalizeFixed32ByteKey } from "./valueCodecs"
+import { KEY_SHARING_CONTENT_TYPE, KEY_SHARING_MESSAGE_TAG, TEXT_CONTENT_TYPE, normalizeFixed32ByteKey, sha256HexUtf8 } from "./valueCodecs"
+import { PinataStorageAdapter } from "../storage/pinataStorageAdapter"
 import type {
   ApiBucket,
   ApiBucketWithMembers,
   ApiMessage,
   ApiNamespace,
   BucketDetail,
+  BucketMemberRole,
   BucketsRepositoryOptions,
   MessagePage,
   MyBucketSummary,
@@ -27,6 +29,7 @@ const MESSAGE_FIELDS =
 export class BucketsRepository {
   protected readonly client: BucketsGraphqlClient
   protected readonly options: BucketsRepositoryOptions
+  private namespaceIdByBucket = new Map<string, string>()
 
   constructor(options: BucketsRepositoryOptions) {
     this.options = options
@@ -547,6 +550,208 @@ export class BucketsRepository {
       }`,
       { namespaceId: namespaceId.trim(), bucketId: bucketId.trim(), newEncryptionKey: key },
       (d) => d.resumeWriting.id
+    )
+  }
+
+  /** Resolve (and cache) the namespace that owns `bucketId` — `write` needs both ids. */
+  private async resolveNamespaceId(bucketId: string): Promise<string> {
+    const cached = this.namespaceIdByBucket.get(bucketId)
+    if (cached) return cached
+    const bucket = await this.fetchBucket(bucketId)
+    if (!bucket) throw new Error(`Bucket ${bucketId} was not found`)
+    this.namespaceIdByBucket.set(bucketId, bucket.namespaceId)
+    return bucket.namespaceId
+  }
+
+  private async buildMessageInput(
+    content: string,
+    tag: string | undefined,
+    contentTypeOverride: string | undefined
+  ): Promise<Record<string, unknown>> {
+    const normalizedTag = tag?.trim() || undefined
+    const contentType =
+      contentTypeOverride?.trim() ||
+      (normalizedTag === KEY_SHARING_MESSAGE_TAG ? KEY_SHARING_CONTENT_TYPE : TEXT_CONTENT_TYPE)
+
+    const pinata = new PinataStorageAdapter(this.options.pinataConfig)
+    const cid = await pinata.upload(content)
+
+    return {
+      reference: cid,
+      tag: normalizedTag ?? null,
+      ipfsContent: content,
+      metadata: {
+        description: "",
+        contentType,
+        contentHash: await sha256HexUtf8(content),
+        properties: []
+      }
+    }
+  }
+
+  async createMessage(
+    bucketId: string,
+    message: string,
+    ownerAddress: string,
+    onUpdate?: OperationUpdateHandler,
+    tag?: string,
+    contentType?: string
+  ): Promise<MutationResult> {
+    const trimmedBucketId = bucketId.trim()
+    const trimmedMessage = message.trim()
+    if (!trimmedBucketId) throw new Error("Bucket id is required")
+    if (!trimmedMessage) throw new Error("Message is required")
+
+    const namespaceId = await this.resolveNamespaceId(trimmedBucketId)
+    const messageInput = await this.buildMessageInput(trimmedMessage, tag, contentType)
+
+    return this.runMutation<{ write: { id: string } }>(
+      "write",
+      ownerAddress,
+      onUpdate,
+      `mutation WriteMessage($namespaceId: BigInt!, $bucketId: BigInt!, $message: MessageInput!) {
+        write(namespaceId: $namespaceId, bucketId: $bucketId, message: $message) { id messageId }
+      }`,
+      { namespaceId, bucketId: trimmedBucketId, message: messageInput },
+      (d) => d.write.id
+    )
+  }
+
+  async createFileMessage(
+    bucketId: string,
+    fileJwe: string,
+    fileContentType: string,
+    ownerAddress: string,
+    onUpdate?: OperationUpdateHandler
+  ): Promise<MutationResult> {
+    const trimmedJwe = fileJwe.trim()
+    if (!trimmedJwe) throw new Error("File payload is required")
+    const contentType = fileContentType.trim() || "application/octet-stream"
+    return this.createMessage(bucketId, trimmedJwe, ownerAddress, onUpdate, undefined, contentType)
+  }
+
+  async rotateBucketKeyAndShare(
+    namespaceId: string,
+    bucketId: string,
+    newEncryptionKey: string,
+    tag: string,
+    message: string,
+    ownerAddress: string,
+    onUpdate?: OperationUpdateHandler
+  ): Promise<MutationResult> {
+    const key = normalizeFixed32ByteKey(newEncryptionKey.trim())
+    const messageInput = await this.buildMessageInput(message.trim(), tag, undefined)
+
+    return this.runMutation<{ write: { id: string } }>(
+      "rotateKey+write",
+      ownerAddress,
+      onUpdate,
+      `mutation RotateKeyAndShare($namespaceId: BigInt!, $bucketId: BigInt!, $newEncryptionKey: String!, $message: MessageInput!) {
+        rotateKey(namespaceId: $namespaceId, bucketId: $bucketId, newEncryptionKey: $newEncryptionKey) { id }
+        write(namespaceId: $namespaceId, bucketId: $bucketId, message: $message) { id messageId }
+      }`,
+      {
+        namespaceId: namespaceId.trim(),
+        bucketId: bucketId.trim(),
+        newEncryptionKey: key,
+        message: messageInput
+      },
+      (d) => d.write.id
+    )
+  }
+
+  async addBucketMemberWithRole(
+    role: BucketMemberRole,
+    namespaceId: string,
+    bucketId: string,
+    ss58Address: string,
+    x25519Key: string,
+    ownerAddress: string,
+    onUpdate?: OperationUpdateHandler
+  ): Promise<MutationResult> {
+    const viewerKey = normalizeFixed32ByteKey(x25519Key.trim())
+    const vars: Record<string, unknown> = {
+      namespaceId: namespaceId.trim(),
+      bucketId: bucketId.trim(),
+      viewerKey
+    }
+
+    if (role === "viewer") {
+      return this.runMutation<{ addViewer: { id: string } }>(
+        "addViewer",
+        ownerAddress,
+        onUpdate,
+        `mutation AddViewer($namespaceId: BigInt!, $bucketId: BigInt!, $viewerKey: String!) {
+          addViewer(namespaceId: $namespaceId, bucketId: $bucketId, viewer: $viewerKey) { id }
+        }`,
+        vars,
+        (d) => d.addViewer.id
+      )
+    }
+
+    const roleField = role === "admin" ? "addAdmin" : "addContributor"
+    const roleArg = role === "admin" ? "admin" : "contributor"
+    vars.subject = ss58Address.trim()
+
+    return this.runMutation<Record<string, { id: string }>>(
+      `${roleField}+addViewer`,
+      ownerAddress,
+      onUpdate,
+      `mutation AddMemberWithViewer($namespaceId: BigInt!, $bucketId: BigInt!, $subject: String!, $viewerKey: String!) {
+        ${roleField}(namespaceId: $namespaceId, bucketId: $bucketId, ${roleArg}: $subject) { id }
+        addViewer(namespaceId: $namespaceId, bucketId: $bucketId, viewer: $viewerKey) { id }
+      }`,
+      vars,
+      (d) => d[roleField]!.id
+    )
+  }
+
+  async removeBucketMemberRoles(
+    namespaceId: string,
+    bucketId: string,
+    memberAddress: string,
+    roles: BucketMemberRole[],
+    viewerKey: string | undefined,
+    ownerAddress: string,
+    onUpdate?: OperationUpdateHandler
+  ): Promise<MutationResult> {
+    const orderedRoles: BucketMemberRole[] = (["admin", "contributor", "viewer"] as const).filter(
+      (role) => roles.includes(role)
+    )
+    if (!orderedRoles.length) throw new Error("At least one role is required to remove a member")
+    if (orderedRoles.includes("viewer") && !viewerKey?.trim()) {
+      throw new Error("Viewer key is required to remove a viewer")
+    }
+
+    const fields: string[] = []
+    const varDefs: string[] = ["$namespaceId: BigInt!", "$bucketId: BigInt!"]
+    const vars: Record<string, unknown> = {
+      namespaceId: namespaceId.trim(),
+      bucketId: bucketId.trim()
+    }
+    if (orderedRoles.includes("admin") || orderedRoles.includes("contributor")) {
+      varDefs.push("$subject: String!")
+      vars.subject = memberAddress.trim()
+    }
+    if (orderedRoles.includes("admin")) {
+      fields.push("removeAdmin(namespaceId: $namespaceId, bucketId: $bucketId, admin: $subject)")
+    }
+    if (orderedRoles.includes("contributor")) {
+      fields.push("removeContributor(namespaceId: $namespaceId, bucketId: $bucketId, contributor: $subject)")
+    }
+    if (orderedRoles.includes("viewer")) {
+      varDefs.push("$viewerKey: String!")
+      vars.viewerKey = normalizeFixed32ByteKey(viewerKey!.trim())
+      fields.push("removeViewer(namespaceId: $namespaceId, bucketId: $bucketId, viewer: $viewerKey)")
+    }
+
+    return this.runMutation<Record<string, boolean>>(
+      orderedRoles.map((r) => `remove-${r}`).join("+"),
+      ownerAddress,
+      onUpdate,
+      `mutation RemoveMemberRoles(${varDefs.join(", ")}) {\n${fields.join("\n")}\n}`,
+      vars,
+      () => memberAddress.trim()
     )
   }
 }
