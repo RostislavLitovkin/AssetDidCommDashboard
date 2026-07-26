@@ -41,9 +41,9 @@ describe("BucketsGraphqlClient.query", () => {
 
   it("throws BucketsApiError with status on non-ok http", async () => {
     const client = new BucketsGraphqlClient(API, async () => jsonResponse({}, 500))
-    const err = await client.query("query { x }").catch((e) => e)
+    const err: unknown = await client.query("query { x }").catch((e: unknown) => e)
     expect(err).toBeInstanceOf(BucketsApiError)
-    expect(err.status).toBe(500)
+    expect((err as BucketsApiError).status).toBe(500)
   })
 
   it("throws when data is missing", async () => {
