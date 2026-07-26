@@ -21,6 +21,10 @@ export interface BucketDetail {
   viewers: string[]; messages: ApiMessage[]
 }
 export interface MessagePage { nodes: ApiMessage[]; hasNextPage: boolean; endCursor: string | null }
+export interface MyBucketSummary {
+  id: string; bucketId: string; namespaceId: string; name: string | null
+  isAdmin: boolean; isContributor: boolean; isViewer: boolean
+}
 export interface OperationUpdate { stage: "pending" | "success" | "error"; message: string }
 export type OperationUpdateHandler = (update: OperationUpdate) => void
 export interface MutationResult { id: string; method: string }

@@ -8,6 +8,7 @@ import type {
   BucketDetail,
   BucketsRepositoryOptions,
   MessagePage,
+  MyBucketSummary,
   OperationUpdateHandler
 } from "./types"
 
@@ -292,5 +293,66 @@ export class BucketsRepository {
       if (createdAt) result[String(id)] = createdAt
     })
     return result
+  }
+
+  async fetchMyBuckets(
+    address: string,
+    viewerKeyHex: string,
+    opts?: { first?: number; after?: string | null }
+  ): Promise<{ nodes: MyBucketSummary[]; totalCount: number; hasNextPage: boolean; endCursor: string | null }> {
+    type Node = {
+      id: string; bucketId: string; namespaceId: string; name: string | null
+      admins: Array<{ subjectId: string }>
+      contributors: Array<{ subjectId: string }>
+      viewers: Array<{ viewerId: string }>
+    }
+    const vars: Record<string, unknown> = {
+      address,
+      viewerKey: viewerKeyHex || " none",
+      first: opts?.first ?? 20
+    }
+    if (opts?.after) vars.after = opts.after
+
+    const data = await this.client.query<{ buckets: ConnectionPage<Node> & { totalCount: number } }>(
+      `query MyBuckets($address: String!, $viewerKey: String!, $first: Int!, $after: String) {
+        buckets(
+          first: $first
+          after: $after
+          order: [{ updatedAt: DESC }, { bucketId: ASC }]
+          where: {
+            or: [
+              { admins: { some: { subjectId: { eq: $address } } } }
+              { contributors: { some: { subjectId: { eq: $address } } } }
+              { viewers: { some: { viewerId: { eq: $viewerKey } } } }
+            ]
+          }
+        ) {
+          totalCount
+          nodes {
+            id bucketId namespaceId name
+            admins { subjectId }
+            contributors { subjectId }
+            viewers { viewerId }
+          }
+          pageInfo { hasNextPage endCursor }
+        }
+      }`,
+      vars
+    )
+
+    return {
+      totalCount: data.buckets.totalCount,
+      hasNextPage: data.buckets.pageInfo.hasNextPage,
+      endCursor: data.buckets.pageInfo.endCursor,
+      nodes: data.buckets.nodes.map((n) => ({
+        id: n.id,
+        bucketId: n.bucketId,
+        namespaceId: n.namespaceId,
+        name: n.name,
+        isAdmin: n.admins.some((a) => a.subjectId === address),
+        isContributor: n.contributors.some((c) => c.subjectId === address),
+        isViewer: Boolean(viewerKeyHex) && n.viewers.some((v) => v.viewerId === viewerKeyHex)
+      }))
+    }
   }
 }
