@@ -103,6 +103,16 @@ describe("rotateBucketKeyAndShare", () => {
     expect(requests[0]!.query).toContain("rotateKey")
     expect(requests[0]!.query).toContain("write")
   })
+
+  it("rejects when rotateKey result is missing", async () => {
+    const { repo } = makeRepo([
+      { data: { write: { id: "9-8", messageId: "8" } } }
+    ])
+
+    await expect(
+      repo.rotateBucketKeyAndShare("3", "9", "0x" + "ab".repeat(32), "didcomm/key-sharing-v1", "jwe", "5OWNER")
+    ).rejects.toThrow(/rotateKey reported no result/)
+  })
 })
 
 describe("addBucketMemberWithRole", () => {
@@ -149,5 +159,14 @@ describe("removeBucketMemberRoles", () => {
     await expect(
       repo.removeBucketMemberRoles("3", "9", "5X", ["viewer"], undefined, "5OWNER")
     ).rejects.toThrow(/viewer key/i)
+  })
+
+  it("rejects when a requested role removal reports false", async () => {
+    const { repo } = makeRepo([
+      { data: { removeContributor: false, removeViewer: true } }
+    ])
+    await expect(
+      repo.removeBucketMemberRoles("3", "9", "5X", ["contributor", "viewer"], "0x" + "cd".repeat(32), "5OWNER")
+    ).rejects.toThrow(/removeContributor reported no change/)
   })
 })

@@ -642,7 +642,7 @@ export class BucketsRepository {
     const key = normalizeFixed32ByteKey(newEncryptionKey.trim())
     const messageInput = await this.buildMessageInput(message.trim(), tag, undefined)
 
-    return this.runMutation<{ write: { id: string } }>(
+    return this.runMutation<{ rotateKey?: { id: string }; write: { id: string } }>(
       "rotateKey+write",
       ownerAddress,
       onUpdate,
@@ -656,7 +656,12 @@ export class BucketsRepository {
         newEncryptionKey: key,
         message: messageInput
       },
-      (d) => d.write.id
+      (d) => {
+        if (!d.rotateKey?.id) {
+          throw new Error("rotateKey reported no result — the key may not have been rotated")
+        }
+        return d.write.id
+      }
     )
   }
 
@@ -693,7 +698,7 @@ export class BucketsRepository {
     const roleArg = role === "admin" ? "admin" : "contributor"
     vars.subject = ss58Address.trim()
 
-    return this.runMutation<Record<string, { id: string }>>(
+    return this.runMutation<Record<string, { id: string } | undefined>>(
       `${roleField}+addViewer`,
       ownerAddress,
       onUpdate,
@@ -702,7 +707,12 @@ export class BucketsRepository {
         addViewer(namespaceId: $namespaceId, bucketId: $bucketId, viewer: $viewerKey) { id }
       }`,
       vars,
-      (d) => d[roleField]!.id
+      (d) => {
+        if (!d.addViewer?.id) {
+          throw new Error("addViewer reported no result — the viewer key may not have been added")
+        }
+        return d[roleField]!.id
+      }
     )
   }
 
@@ -724,6 +734,7 @@ export class BucketsRepository {
     }
 
     const fields: string[] = []
+    const fieldNames: string[] = []
     const varDefs: string[] = ["$namespaceId: BigInt!", "$bucketId: BigInt!"]
     const vars: Record<string, unknown> = {
       namespaceId: namespaceId.trim(),
@@ -734,14 +745,17 @@ export class BucketsRepository {
       vars.subject = memberAddress.trim()
     }
     if (orderedRoles.includes("admin")) {
+      fieldNames.push("removeAdmin")
       fields.push("removeAdmin(namespaceId: $namespaceId, bucketId: $bucketId, admin: $subject)")
     }
     if (orderedRoles.includes("contributor")) {
+      fieldNames.push("removeContributor")
       fields.push("removeContributor(namespaceId: $namespaceId, bucketId: $bucketId, contributor: $subject)")
     }
     if (orderedRoles.includes("viewer")) {
       varDefs.push("$viewerKey: String!")
       vars.viewerKey = normalizeFixed32ByteKey(viewerKey!.trim())
+      fieldNames.push("removeViewer")
       fields.push("removeViewer(namespaceId: $namespaceId, bucketId: $bucketId, viewer: $viewerKey)")
     }
 
@@ -751,7 +765,14 @@ export class BucketsRepository {
       onUpdate,
       `mutation RemoveMemberRoles(${varDefs.join(", ")}) {\n${fields.join("\n")}\n}`,
       vars,
-      () => memberAddress.trim()
+      (d) => {
+        for (const field of fieldNames) {
+          if (d[field] !== true) {
+            throw new Error(`${field} reported no change — the member may not have had that role`)
+          }
+        }
+        return memberAddress.trim()
+      }
     )
   }
 }
