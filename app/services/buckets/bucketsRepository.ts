@@ -1,5 +1,5 @@
 import { BucketsGraphqlClient } from "./bucketsApiClient"
-import { KEY_SHARING_CONTENT_TYPE, TEXT_CONTENT_TYPE } from "./valueCodecs"
+import { KEY_SHARING_CONTENT_TYPE, TEXT_CONTENT_TYPE, normalizeFixed32ByteKey } from "./valueCodecs"
 import type {
   ApiBucket,
   ApiBucketWithMembers,
@@ -9,6 +9,7 @@ import type {
   BucketsRepositoryOptions,
   MessagePage,
   MyBucketSummary,
+  MutationResult,
   OperationUpdateHandler
 } from "./types"
 
@@ -354,5 +355,187 @@ export class BucketsRepository {
         isViewer: Boolean(viewerKeyHex) && n.viewers.some((v) => v.viewerId === viewerKeyHex)
       }))
     }
+  }
+
+  private requireSign(ownerAddress: string): (rawBody: string) => Promise<HeadersInit> {
+    const sign = this.options.sign
+    if (!sign) throw new Error("Repository was constructed without a signer")
+    const address = ownerAddress.trim()
+    if (!address) throw new Error("Wallet must be connected to submit this operation")
+    return (rawBody) => sign(address, rawBody)
+  }
+
+  /** Run one signed mutation with pending/success/error updates. */
+  private async runMutation<T>(
+    method: string,
+    ownerAddress: string,
+    onUpdate: OperationUpdateHandler | undefined,
+    document: string,
+    variables: Record<string, unknown>,
+    extractId: (data: T) => string
+  ): Promise<MutationResult> {
+    const sign = this.requireSign(ownerAddress)
+    onUpdate?.({ stage: "pending", message: `Submitting ${method}…` })
+    try {
+      const data = await this.client.mutate<T>(document, variables, sign)
+      onUpdate?.({ stage: "success", message: `${method} confirmed` })
+      return { id: extractId(data), method }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : `${method} failed`
+      onUpdate?.({ stage: "error", message })
+      throw error
+    }
+  }
+
+  async createNamespace(
+    name: string,
+    ownerAddress: string,
+    onUpdate?: OperationUpdateHandler
+  ): Promise<MutationResult> {
+    const trimmed = name.trim()
+    if (!trimmed) throw new Error("Namespace name is required")
+    return this.runMutation<{ createNamespace: { id: string } }>(
+      "createNamespace",
+      ownerAddress,
+      onUpdate,
+      `mutation CreateNamespace($metadata: NamespaceMetadataInput!) {
+        createNamespace(metadata: $metadata) { id namespaceId }
+      }`,
+      { metadata: { name: trimmed, schemaUri: null, properties: [] } },
+      (d) => d.createNamespace.id
+    )
+  }
+
+  async createBucket(
+    namespaceId: string,
+    name: string,
+    ownerAddress: string,
+    onUpdate?: OperationUpdateHandler,
+    category?: string
+  ): Promise<MutationResult> {
+    const trimmedName = name.trim()
+    if (!trimmedName) throw new Error("Bucket name is required")
+    return this.runMutation<{ createBucket: { id: string } }>(
+      "createBucket",
+      ownerAddress,
+      onUpdate,
+      `mutation CreateBucket($namespaceId: BigInt!, $metadata: BucketMetadataInput!) {
+        createBucket(namespaceId: $namespaceId, metadata: $metadata) { id bucketId }
+      }`,
+      {
+        namespaceId: namespaceId.trim(),
+        metadata: { name: trimmedName, category: category?.trim() ?? "", properties: [] }
+      },
+      (d) => d.createBucket.id
+    )
+  }
+
+  async createTag(
+    bucketId: string,
+    tag: string,
+    ownerAddress: string,
+    onUpdate?: OperationUpdateHandler
+  ): Promise<MutationResult> {
+    const trimmedTag = tag.trim()
+    if (!trimmedTag) throw new Error("Tag is required")
+    return this.runMutation<{ createTag: { id: string } }>(
+      "createTag",
+      ownerAddress,
+      onUpdate,
+      `mutation CreateTag($bucketId: BigInt!, $newTag: String!) {
+        createTag(bucketId: $bucketId, newTag: $newTag) { id }
+      }`,
+      { bucketId: bucketId.trim(), newTag: trimmedTag },
+      (d) => d.createTag.id
+    )
+  }
+
+  async addNamespaceManager(
+    namespaceId: string,
+    memberAddress: string,
+    ownerAddress: string,
+    onUpdate?: OperationUpdateHandler
+  ): Promise<MutationResult> {
+    return this.runMutation<{ addManager: { id: string } }>(
+      "addManager",
+      ownerAddress,
+      onUpdate,
+      `mutation AddManager($namespaceId: BigInt!, $newManager: String!) {
+        addManager(namespaceId: $namespaceId, newManager: $newManager) { id }
+      }`,
+      { namespaceId: namespaceId.trim(), newManager: memberAddress.trim() },
+      (d) => d.addManager.id
+    )
+  }
+
+  async removeNamespaceManager(
+    namespaceId: string,
+    memberAddress: string,
+    ownerAddress: string,
+    onUpdate?: OperationUpdateHandler
+  ): Promise<MutationResult> {
+    return this.runMutation<{ removeManager: boolean }>(
+      "removeManager",
+      ownerAddress,
+      onUpdate,
+      `mutation RemoveManager($namespaceId: BigInt!, $oldManager: String!) {
+        removeManager(namespaceId: $namespaceId, oldManager: $oldManager)
+      }`,
+      { namespaceId: namespaceId.trim(), oldManager: memberAddress.trim() },
+      () => memberAddress.trim()
+    )
+  }
+
+  private async removeMember(
+    field: "removeAdmin" | "removeContributor" | "removeViewer",
+    argName: "admin" | "contributor" | "viewer",
+    namespaceId: string,
+    bucketId: string,
+    member: string,
+    ownerAddress: string,
+    onUpdate?: OperationUpdateHandler
+  ): Promise<MutationResult> {
+    return this.runMutation<Record<string, boolean>>(
+      field,
+      ownerAddress,
+      onUpdate,
+      `mutation RemoveMember($namespaceId: BigInt!, $bucketId: BigInt!, $${argName}: String!) {
+        ${field}(namespaceId: $namespaceId, bucketId: $bucketId, ${argName}: $${argName})
+      }`,
+      { namespaceId: namespaceId.trim(), bucketId: bucketId.trim(), [argName]: member.trim() },
+      () => member.trim()
+    )
+  }
+
+  async removeBucketAdmin(namespaceId: string, bucketId: string, memberAddress: string, ownerAddress: string, onUpdate?: OperationUpdateHandler): Promise<MutationResult> {
+    return this.removeMember("removeAdmin", "admin", namespaceId, bucketId, memberAddress, ownerAddress, onUpdate)
+  }
+
+  async removeBucketContributor(namespaceId: string, bucketId: string, memberAddress: string, ownerAddress: string, onUpdate?: OperationUpdateHandler): Promise<MutationResult> {
+    return this.removeMember("removeContributor", "contributor", namespaceId, bucketId, memberAddress, ownerAddress, onUpdate)
+  }
+
+  async removeBucketViewer(namespaceId: string, bucketId: string, viewerKey: string, ownerAddress: string, onUpdate?: OperationUpdateHandler): Promise<MutationResult> {
+    return this.removeMember("removeViewer", "viewer", namespaceId, bucketId, normalizeFixed32ByteKey(viewerKey), ownerAddress, onUpdate)
+  }
+
+  async setBucketPublicKey(
+    namespaceId: string,
+    bucketId: string,
+    newEncryptionKey: string,
+    ownerAddress: string,
+    onUpdate?: OperationUpdateHandler
+  ): Promise<MutationResult> {
+    const key = normalizeFixed32ByteKey(newEncryptionKey.trim())
+    return this.runMutation<{ resumeWriting: { id: string } }>(
+      "resumeWriting",
+      ownerAddress,
+      onUpdate,
+      `mutation ResumeWriting($namespaceId: BigInt!, $bucketId: BigInt!, $newEncryptionKey: String!) {
+        resumeWriting(namespaceId: $namespaceId, bucketId: $bucketId, newEncryptionKey: $newEncryptionKey) { id }
+      }`,
+      { namespaceId: namespaceId.trim(), bucketId: bucketId.trim(), newEncryptionKey: key },
+      (d) => d.resumeWriting.id
+    )
   }
 }
