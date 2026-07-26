@@ -1,6 +1,10 @@
 import { BucketsGraphqlClient } from "./bucketsApiClient"
 import type {
+  ApiBucket,
+  ApiBucketWithMembers,
+  ApiMessage,
   ApiNamespace,
+  BucketDetail,
   BucketsRepositoryOptions,
   OperationUpdateHandler
 } from "./types"
@@ -11,6 +15,10 @@ interface ConnectionPage<T> {
 }
 
 const NAMESPACE_FIELDS = "id namespaceId name schemaUri properties creator createdAt"
+const BUCKET_FIELDS =
+  "id bucketId namespaceId creator name category isWritable encryptionKey createdAt updatedAt"
+const MESSAGE_FIELDS =
+  "id messageId contributor reference tag description contentType contentHash ipfsContent createdAt"
 
 export class BucketsRepository {
   protected readonly client: BucketsGraphqlClient
@@ -99,5 +107,96 @@ export class BucketsRepository {
       { namespaceId: this.asLong(namespaceId, "Namespace id") }
     )
     return nodes.map((n) => n.manager)
+  }
+
+  async fetchBucketsByNamespace(namespaceId: string): Promise<ApiBucketWithMembers[]> {
+    type Node = ApiBucket & { admins: Array<{ subjectId: string }>; contributors: Array<{ subjectId: string }> }
+    const nodes = await this.fetchAllPages<Node>(
+      "buckets",
+      `query BucketsByNamespace($namespaceId: Long!, $after: String) {
+        buckets(first: 50, after: $after, where: { namespaceId: { eq: $namespaceId } }, order: [{ createdAt: ASC }]) {
+          nodes { ${BUCKET_FIELDS} admins { subjectId } contributors { subjectId } }
+          pageInfo { hasNextPage endCursor }
+        }
+      }`,
+      { namespaceId: this.asLong(namespaceId, "Namespace id") }
+    )
+    return nodes.map((n) => ({
+      ...n,
+      admins: n.admins.map((a) => a.subjectId),
+      contributors: n.contributors.map((c) => c.subjectId)
+    }))
+  }
+
+  async fetchBucket(bucketId: string): Promise<ApiBucket | null> {
+    const data = await this.client.query<{ buckets: { nodes: ApiBucket[] } }>(
+      `query BucketByBucketId($bucketId: Long!) {
+        buckets(first: 1, where: { bucketId: { eq: $bucketId } }) {
+          nodes { ${BUCKET_FIELDS} }
+        }
+      }`,
+      { bucketId: this.asLong(bucketId, "Bucket id") }
+    )
+    return data.buckets.nodes[0] ?? null
+  }
+
+  async fetchBucketDetail(bucketId: string): Promise<BucketDetail | null> {
+    type Raw = ApiBucket & {
+      admins: Array<{ subjectId: string }>
+      contributors: Array<{ subjectId: string }>
+      viewers: Array<{ viewerId: string }>
+      messages: Array<Omit<ApiMessage, "bucketId">>
+    }
+    const data = await this.client.query<{ bucket: Raw | null }>(
+      `query BucketDetail($id: ID!) {
+        bucket(id: $id) {
+          ${BUCKET_FIELDS}
+          admins { subjectId }
+          contributors { subjectId }
+          viewers { viewerId }
+          messages { ${MESSAGE_FIELDS} }
+        }
+      }`,
+      { id: bucketId.trim() }
+    )
+    if (!data.bucket) return null
+    const { admins, contributors, viewers, messages, ...bucket } = data.bucket
+    return {
+      bucket,
+      admins: admins.map((a) => a.subjectId),
+      contributors: contributors.map((c) => c.subjectId),
+      viewers: viewers.map((v) => v.viewerId),
+      messages: messages.map((m) => ({ ...m, bucketId: bucket.bucketId }))
+    }
+  }
+
+  private async fetchMemberList(
+    field: "bucketAdmins" | "bucketContributors" | "bucketViewers",
+    idField: "subjectId" | "viewerId",
+    bucketId: string
+  ): Promise<string[]> {
+    const nodes = await this.fetchAllPages<Record<string, string>>(
+      field,
+      `query Members($bucketId: Long!, $after: String) {
+        ${field}(first: 50, after: $after, where: { bucketId: { eq: $bucketId } }, order: [{ addedAt: ASC }]) {
+          nodes { ${idField} }
+          pageInfo { hasNextPage endCursor }
+        }
+      }`,
+      { bucketId: this.asLong(bucketId, "Bucket id") }
+    )
+    return nodes.map((n) => n[idField]!)
+  }
+
+  async fetchBucketAdmins(bucketId: string): Promise<string[]> {
+    return this.fetchMemberList("bucketAdmins", "subjectId", bucketId)
+  }
+
+  async fetchBucketContributors(bucketId: string): Promise<string[]> {
+    return this.fetchMemberList("bucketContributors", "subjectId", bucketId)
+  }
+
+  async fetchBucketViewers(bucketId: string): Promise<string[]> {
+    return this.fetchMemberList("bucketViewers", "viewerId", bucketId)
   }
 }
