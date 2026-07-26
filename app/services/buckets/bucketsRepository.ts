@@ -1,4 +1,5 @@
 import { BucketsGraphqlClient } from "./bucketsApiClient"
+import { KEY_SHARING_CONTENT_TYPE, TEXT_CONTENT_TYPE } from "./valueCodecs"
 import type {
   ApiBucket,
   ApiBucketWithMembers,
@@ -6,6 +7,7 @@ import type {
   ApiNamespace,
   BucketDetail,
   BucketsRepositoryOptions,
+  MessagePage,
   OperationUpdateHandler
 } from "./types"
 
@@ -198,5 +200,97 @@ export class BucketsRepository {
 
   async fetchBucketViewers(bucketId: string): Promise<string[]> {
     return this.fetchMemberList("bucketViewers", "viewerId", bucketId)
+  }
+
+  private mapMessageNode(node: Omit<ApiMessage, "bucketId"> & { bucket: { bucketId: string } }): ApiMessage {
+    const { bucket, ...rest } = node
+    return { ...rest, bucketId: bucket.bucketId }
+  }
+
+  async fetchMessages(bucketId: string): Promise<ApiMessage[]> {
+    type Node = Omit<ApiMessage, "bucketId"> & { bucket: { bucketId: string } }
+    const nodes = await this.fetchAllPages<Node>(
+      "messages",
+      `query BucketMessages($bucketId: Long!, $after: String) {
+        messages(first: 50, after: $after, where: { bucket: { bucketId: { eq: $bucketId } } }, order: [{ createdAt: ASC }]) {
+          nodes { ${MESSAGE_FIELDS} bucket { bucketId } }
+          pageInfo { hasNextPage endCursor }
+        }
+      }`,
+      { bucketId: this.asLong(bucketId, "Bucket id") }
+    )
+    return nodes.map((n) => this.mapMessageNode(n))
+  }
+
+  async fetchMessagesByTag(bucketId: string, tag: string): Promise<ApiMessage[]> {
+    type Node = Omit<ApiMessage, "bucketId"> & { bucket: { bucketId: string } }
+    const nodes = await this.fetchAllPages<Node>(
+      "messages",
+      `query BucketMessagesByTag($bucketId: Long!, $tag: String!, $after: String) {
+        messages(first: 50, after: $after, where: { bucket: { bucketId: { eq: $bucketId } }, tag: { eq: $tag } }, order: [{ createdAt: ASC }]) {
+          nodes { ${MESSAGE_FIELDS} bucket { bucketId } }
+          pageInfo { hasNextPage endCursor }
+        }
+      }`,
+      { bucketId: this.asLong(bucketId, "Bucket id"), tag }
+    )
+    return nodes.map((n) => this.mapMessageNode(n))
+  }
+
+  async fetchFileMessagesPage(
+    bucketId: string,
+    opts?: { first?: number; after?: string | null }
+  ): Promise<MessagePage> {
+    type Node = Omit<ApiMessage, "bucketId"> & { bucket: { bucketId: string } }
+    const vars: Record<string, unknown> = {
+      bucketId: this.asLong(bucketId, "Bucket id"),
+      first: opts?.first ?? 20
+    }
+    if (opts?.after) vars.after = opts.after
+
+    const data = await this.client.query<{ messages: ConnectionPage<Node> }>(
+      `query FileMessagesPage($bucketId: Long!, $first: Int!, $after: String) {
+        messages(
+          first: $first
+          after: $after
+          where: {
+            bucket: { bucketId: { eq: $bucketId } }
+            contentType: { neq: null, nin: ["${TEXT_CONTENT_TYPE}", "${KEY_SHARING_CONTENT_TYPE}"] }
+          }
+          order: [{ createdAt: DESC }]
+        ) {
+          nodes { ${MESSAGE_FIELDS} bucket { bucketId } }
+          pageInfo { hasNextPage endCursor }
+        }
+      }`,
+      vars
+    )
+    return {
+      nodes: data.messages.nodes.map((n) => this.mapMessageNode(n)),
+      hasNextPage: data.messages.pageInfo.hasNextPage,
+      endCursor: data.messages.pageInfo.endCursor
+    }
+  }
+
+  async fetchLatestMessageTimes(bucketIds: string[]): Promise<Record<string, string>> {
+    const numeric = bucketIds.map((id) => this.asLong(id, "Bucket id"))
+    if (!numeric.length) return {}
+
+    const fields = numeric
+      .map(
+        (id, i) =>
+          `b${i}: messages(first: 1, where: { bucket: { bucketId: { eq: ${id} } } }, order: [{ createdAt: DESC }]) { nodes { createdAt } }`
+      )
+      .join("\n")
+    const data = await this.client.query<Record<string, { nodes: Array<{ createdAt: string }> }>>(
+      `query LatestMessageTimes {\n${fields}\n}`
+    )
+
+    const result: Record<string, string> = {}
+    numeric.forEach((id, i) => {
+      const createdAt = data[`b${i}`]?.nodes[0]?.createdAt
+      if (createdAt) result[String(id)] = createdAt
+    })
+    return result
   }
 }
