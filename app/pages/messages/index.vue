@@ -1,14 +1,13 @@
 <script setup lang="ts">
-import { fetchIndexedNamespaces, type IndexedNamespace } from "../../services/indexer/subqueryClient"
+import type { ApiNamespace } from "../../services/buckets/types"
 import SkeletonCard from "../../components/common/SkeletonCard.vue"
 import PageHeader from "../../components/common/PageHeader.vue"
-import { useRuntimeConfig } from "nuxt/app"
 import { useKeys } from "../../composables/useKeys"
 import { useOperationsStore } from "../../stores/operations"
 import { useSessionStore } from "../../stores/session"
 import { computed, onMounted, ref } from "vue"
 
-const config = useRuntimeConfig()
+const bucketsRepository = useBucketsRepository()
 const keys = useKeys()
 const operations = useOperationsStore()
 const session = useSessionStore()
@@ -16,7 +15,7 @@ const session = useSessionStore()
 interface NamespaceListItem {
   id: string
   name: string
-  raw: IndexedNamespace
+  raw: ApiNamespace
 }
 
 const isWalletConnected = computed(() => session.walletStatus === "connected" && Boolean(session.accountAddress))
@@ -24,22 +23,13 @@ const namespaces = ref<NamespaceListItem[]>([])
 const namespaceError = ref("")
 const namespacesLoading = ref(true)
 
-function resolveIndexerUrl(): string {
-  const url = config.public.subqueryIndexerUrl
-  if (typeof url === "string" && url.trim()) {
-    return url.trim()
-  }
-
-  throw new Error("Subquery indexer URL is not configured")
-}
-
 async function loadNamespaces() {
   namespaceError.value = ""
   namespacesLoading.value = true
 
   try {
-    const indexed = await fetchIndexedNamespaces(resolveIndexerUrl(), "CREATED_AT_ASC")
-    namespaces.value = indexed.map((namespace) => ({
+    const fetched = await bucketsRepository.fetchNamespaces()
+    namespaces.value = fetched.map((namespace) => ({
       id: namespace.id,
       name: namespace.name?.trim() || `Namespace ${namespace.namespaceId}`,
       raw: namespace

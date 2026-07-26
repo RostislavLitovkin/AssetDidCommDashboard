@@ -1,28 +1,18 @@
 <script setup lang="ts">
-import {
-  fetchIndexedBucketsByNamespace,
-  fetchIndexedNamespaceById,
-  fetchIndexedNamespaceManagers,
-  type IndexedBucketWithCounts
-} from "../../../services/indexer/subqueryClient"
-import { DidCommRepository } from "../../../services/papi/didCommRepository"
+import type { ApiBucketWithMembers } from "../../../services/buckets/types"
 import SkeletonCard from "../../../components/common/SkeletonCard.vue"
 import WalletConnectPrompt from "../../../components/common/WalletConnectPrompt.vue"
 import PageHeader from "../../../components/common/PageHeader.vue"
 import { Trash2, UserPlus, Users } from "lucide-vue-next"
 import { useAddress } from "../../../composables/useAddress"
 import { computed, onMounted, ref } from "vue"
-import { useNuxtApp, useRoute, useRuntimeConfig } from "nuxt/app"
+import { useRoute } from "nuxt/app"
 import { useSessionStore } from "../../../stores/session"
 
 const route = useRoute()
-const { $papiClient } = useNuxtApp()
-const config = useRuntimeConfig()
 const session = useSessionStore()
 const { formatAddress, addressesEqual } = useAddress()
-const didCommRepository = new DidCommRepository(
-  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string }
-)
+const bucketsRepository = useBucketsRepository()
 
 const namespaceId = computed(() => {
   const rawId = route.params.namespaceId
@@ -35,7 +25,7 @@ const namespaceId = computed(() => {
   }
 })
 
-const buckets = ref<IndexedBucketWithCounts[]>([])
+const buckets = ref<ApiBucketWithMembers[]>([])
 const bucketsLoading = ref(true)
 const bucketsError = ref("")
 const namespaceName = ref("")
@@ -47,16 +37,7 @@ const removingManagerAddress = ref("")
 const namespaceDisplayName = computed(() => namespaceName.value || `Namespace id: ${namespaceId.value}`)
 const isWalletConnected = computed(() => session.walletStatus === "connected" && Boolean(session.accountAddress))
 
-function resolveIndexerUrl(): string {
-  const url = config.public.subqueryIndexerUrl
-  if (typeof url === "string" && url.trim()) {
-    return url.trim()
-  }
-
-  throw new Error("Subquery indexer URL is not configured")
-}
-
-function resolveDisplayName(bucket: IndexedBucketWithCounts): string {
+function resolveDisplayName(bucket: ApiBucketWithMembers): string {
   const name = typeof bucket.name === "string" ? bucket.name.trim() : ""
   if (name) {
     return name
@@ -70,7 +51,7 @@ async function loadBuckets() {
   bucketsLoading.value = true
 
   try {
-    buckets.value = await fetchIndexedBucketsByNamespace(resolveIndexerUrl(), namespaceId.value)
+    buckets.value = await bucketsRepository.fetchBucketsByNamespace(namespaceId.value)
   } catch (error) {
     bucketsError.value = error instanceof Error ? error.message : "Unable to load buckets"
   } finally {
@@ -82,7 +63,7 @@ async function loadNamespaceName() {
   namespaceName.value = ""
 
   try {
-    const namespace = await fetchIndexedNamespaceById(resolveIndexerUrl(), namespaceId.value)
+    const namespace = await bucketsRepository.fetchNamespaceById(namespaceId.value)
     namespaceName.value = namespace?.name?.trim() ?? ""
   } catch {
     namespaceName.value = ""
@@ -94,8 +75,7 @@ async function loadManagers() {
   managersLoading.value = true
 
   try {
-    const indexedManagers = await fetchIndexedNamespaceManagers(resolveIndexerUrl(), namespaceId.value)
-    managers.value = indexedManagers.map((manager) => manager.manager)
+    managers.value = await bucketsRepository.fetchNamespaceManagers(namespaceId.value)
   } catch (error) {
     managersError.value = error instanceof Error ? error.message : "Unable to load managers"
   } finally {
@@ -112,7 +92,7 @@ async function removeManager(address: string) {
 
   removingManagerAddress.value = address
   try {
-    await didCommRepository.removeNamespaceManager(
+    await bucketsRepository.removeNamespaceManager(
       namespaceId.value,
       address,
       session.accountAddress

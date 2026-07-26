@@ -1,67 +1,30 @@
 <script setup lang="ts">
-import { DidCommRepository, type ExtrinsicUpdate } from "../../../services/papi/didCommRepository"
+import type { OperationUpdate } from "../../../services/buckets/types"
 import WalletConnectPrompt from "../../../components/common/WalletConnectPrompt.vue"
 import PageHeader from "../../../components/common/PageHeader.vue"
 import { computed, ref } from "vue"
-import { useNuxtApp, useRuntimeConfig } from "nuxt/app"
 import { useOperationsStore } from "../../../stores/operations"
 import { useSessionStore } from "../../../stores/session"
 
-const { $papiClient } = useNuxtApp()
-const config = useRuntimeConfig()
+const bucketsRepository = useBucketsRepository()
 const session = useSessionStore()
-const asOptionalString = (value: unknown): string | undefined => {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined
-}
 const operations = useOperationsStore()
-const didCommRepository = new DidCommRepository(
-  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string },
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  {
-    jwt: asOptionalString(config.public.pinataJwt),
-    apiKey: asOptionalString(config.public.pinataApiKey),
-    apiSecret: asOptionalString(config.public.pinataApiSecret),
-    publicGateway: asOptionalString(config.public.pinataGateway)
-  },
-  undefined,
-  undefined,
-  undefined,
-  String(config.public.subqueryIndexerUrl || "")
-)
 
 const isWalletConnected = computed(() => session.walletStatus === "connected" && Boolean(session.accountAddress))
 
 const namespaceName = ref("")
 const submitting = ref(false)
 const submitError = ref("")
-const submittedTxHash = ref("")
+const submittedId = ref("")
 const submittedMethod = ref("")
 
-function logExtrinsicUpdate(update: ExtrinsicUpdate): void {
-  const details = [update.message]
-  if (update.txHash) {
-    details.push(`tx: ${update.txHash}`)
-  }
-  if (update.blockHash) {
-    details.push(`block: ${update.blockHash}`)
-  }
-
-  operations.add("bucket_write", `namespace:${update.stage}`, update.stage === "error" ? "error" : "info", details.join(" · "))
+function logOperationUpdate(update: OperationUpdate): void {
+  operations.add("bucket_write", `namespace:${update.stage}`, update.stage === "error" ? "error" : "info", update.message)
 }
 
 async function submitCreateNamespace(): Promise<void> {
   submitError.value = ""
-  submittedTxHash.value = ""
+  submittedId.value = ""
   submittedMethod.value = ""
 
   if (!namespaceName.value.trim()) {
@@ -70,24 +33,24 @@ async function submitCreateNamespace(): Promise<void> {
   }
 
   if (!session.accountAddress) {
-    submitError.value = "Connect wallet before submitting buckets.createNamespace extrinsic"
+    submitError.value = "Connect wallet before creating a namespace"
     return
   }
 
   submitting.value = true
 
   try {
-    const result = await didCommRepository.createNamespace(
+    const result = await bucketsRepository.createNamespace(
       namespaceName.value,
       session.accountAddress,
-      logExtrinsicUpdate
+      logOperationUpdate
     )
-    submittedTxHash.value = result.txHash
+    submittedId.value = result.id
     submittedMethod.value = result.method
-    operations.add("bucket_write", namespaceName.value.trim(), "success", `Namespace extrinsic submitted: ${result.txHash}`)
+    operations.add("bucket_write", namespaceName.value.trim(), "success", `Namespace created: ${result.id}`)
     namespaceName.value = ""
   } catch (error) {
-    submitError.value = error instanceof Error ? error.message : "Unable to submit namespace extrinsic"
+    submitError.value = error instanceof Error ? error.message : "Unable to create namespace"
     operations.add("bucket_write", "namespace", "error", submitError.value)
   } finally {
     submitting.value = false
@@ -126,7 +89,7 @@ async function submitCreateNamespace(): Promise<void> {
       </div>
 
       <p v-if="submitError" class="error-text">{{ submitError }}</p>
-      <p v-if="submittedTxHash" class="success-text">
+      <p v-if="submittedId" class="success-text">
         Submitted via {{ submittedMethod }} successfully.
       </p>
     </section>

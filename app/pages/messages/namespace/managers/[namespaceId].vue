@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue"
-import { useNuxtApp, useRoute } from "nuxt/app"
-import { DidCommRepository, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
+import { useRoute } from "nuxt/app"
+import type { OperationUpdate } from "../../../../services/buckets/types"
 import { useOperationsStore } from "../../../../stores/operations"
 import { useSessionStore } from "../../../../stores/session"
 import WalletConnectPrompt from "../../../../components/common/WalletConnectPrompt.vue"
@@ -9,37 +9,9 @@ import PageHeader from "../../../../components/common/PageHeader.vue"
 import { ShieldCheck, UserPlus } from "lucide-vue-next"
 
 const route = useRoute()
-const { $papiClient } = useNuxtApp()
-const runtimeConfig = useRuntimeConfig()
 const session = useSessionStore()
-const asOptionalString = (value: unknown): string | undefined => {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined
-}
 const operations = useOperationsStore()
-const didCommRepository = new DidCommRepository(
-  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string },
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  {
-    jwt: asOptionalString(runtimeConfig.public.pinataJwt),
-    apiKey: asOptionalString(runtimeConfig.public.pinataApiKey),
-    apiSecret: asOptionalString(runtimeConfig.public.pinataApiSecret),
-    publicGateway: asOptionalString(runtimeConfig.public.pinataGateway)
-  },
-  undefined,
-  undefined,
-  undefined,
-  String(runtimeConfig.public.subqueryIndexerUrl || "")
-)
+const bucketsRepository = useBucketsRepository()
 
 const namespaceId = computed(() => {
   const rawId = route.params.namespaceId
@@ -57,24 +29,16 @@ const namespaceRoutePath = computed(() => `/messages/namespace/${encodeURICompon
 const managerAddress = ref("")
 const submitting = ref(false)
 const submitError = ref("")
-const submittedTxHash = ref("")
+const submittedId = ref("")
 const submittedMethod = ref("")
 
-function logExtrinsicUpdate(update: ExtrinsicUpdate): void {
-  const details = [update.message]
-  if (update.txHash) {
-    details.push(`tx: ${update.txHash}`)
-  }
-  if (update.blockHash) {
-    details.push(`block: ${update.blockHash}`)
-  }
-
-  operations.add("namespace_write", `namespace-manager:${update.stage}`, update.stage === "error" ? "error" : "info", details.join(" · "))
+function logOperationUpdate(update: OperationUpdate): void {
+  operations.add("namespace_write", `namespace-manager:${update.stage}`, update.stage === "error" ? "error" : "info", update.message)
 }
 
 async function submitAddManager(): Promise<void> {
   submitError.value = ""
-  submittedTxHash.value = ""
+  submittedId.value = ""
   submittedMethod.value = ""
 
   if (!namespaceId.value.trim()) {
@@ -88,23 +52,23 @@ async function submitAddManager(): Promise<void> {
   }
 
   if (!session.accountAddress) {
-    submitError.value = "Connect wallet before submitting namespace manager extrinsics"
+    submitError.value = "Connect wallet before submitting namespace manager mutations"
     return
   }
 
   submitting.value = true
 
   try {
-    const result = await didCommRepository.addNamespaceManager(
+    const result = await bucketsRepository.addNamespaceManager(
       namespaceId.value,
       managerAddress.value,
       session.accountAddress,
-      logExtrinsicUpdate
+      logOperationUpdate
     )
 
-    submittedTxHash.value = result.txHash
+    submittedId.value = result.id
     submittedMethod.value = result.method
-    operations.add("namespace_write", namespaceId.value, "success", `Manager added: ${result.txHash}`)
+    operations.add("namespace_write", namespaceId.value, "success", `Manager added: ${result.id}`)
     managerAddress.value = ""
   } catch (error) {
     submitError.value = error instanceof Error ? error.message : "Unable to add namespace manager"
@@ -137,8 +101,8 @@ async function submitAddManager(): Promise<void> {
           </label>
 
           <p v-if="submitError" style="margin: 0; color: var(--status-error); font-size: 13px;">{{ submitError }}</p>
-          <p v-if="submittedTxHash" style="margin: 0; color: var(--status-success); font-size: 13px;">
-            Submitted via {{ submittedMethod }} with hash {{ submittedTxHash }}
+          <p v-if="submittedId" style="margin: 0; color: var(--status-success); font-size: 13px;">
+            Submitted via {{ submittedMethod }} with id {{ submittedId }}
           </p>
 
           <div class="row" style="justify-content: flex-end; gap: 12px; margin-top: 8px;">
