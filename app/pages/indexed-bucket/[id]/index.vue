@@ -73,7 +73,7 @@ const didCommRepository = new DidCommRepository(
   undefined, // 19 submitRemoveNamespaceManagerExtrinsic
   String(config.public.subqueryIndexerUrl || "") // 20 indexerUrl
 )
-const profileClient = new ProfileClient()
+const profileClient = new ProfileClient(String(config.public.profileApiUrl))
 
 const indexerUrl = computed(() => String(config.public.subqueryIndexerUrl || ""))
 const pinataGateway = computed(() => {

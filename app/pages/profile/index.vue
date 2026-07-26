@@ -8,7 +8,8 @@ import type { Profile } from "../../types/profile"
 
 const wallet = useWallet()
 const { formatAddress } = useAddress()
-const profileClient = new ProfileClient()
+const runtimeConfig = useRuntimeConfig()
+const profileClient = new ProfileClient(String(runtimeConfig.public.profileApiUrl))
 const profile = ref<Profile | null>(null)
 const loading = ref(false)
 const error = ref("")

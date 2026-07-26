@@ -32,7 +32,7 @@ function convertToPrefix42(address: string): string {
   }
 }
 const operations = useOperationsStore()
-const profileClient = new ProfileClient()
+const profileClient = new ProfileClient(String(runtimeConfig.public.profileApiUrl))
 const didCommRepository = new DidCommRepository(
   $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string },
   undefined,

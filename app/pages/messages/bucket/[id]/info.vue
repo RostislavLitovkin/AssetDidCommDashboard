@@ -56,7 +56,7 @@ const didCommRepository = new DidCommRepository(
   String(runtimeConfig.public.subqueryIndexerUrl || "") // 20 indexerUrl
 )
 
-const profileClient = new ProfileClient()
+const profileClient = new ProfileClient(String(runtimeConfig.public.profileApiUrl))
 
 type DeliveryState = "sending" | "sent" | "failed"
 

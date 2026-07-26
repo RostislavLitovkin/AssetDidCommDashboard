@@ -47,6 +47,7 @@ export default defineNuxtConfig({
       pinataApiSecret: process.env.NUXT_PUBLIC_PINATA_API_SECRET || "",
       pinataGateway: process.env.NUXT_PUBLIC_PINATA_GATEWAY || "https://gateway.pinata.cloud/ipfs",
       publicFreeCommunicationBucket: process.env.NUXT_PUBLIC_FREE_COMMUNICATION_BUCKET,
+      profileApiUrl: process.env.NUXT_PUBLIC_PROFILE_API_URL || "https://profile-api.xcavate.io",
     }
   },
   typescript: {
