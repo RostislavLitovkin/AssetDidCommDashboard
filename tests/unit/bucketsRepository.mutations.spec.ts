@@ -70,11 +70,29 @@ describe("member and manager mutations", () => {
     expect(requests[0]!.variables).toMatchObject({ namespaceId: "3", bucketId: "9", admin: "5X" })
   })
 
+  it("removeBucketAdmin rejects and emits pending→error when the API returns false", async () => {
+    const { repo } = makeRepo([{ data: { removeAdmin: false } }])
+    const updates: OperationUpdate[] = []
+    await expect(repo.removeBucketAdmin("3", "9", "5X", "5OWNER", (u) => updates.push(u))).rejects.toThrow(
+      "removeAdmin reported no change"
+    )
+    expect(updates.map((u) => u.stage)).toEqual(["pending", "error"])
+  })
+
   it("addNamespaceManager maps to addManager", async () => {
     const { repo, requests } = makeRepo([{ data: { addManager: { id: "3-5X" } } }])
     const result = await repo.addNamespaceManager("3", "5X", "5OWNER")
     expect(result.method).toBe("addManager")
     expect(requests[0]!.variables).toMatchObject({ namespaceId: "3", newManager: "5X" })
+  })
+
+  it("removeNamespaceManager rejects when the API returns false", async () => {
+    const { repo } = makeRepo([{ data: { removeManager: false } }])
+    const updates: OperationUpdate[] = []
+    await expect(repo.removeNamespaceManager("3", "5X", "5OWNER", (u) => updates.push(u))).rejects.toThrow(
+      "removeManager reported no change"
+    )
+    expect(updates.map((u) => u.stage)).toEqual(["pending", "error"])
   })
 })
 

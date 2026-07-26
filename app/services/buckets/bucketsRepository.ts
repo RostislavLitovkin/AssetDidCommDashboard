@@ -378,8 +378,9 @@ export class BucketsRepository {
     onUpdate?.({ stage: "pending", message: `Submitting ${method}…` })
     try {
       const data = await this.client.mutate<T>(document, variables, sign)
+      const id = extractId(data)
       onUpdate?.({ stage: "success", message: `${method} confirmed` })
-      return { id: extractId(data), method }
+      return { id, method }
     } catch (error) {
       const message = error instanceof Error ? error.message : `${method} failed`
       onUpdate?.({ stage: "error", message })
@@ -482,7 +483,12 @@ export class BucketsRepository {
         removeManager(namespaceId: $namespaceId, oldManager: $oldManager)
       }`,
       { namespaceId: namespaceId.trim(), oldManager: memberAddress.trim() },
-      () => memberAddress.trim()
+      (d) => {
+        if (d.removeManager !== true) {
+          throw new Error("removeManager reported no change — the address may not be a manager")
+        }
+        return memberAddress.trim()
+      }
     )
   }
 
@@ -503,7 +509,12 @@ export class BucketsRepository {
         ${field}(namespaceId: $namespaceId, bucketId: $bucketId, ${argName}: $${argName})
       }`,
       { namespaceId: namespaceId.trim(), bucketId: bucketId.trim(), [argName]: member.trim() },
-      () => member.trim()
+      (d) => {
+        if (d[field] !== true) {
+          throw new Error(`${field} reported no change — the member may not have had that role`)
+        }
+        return member.trim()
+      }
     )
   }
 
