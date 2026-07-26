@@ -53,6 +53,10 @@ export function useWallet() {
     return provider.signProfileRequest(address, method, path, body)
   }
 
+  async function signGraphqlRequest(address: string, rawBody: string): Promise<HeadersInit> {
+    return provider.signGraphqlRequest(address, rawBody)
+  }
+
   return {
     walletStatus: computed(() => store.walletStatus),
     accountAddress: computed(() => store.accountAddress),
@@ -61,6 +65,7 @@ export function useWallet() {
     listAccounts,
     connectToAddress,
     signProfileRequest,
+    signGraphqlRequest,
     disconnect
   }
 }

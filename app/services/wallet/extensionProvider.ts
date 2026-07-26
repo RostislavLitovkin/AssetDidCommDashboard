@@ -100,6 +100,40 @@ export class WalletExtensionProvider {
   }
 
   /**
+   * Sign a GraphQL mutation request. Unlike the profile REST API (which hashes
+   * its own re-serialization of the body), the GraphQL SignatureValidator
+   * hashes the RAW request body — so `rawBody` must be the exact string the
+   * caller will send, and the caller must not re-serialize after signing.
+   */
+  async signGraphqlRequest(address: string, rawBody: string): Promise<HeadersInit> {
+    await this.ensureEnabled()
+    const { blake2AsHex, cryptoWaitReady } = await import("@polkadot/util-crypto")
+    await cryptoWaitReady()
+
+    const injector = await web3FromAddress(address)
+    if (!injector.signer.signRaw) {
+      throw new Error("WALLET_SIGNING_UNAVAILABLE")
+    }
+
+    const bodyHash = toCSharpHashHex(blake2AsHex(rawBody, 128))
+    const timestamp = formatSignatureTimestamp(new Date())
+    const payload = buildSignaturePayload("POST", "/graphql", bodyHash, timestamp)
+
+    const payloadHash = blake2AsHex(payload, 128)
+    const signed = await injector.signer.signRaw({
+      address,
+      data: payloadHash,
+      type: "bytes"
+    })
+
+    return {
+      "X-SS58-Address": address,
+      "X-Signature": signed.signature,
+      "X-Timestamp": timestamp
+    }
+  }
+
+  /**
    * Auto-connect: restore the previously connected address from storedSession,
    * or fall back to the first available account. Never shows a popup.
    * Retries with a short delay if the extension hasn't finished injecting yet.
