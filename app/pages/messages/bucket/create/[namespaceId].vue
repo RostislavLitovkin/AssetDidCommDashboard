@@ -1,48 +1,20 @@
 <script setup lang="ts">
-import { DidCommRepository, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
+import type { OperationUpdate } from "../../../../services/buckets/types"
 import WalletConnectPrompt from "../../../../components/common/WalletConnectPrompt.vue"
 import PageHeader from "../../../../components/common/PageHeader.vue"
 import ParticleLoader from "../../../../components/common/ParticleLoader.vue"
 import { ShieldAlert } from "lucide-vue-next"
 import { computed, onMounted, ref } from "vue"
-import { useNuxtApp, useRoute } from "nuxt/app"
+import { useRoute } from "nuxt/app"
 import { useOperationsStore } from "../../../../stores/operations"
 import { useSessionStore } from "../../../../stores/session"
 import { useAddress } from "../../../../composables/useAddress"
 
 const route = useRoute()
-const { $papiClient } = useNuxtApp()
-const runtimeConfig = useRuntimeConfig()
 const session = useSessionStore()
-const asOptionalString = (value: unknown): string | undefined => {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined
-}
 const operations = useOperationsStore()
 const { addressesEqual } = useAddress()
-const didCommRepository = new DidCommRepository(
-  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string },
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  {
-    jwt: asOptionalString(runtimeConfig.public.pinataJwt),
-    apiKey: asOptionalString(runtimeConfig.public.pinataApiKey),
-    apiSecret: asOptionalString(runtimeConfig.public.pinataApiSecret),
-    publicGateway: asOptionalString(runtimeConfig.public.pinataGateway)
-  },
-  undefined,
-  undefined,
-  undefined,
-  String(runtimeConfig.public.subqueryIndexerUrl || "")
-)
+const bucketsRepository = useBucketsRepository()
 
 const namespaceId = computed(() => {
   const rawId = route.params.namespaceId
@@ -62,7 +34,7 @@ const bucketName = ref("")
 const category = ref("")
 const submitting = ref(false)
 const submitError = ref("")
-const submittedTxHash = ref("")
+const submittedId = ref("")
 const submittedMethod = ref("")
 const bucketCreated = ref(false)
 
@@ -82,7 +54,7 @@ const isManager = computed(() => {
 async function loadManagers() {
   managersLoading.value = true
   try {
-    managers.value = await didCommRepository.fetchNamespaceManagers(namespaceId.value)
+    managers.value = await bucketsRepository.fetchNamespaceManagers(namespaceId.value)
   } catch {
     managers.value = []
   } finally {
@@ -90,21 +62,13 @@ async function loadManagers() {
   }
 }
 
-function logExtrinsicUpdate(update: ExtrinsicUpdate): void {
-  const details = [update.message]
-  if (update.txHash) {
-    details.push(`tx: ${update.txHash}`)
-  }
-  if (update.blockHash) {
-    details.push(`block: ${update.blockHash}`)
-  }
-
-  operations.add("bucket_write", `bucket:${update.stage}`, update.stage === "error" ? "info" : "info", details.join(" · "))
+function logOperationUpdate(update: OperationUpdate): void {
+  operations.add("bucket_write", `bucket:${update.stage}`, update.stage === "error" ? "error" : "info", update.message)
 }
 
 async function submitCreateBucket(): Promise<void> {
   submitError.value = ""
-  submittedTxHash.value = ""
+  submittedId.value = ""
   submittedMethod.value = ""
 
   if (!namespaceId.value.trim()) {
@@ -118,28 +82,28 @@ async function submitCreateBucket(): Promise<void> {
   }
 
   if (!session.accountAddress) {
-    submitError.value = "Connect wallet before submitting buckets.createBucket extrinsic"
+    submitError.value = "Connect wallet before creating a bucket"
     return
   }
 
   submitting.value = true
 
   try {
-    const result = await didCommRepository.createBucket(
+    const result = await bucketsRepository.createBucket(
       namespaceId.value,
       bucketName.value,
       session.accountAddress,
-      logExtrinsicUpdate,
+      logOperationUpdate,
       category.value
     )
-    submittedTxHash.value = result.txHash
+    submittedId.value = result.id
     submittedMethod.value = result.method
-    operations.add("bucket_write", bucketName.value.trim(), "success", `Bucket extrinsic submitted: ${result.txHash}`)
+    operations.add("bucket_write", bucketName.value.trim(), "success", `Bucket created: ${result.id}`)
     bucketCreated.value = true
     bucketName.value = ""
     category.value = ""
   } catch (error) {
-    submitError.value = error instanceof Error ? error.message : "Unable to submit bucket extrinsic"
+    submitError.value = error instanceof Error ? error.message : "Unable to create bucket"
     operations.add("bucket_write", "bucket", "error", submitError.value)
   } finally {
     submitting.value = false
@@ -200,7 +164,7 @@ onMounted(async () => {
           </div>
 
           <p v-if="submitError" style="margin: 0; color: var(--status-error)">{{ submitError }}</p>
-          <p v-if="submittedTxHash && !bucketCreated" style="margin: 0; color: var(--status-success)">
+          <p v-if="submittedId && !bucketCreated" style="margin: 0; color: var(--status-success)">
             Submitted via {{ submittedMethod }} successfully.
           </p>
         </section>

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
-import { useNuxtApp, useRoute } from "nuxt/app"
+import { useRoute } from "nuxt/app"
 import { decodeAddress, encodeAddress } from "@polkadot/util-crypto"
-import { DidCommRepository, type BucketMemberRole, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
+import type { BucketMemberRole, OperationUpdate } from "../../../../services/buckets/types"
 import { ProfileClient } from "../../../../services/profile/profileClient"
 import type { Profile } from "../../../../types/profile"
 import { useOperationsStore } from "../../../../stores/operations"
@@ -11,12 +11,8 @@ import WalletConnectPrompt from "../../../../components/common/WalletConnectProm
 import PageHeader from "../../../../components/common/PageHeader.vue"
 
 const route = useRoute()
-const { $papiClient } = useNuxtApp()
 const runtimeConfig = useRuntimeConfig()
 const session = useSessionStore()
-const asOptionalString = (value: unknown): string | undefined => {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined
-}
 
 // Convert any SS58 address to prefix 42
 function convertToPrefix42(address: string): string {
@@ -33,30 +29,7 @@ function convertToPrefix42(address: string): string {
 }
 const operations = useOperationsStore()
 const profileClient = new ProfileClient(String(runtimeConfig.public.profileApiUrl))
-const didCommRepository = new DidCommRepository(
-  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string },
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  {
-    jwt: asOptionalString(runtimeConfig.public.pinataJwt),
-    apiKey: asOptionalString(runtimeConfig.public.pinataApiKey),
-    apiSecret: asOptionalString(runtimeConfig.public.pinataApiSecret),
-    publicGateway: asOptionalString(runtimeConfig.public.pinataGateway)
-  },
-  undefined,
-  undefined,
-  undefined,
-  String(runtimeConfig.public.subqueryIndexerUrl || "")
-)
+const bucketsRepository = useBucketsRepository()
 
 const roleOptions: { value: BucketMemberRole; label: string }[] = [
   { value: "admin", label: "Admin" },
@@ -81,7 +54,7 @@ const namespaceId = ref("")
 const memberAddress = ref("")
 const submitting = ref(false)
 const submitError = ref("")
-const submittedTxHash = ref("")
+const submittedId = ref("")
 const submittedMethod = ref("")
 
 type ProfileStatus = "idle" | "loading" | "found" | "notFound" | "noKey" | "error"
@@ -105,7 +78,7 @@ const submitButtonLabel = computed(() => {
     return "Submitting..."
   }
 
-  if (submittedTxHash.value) {
+  if (submittedId.value) {
     return "Submitted successfully"
   }
 
@@ -129,7 +102,7 @@ async function loadNamespaceFromBucket(): Promise<void> {
   }
 
   try {
-    const bucket = await didCommRepository.fetchBucket(bucketId.value)
+    const bucket = await bucketsRepository.fetchBucket(bucketId.value)
     namespaceId.value = bucket?.namespaceId?.trim() ?? ""
   } catch {
   }
@@ -214,7 +187,7 @@ watch(
 )
 
 watch(memberAddress, () => {
-  submittedTxHash.value = ""
+  submittedId.value = ""
   submittedMethod.value = ""
   profile.value = null
   profileError.value = ""
@@ -223,12 +196,12 @@ watch(memberAddress, () => {
 })
 
 watch(namespaceId, () => {
-  submittedTxHash.value = ""
+  submittedId.value = ""
   submittedMethod.value = ""
 })
 
 watch(role, () => {
-  submittedTxHash.value = ""
+  submittedId.value = ""
   submittedMethod.value = ""
 })
 
@@ -243,21 +216,13 @@ onBeforeUnmount(() => {
   }
 })
 
-function logExtrinsicUpdate(update: ExtrinsicUpdate): void {
-  const details = [update.message]
-  if (update.txHash) {
-    details.push(`tx: ${update.txHash}`)
-  }
-  if (update.blockHash) {
-    details.push(`block: ${update.blockHash}`)
-  }
-
-  operations.add("bucket_write", `bucket-member:${update.stage}`, update.stage === "error" ? "error" : "info", details.join(" · "))
+function logOperationUpdate(update: OperationUpdate): void {
+  operations.add("bucket_write", `bucket-member:${update.stage}`, update.stage === "error" ? "error" : "info", update.message)
 }
 
 async function submitAddMember(): Promise<void> {
   submitError.value = ""
-  submittedTxHash.value = ""
+  submittedId.value = ""
   submittedMethod.value = ""
 
   if (!bucketId.value.trim()) {
@@ -276,7 +241,7 @@ async function submitAddMember(): Promise<void> {
   }
 
   if (!session.accountAddress) {
-    submitError.value = "Connect wallet before submitting bucket member extrinsics"
+    submitError.value = "Connect wallet before adding bucket members"
     return
   }
 
@@ -289,22 +254,22 @@ async function submitAddMember(): Promise<void> {
   submitting.value = true
 
   try {
-    const result = await didCommRepository.addBucketMemberWithRole(
+    const result = await bucketsRepository.addBucketMemberWithRole(
       role.value,
       namespaceId.value,
       bucketId.value,
       memberAddress.value,
       x25519Key,
       session.accountAddress,
-      logExtrinsicUpdate
+      logOperationUpdate
     )
 
-    submittedTxHash.value = result.txHash
+    submittedId.value = result.id
     submittedMethod.value = result.method
-    operations.add("bucket_write", bucketId.value, "success", `Member extrinsic submitted (${result.method}): ${result.txHash}`)
+    operations.add("bucket_write", bucketId.value, "success", `Member added (${result.method}): ${result.id}`)
     memberAddress.value = ""
   } catch (error) {
-    submitError.value = error instanceof Error ? error.message : "Unable to submit bucket member extrinsic"
+    submitError.value = error instanceof Error ? error.message : "Unable to add bucket member"
     operations.add("bucket_write", `bucket:${bucketId.value}`, "error", submitError.value)
   } finally {
     submitting.value = false

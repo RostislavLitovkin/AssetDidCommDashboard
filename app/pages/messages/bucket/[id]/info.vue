@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { DidCommRepository, type BucketMemberRole, type BucketMessage, type BucketRecord, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
+import type { ApiBucket, ApiMessage, BucketMemberRole, OperationUpdate } from "../../../../services/buckets/types"
 import { ProfileClient } from "../../../../services/profile/profileClient"
 import type { Profile } from "../../../../types/profile"
 import SkeletonCard from "../../../../components/common/SkeletonCard.vue"
@@ -7,16 +7,15 @@ import PageHeader from "../../../../components/common/PageHeader.vue"
 import { useAddress } from "../../../../composables/useAddress"
 import { Trash2, File } from "lucide-vue-next"
 import { hexToU8a } from "@polkadot/util"
-import { decodeAddress, encodeAddress, xxhashAsHex } from "@polkadot/util-crypto"
+import { decodeAddress, encodeAddress } from "@polkadot/util-crypto"
 import * as jose from "jose"
 import { computed, nextTick, onMounted, ref, watch } from "vue"
-import { useNuxtApp, useRoute, useRuntimeConfig } from "nuxt/app"
+import { useRoute, useRuntimeConfig } from "nuxt/app"
 import { useOperationsStore } from "../../../../stores/operations"
 import { useSessionStore } from "../../../../stores/session"
 import { useSettingsStore } from "../../../../stores/settings"
 
 const route = useRoute()
-const { $papiClient } = useNuxtApp()
 const runtimeConfig = useRuntimeConfig()
 const session = useSessionStore()
 const settings = useSettingsStore()
@@ -28,34 +27,7 @@ const asOptionalString = (value: unknown): string | undefined => {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
 }
 
-const didCommRepository = new DidCommRepository(
-  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string },
-  undefined, // 2 submitExtrinsic
-  undefined, // 3 submitBucketExtrinsic
-  undefined, // 4 readNamespaceStorage
-  undefined, // 5 readBucketsStorage
-  undefined, // 6 readMessagesStorage
-  undefined, // 7 submitMessageExtrinsic
-  undefined, // 8 submitAddAdminExtrinsic
-  undefined, // 9 submitAddContributorExtrinsic
-  undefined, // 10 submitAddViewerExtrinsic
-  undefined, // 11 submitRemoveAdminExtrinsic
-  undefined, // 12 submitRemoveContributorExtrinsic
-  undefined, // 13 submitRemoveViewerExtrinsic
-  undefined, // 14 submitSetBucketPublicKeyExtrinsic
-  undefined, // 15 submitCreateTagExtrinsic
-  { // 16 pinataConfig
-    jwt: asOptionalString(runtimeConfig.public.pinataJwt),
-    apiKey: asOptionalString(runtimeConfig.public.pinataApiKey),
-    apiSecret: asOptionalString(runtimeConfig.public.pinataApiSecret),
-    publicGateway: asOptionalString(runtimeConfig.public.pinataGateway)
-  },
-  undefined, // 17 submitBucketKeyRotationBatchExtrinsic
-  undefined, // 18 submitAddNamespaceManagerExtrinsic
-  undefined, // 19 submitRemoveNamespaceManagerExtrinsic
-  String(runtimeConfig.public.subqueryIndexerUrl || "") // 20 indexerUrl
-)
-
+const bucketsRepository = useBucketsRepository()
 const profileClient = new ProfileClient(String(runtimeConfig.public.profileApiUrl))
 
 type DeliveryState = "sending" | "sent" | "failed"
@@ -110,10 +82,10 @@ const bucketId = computed(() => {
   }
 })
 
-const messages = ref<BucketMessage[]>([])
+const messages = ref<ApiMessage[]>([])
 const messagesLoading = ref(true)
 const messagesError = ref("")
-const bucket = ref<BucketRecord | null>(null)
+const bucket = ref<ApiBucket | null>(null)
 const bucketLoading = ref(true)
 const bucketError = ref("")
 const membersError = ref("")
@@ -134,7 +106,7 @@ const memberProfiles = ref<Record<string, Profile | null>>({})
 const profilesLoading = ref(false)
 const contributorX25519Keys = ref<Record<string, string>>({})
 const viewerX25519Keys = ref<Record<string, string>>({})
-const currentBucketCall = ref("buckets.write")
+const currentBucketCall = ref("write")
 const generatingEncryptionKey = ref(false)
 const encryptionKeyError = ref("")
 const encryptionKeySuccess = ref("")
@@ -145,8 +117,7 @@ const decryptedKeySharingPayload = ref("")
 const decryptedKeySharingError = ref("")
 const decryptedKeySharingSourceMessageId = ref("")
 const activeBucketEncryptionSecretJwk = ref<jose.JWK | null>(null)
-const bucketDisplayName = computed(() => bucket.value?.name || `Bucket ${bucketId.value}`)
-const bucketCreatedAtTimestampString = ref("")
+const bucketDisplayName = computed(() => bucket.value?.name ?? `Bucket ${bucketId.value}`)
 const keySharingTag = "didcomm/key-sharing-v1"
 const encryptedMessageTag = "didcomm/encrypted-message-v1"
 
@@ -196,7 +167,7 @@ async function loadMessages() {
   messagesLoading.value = true
 
   try {
-    const loadedMessages = await didCommRepository.fetchMessages(bucketId.value)
+    const loadedMessages = await bucketsRepository.fetchMessages(bucketId.value)
     messages.value = loadedMessages
     await hydrateMessagePayloads(loadedMessages)
     await decryptLatestKeySharingPayload()
@@ -339,9 +310,8 @@ async function decryptLatestKeySharingPayload(): Promise<void> {
   }
 }
 
-function resolveMessageTag(message: BucketMessage): string | undefined {
-  const rawRecord = toRecord(message.raw)
-  return firstString(rawRecord, ["tag", "messageTag"])
+function resolveMessageTag(message: ApiMessage): string | undefined {
+  return message.tag?.trim() || undefined
 }
 
 function looksLikeCompactJwe(payload: string): boolean {
@@ -360,7 +330,7 @@ async function decryptMessagePayload(payload: string): Promise<string> {
   return new TextDecoder().decode(plaintext)
 }
 
-async function decryptReceivedMessages(entries: BucketMessage[]): Promise<void> {
+async function decryptReceivedMessages(entries: ApiMessage[]): Promise<void> {
   const nextDecryptedPayloadById: Record<string, string> = {}
   const nextDecryptErrorById: Record<string, string> = {}
 
@@ -401,31 +371,15 @@ async function decryptReceivedMessages(entries: BucketMessage[]): Promise<void> 
 }
 
 
-const timestampStorageKey = `${xxhashAsHex("Timestamp", 128)}${xxhashAsHex("Now", 128).slice(2)}`
-
-function parseU64FromHex(value: string): number | null {
-  if (!value || !value.startsWith("0x")) return null
-  const bytes = hexToU8a(value)
-  if (bytes.length < 8) return null
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-  return Number(view.getBigUint64(0, true))
-}
-
-async function fetchTimestampForBlock(blockNumber: number): Promise<number | null> {
-  try {
-    const blockHash = await ($papiClient as { rpc(method: string, params?: unknown[]): Promise<string> }).rpc(
-      "chain_getBlockHash",
-      [blockNumber]
-    )
-    const storage = await ($papiClient as { rpc(method: string, params?: unknown[]): Promise<string | null> }).rpc(
-      "state_getStorage",
-      [timestampStorageKey, blockHash]
-    )
-    if (!storage) return null
-    return parseU64FromHex(storage)
-  } catch {
-    return null
+function formatBucketCreatedAt(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
   }
+
+  return date.toLocaleString([], {
+    month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit"
+  })
 }
 
 async function loadBucket() {
@@ -433,7 +387,7 @@ async function loadBucket() {
   bucketLoading.value = true
 
   try {
-    const record = await didCommRepository.fetchBucket(bucketId.value)
+    const record = await bucketsRepository.fetchBucket(bucketId.value)
     if (!record) {
       bucket.value = null
       bucketError.value = "Unable to find bucket metadata"
@@ -441,23 +395,6 @@ async function loadBucket() {
     }
 
     bucket.value = record
-
-    // Fetch timestamp for createdAt if present
-    const rawRecord = toRecord(record.raw)
-    const rawMetadata = rawRecord?.metadata ? toRecord(rawRecord.metadata) : null
-    const createdAtValue = rawMetadata?.createdAt ?? rawRecord?.createdAt
-    if (createdAtValue !== undefined) {
-      const blockNum = Number(createdAtValue)
-      if (!isNaN(blockNum) && blockNum > 0) {
-        fetchTimestampForBlock(blockNum).then(ts => {
-          if (ts) {
-            bucketCreatedAtTimestampString.value = new Date(ts).toLocaleString([], {
-              month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit"
-            })
-          }
-        }).catch(() => { })
-      }
-    }
   } catch (error) {
     bucket.value = null
     bucketError.value = error instanceof Error ? error.message : "Unable to load bucket metadata"
@@ -471,9 +408,9 @@ async function loadBucketMembers() {
 
   try {
     const [admins, contributors, viewers] = await Promise.all([
-      didCommRepository.fetchBucketAdmins(bucketId.value),
-      didCommRepository.fetchBucketContributors(bucketId.value),
-      didCommRepository.fetchBucketViewers(bucketId.value)
+      bucketsRepository.fetchBucketAdmins(bucketId.value),
+      bucketsRepository.fetchBucketContributors(bucketId.value),
+      bucketsRepository.fetchBucketViewers(bucketId.value)
     ])
 
     bucketAdmins.value = admins
@@ -604,25 +541,15 @@ function deriveMemberX25519Keys(contributors: string[], viewers: string[]): void
   )
 }
 
-function resolveNamespaceIdFromBucket(bucketRecord: BucketRecord | null): string {
-  if (!bucketRecord) {
-    return ""
-  }
-
-  if (bucketRecord.namespaceId?.trim()) {
-    return bucketRecord.namespaceId.trim()
-  }
-
-  const rawRecord = toRecord(bucketRecord.raw)
-  const candidate = rawRecord?.namespaceId ?? rawRecord?.namespace
-  return typeof candidate === "string" ? candidate.trim() : ""
+function resolveNamespaceIdFromBucket(bucketRecord: ApiBucket | null): string {
+  return bucketRecord?.namespaceId?.trim() ?? ""
 }
 
 async function removeAllRoles(member: MemberEntry): Promise<void> {
   membersError.value = ""
 
   if (!session.accountAddress) {
-    membersError.value = "Connect wallet before submitting member removal extrinsics"
+    membersError.value = "Connect wallet before removing bucket members"
     return
   }
 
@@ -638,20 +565,20 @@ async function removeAllRoles(member: MemberEntry): Promise<void> {
   }
 
   removingMemberAddress.value = member.address
-  currentBucketCall.value = "utility.batchAll"
+  currentBucketCall.value = "removeBucketMemberRoles"
 
   try {
-    const result = await didCommRepository.removeBucketMemberRoles(
+    const result = await bucketsRepository.removeBucketMemberRoles(
       namespaceId,
       bucketId.value,
       member.address,
       member.roles,
       member.viewerKey,
       session.accountAddress,
-      logExtrinsicUpdate
+      logOperationUpdate
     )
 
-    operations.add("bucket_write", result.method, "success", `Member removed (${member.roles.join(", ")}): ${result.txHash}`)
+    operations.add("bucket_write", result.method, "success", `Member removed (${member.roles.join(", ")}): ${result.id}`)
     await loadBucketMembers()
   } catch (error) {
     membersError.value = error instanceof Error ? error.message : "Unable to remove member"
@@ -808,18 +735,18 @@ async function generateAndShareEncryptionKey(): Promise<void> {
     const jweDigestBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(jweString))
     const jweDigest = Array.from(new Uint8Array(jweDigestBuffer)).map((value) => value.toString(16).padStart(2, "0")).join("")
     console.log(`Key-sharing JWE digest (sha256): 0x${jweDigest}`)
-    console.log("--- [ADMIN] 4c. Submitting utility.batchAll for resumeWriting + createTag + write ---")
-    currentBucketCall.value = "utility.batchAll"
-    const batchResult = await didCommRepository.rotateBucketKeyAndShare(
+    console.log("--- [ADMIN] 4c. Submitting rotateKey + write mutation ---")
+    currentBucketCall.value = "rotateKey+write"
+    const batchResult = await bucketsRepository.rotateBucketKeyAndShare(
       namespaceId,
       bucketId.value,
       bucketEncryptionKey,
       keySharingTag,
       jweString,
       session.accountAddress,
-      logExtrinsicUpdate
+      logOperationUpdate
     )
-    console.log(`✅ Bucket key rotation + tag + key-sharing message finalized in batchAll. Transaction Hash: ${batchResult.txHash}`)
+    console.log(`✅ Bucket key rotation + tag + key-sharing message finalized. Result id: ${batchResult.id}`)
 
     latestGeneratedKeyId.value = keyId
     latestGeneratedPublicJwk.value = JSON.stringify(bucketPkJwk, null, 2)
@@ -829,7 +756,7 @@ async function generateAndShareEncryptionKey(): Promise<void> {
       "bucket_write",
       batchResult.method,
       "success",
-      `Bucket key rotated and shared via batchAll. keyId=${keyId}, tx=${batchResult.txHash}`
+      `Bucket key rotated and shared. keyId=${keyId}, id=${batchResult.id}`
     )
 
     await loadMessages()
@@ -954,23 +881,8 @@ function summarizeJsonPayload(payload: string): string | undefined {
   return JSON.stringify(parsed, null, 2)
 }
 
-function resolveMessageReference(message: BucketMessage): string | undefined {
-  const rawRecord = toRecord(message.raw)
-
-  return (
-    firstString(rawRecord, ["reference", "ref", "cid", "ipfsCid", "messageCid"]) ??
-    firstStringAtPaths(rawRecord, [
-      "metadata.ref",
-      "metadata.reference",
-      "metadata.cid",
-      "metadataInput.ref",
-      "metadataInput.reference",
-      "value.ref",
-      "value.reference",
-      "messageInput.ref",
-      "messageInput.reference"
-    ])
-  )
+function resolveMessageReference(message: ApiMessage): string | undefined {
+  return message.reference?.trim() || undefined
 }
 
 function extractCidFromReference(reference: string): string | undefined {
@@ -1041,7 +953,7 @@ async function fetchPayloadFromReference(reference: string): Promise<string> {
   return await response.text()
 }
 
-async function hydrateMessagePayloads(entries: BucketMessage[]): Promise<void> {
+async function hydrateMessagePayloads(entries: ApiMessage[]): Promise<void> {
   const nextPayloadById: Record<string, string> = {}
   const nextErrorById: Record<string, string> = {}
 
@@ -1180,52 +1092,36 @@ function appendMetadataEntries(entries: MetadataEntry[], key: string, value: unk
   })
 }
 
-function extractBucketMetadataEntries(bucketRecord: BucketRecord | null): MetadataEntry[] {
+function extractBucketMetadataEntries(bucketRecord: ApiBucket | null): MetadataEntry[] {
   if (!bucketRecord) {
     return []
   }
 
-  const rawRecord = toRecord(bucketRecord.raw)
-  const source: Record<string, unknown> = rawRecord ? { ...rawRecord } : {}
-
-  if (!("id" in source) && bucketRecord.id) {
-    source.id = bucketRecord.id
-  }
-
-  if (!("namespaceId" in source) && bucketRecord.namespaceId) {
-    source.namespaceId = bucketRecord.namespaceId
-  }
-
   const entries: MetadataEntry[] = []
-  Object.entries(source).forEach(([key, value]) => {
-    appendMetadataEntries(entries, key, value)
-  })
+  appendMetadataEntries(entries, "id", bucketRecord.id)
+  appendMetadataEntries(entries, "bucketId", bucketRecord.bucketId)
+  appendMetadataEntries(entries, "namespaceId", bucketRecord.namespaceId)
+  appendMetadataEntries(entries, "creator", bucketRecord.creator ?? "")
+  appendMetadataEntries(entries, "name", bucketRecord.name ?? "")
+  appendMetadataEntries(entries, "category", bucketRecord.category ?? "")
+  appendMetadataEntries(entries, "isWritable", bucketRecord.isWritable)
+  appendMetadataEntries(entries, "encryptionKey", bucketRecord.encryptionKey ?? "")
+  appendMetadataEntries(entries, "createdAt", bucketRecord.createdAt)
+  appendMetadataEntries(entries, "updatedAt", bucketRecord.updatedAt)
 
   return entries
 }
 
-function toChatMessage(message: BucketMessage): ChatMessage {
-  const rawRecord = toRecord(message.raw)
-  const metadataRecord =
-    toRecord(rawRecord?.metadataInput) ??
-    toRecord(rawRecord?.metadata) ??
-    toRecord(rawRecord?.messageMetadata)
+function toChatMessage(message: ApiMessage): ChatMessage {
   const reference = resolveMessageReference(message)
   const payload = decryptedMessagePayloadById.value[message.id] ?? messagePayloadById.value[message.id]
   const payloadError = messagePayloadErrorById.value[message.id] ?? messageDecryptErrorById.value[message.id]
   const payloadBody = payload ? summarizeJsonPayload(payload) ?? payload : undefined
-  const body = payloadBody ?? firstString(rawRecord, ["message", "content", "payload", "body", "text", "summary"]) ?? message.summary
-  const contentType =
-    firstString(metadataRecord, ["contentType", "mimeType", "type"]) ??
-    firstString(rawRecord, ["contentType", "mimeType"])
-  const tag = firstString(rawRecord, ["tag", "messageTag"])
-  const sender = firstString(rawRecord, ["sender", "from", "author", "owner", "account"])
-  const createdAt =
-    toDate(rawRecord?.createdAt) ??
-    toDate(rawRecord?.timestamp) ??
-    toDate(rawRecord?.time) ??
-    toDate(rawRecord?.submittedAt) ??
-    new Date(0)
+  const body = payloadBody ?? message.description?.trim() ?? message.ipfsContent ?? ""
+  const contentType = message.contentType ?? undefined
+  const tag = message.tag ?? undefined
+  const sender = message.contributor
+  const createdAt = toDate(message.createdAt) ?? new Date(0)
 
   const outgoing = Boolean(session.accountAddress && sender && addressesEqual(session.accountAddress, sender))
 
@@ -1325,20 +1221,12 @@ function formatTimestamp(value: Date): string {
   })
 }
 
-function logExtrinsicUpdate(update: ExtrinsicUpdate): void {
-  const details = [update.message]
-  if (update.txHash) {
-    details.push(`tx: ${update.txHash}`)
-  }
-  if (update.blockHash) {
-    details.push(`block: ${update.blockHash}`)
-  }
-
+function logOperationUpdate(update: OperationUpdate): void {
   operations.add(
     "bucket_write",
     `${currentBucketCall.value}:${update.stage}`,
     update.stage === "error" ? "error" : "info",
-    details.join(" · ")
+    update.message
   )
 }
 
@@ -1367,22 +1255,22 @@ async function sendMessage() {
 
   sendText.value = ""
   sending.value = true
-  currentBucketCall.value = "buckets.write"
+  currentBucketCall.value = "write"
 
   try {
     const encryptedPayload = await encryptOutgoingBucketMessage(payload)
-    const result = await didCommRepository.createMessage(
+    const result = await bucketsRepository.createMessage(
       bucketId.value,
       encryptedPayload,
       session.accountAddress,
-      logExtrinsicUpdate
+      logOperationUpdate
     )
     const pending = pendingMessages.value.find((entry) => entry.id === pendingId)
     if (pending) {
       pending.deliveryState = "sent"
     }
 
-    operations.add("bucket_write", result.method, "success", `Message submitted: ${result.txHash}`)
+    operations.add("bucket_write", result.method, "success", `Message submitted: ${result.id}`)
     await loadMessages()
     pendingMessages.value = pendingMessages.value.filter((entry) => entry.deliveryState === "failed")
   } catch (error) {
@@ -1494,13 +1382,13 @@ const allMembers = computed<MemberEntry[]>(() => {
             style="background: none; border: none; padding: 0;">
             <div v-for="entry in bucketMetadata" :key="`bucket-${entry.key}`" class="bucket-metadata-item"
               style="border-bottom: 1px solid var(--border-default); padding-bottom: 8px;">
-              <dt style="font-weight: 600;">{{ entry.key.replace('metadata.', '').replace('status.', '') }}</dt>
-              <dd v-if="entry.key.includes('createdAt') && bucketCreatedAtTimestampString">
-                {{ bucketCreatedAtTimestampString }}
-                <span v-if="showDebug" class="muted" style="font-size: 11px; margin-left: 6px;">(Block: {{ entry.value
+              <dt style="font-weight: 600;">{{ entry.key }}</dt>
+              <dd v-if="entry.key === 'createdAt' || entry.key === 'updatedAt'">
+                {{ formatBucketCreatedAt(entry.value) }}
+                <span v-if="showDebug" class="muted" style="font-size: 11px; margin-left: 6px;">(Raw: {{ entry.value
                 }})</span>
               </dd>
-              <dd v-else-if="entry.key.toLowerCase().includes('category') && entry.value.trim() === '0x'">None</dd>
+              <dd v-else-if="entry.key === 'category' && (!entry.value.trim() || entry.value.trim() === '0x')">None</dd>
               <dd v-else>{{ entry.value }}</dd>
             </div>
           </dl>
