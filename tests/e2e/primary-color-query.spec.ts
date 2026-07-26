@@ -35,13 +35,13 @@ async function waitForAppBoot(page: Page): Promise<void> {
 }
 
 test("applies the query color on a page other than settings", async ({ page }) => {
-  await page.goto(`/did?primaryColor=${encodeURIComponent(GOLD)}`)
+  await page.goto(`/profile?primaryColor=${encodeURIComponent(GOLD)}`)
 
   await expect.poll(() => readPrimaryColor(page), { timeout: BOOT_TIMEOUT }).toBe(GOLD)
 })
 
 test("keeps the query color after navigating and reloading without the parameter", async ({ page }) => {
-  await page.goto(`/did?primaryColor=${encodeURIComponent(GOLD)}`)
+  await page.goto(`/profile?primaryColor=${encodeURIComponent(GOLD)}`)
   await expect.poll(() => readPrimaryColor(page), { timeout: BOOT_TIMEOUT }).toBe(GOLD)
 
   await page.goto("/messages/my-buckets")
@@ -50,7 +50,7 @@ test("keeps the query color after navigating and reloading without the parameter
 })
 
 test("ignores an unknown query color without breaking app startup", async ({ page }) => {
-  await page.goto("/did?primaryColor=red")
+  await page.goto("/profile?primaryColor=red")
 
   // The host-injection bridge installs right after the settings store is
   // initialized, so it only appears if reading the parameter did not throw.

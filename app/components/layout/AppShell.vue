@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { ChevronRight, FileUp, Fingerprint, Layers, Menu, MessageSquare, Settings, Trash2, UserRound, Wallet, X } from "lucide-vue-next"
+import { ChevronRight, FileUp, Layers, Menu, MessageSquare, Settings, Trash2, UserRound, WandSparkles, Wallet, X } from "lucide-vue-next"
 import { computed, ref } from "vue"
 import NotificationCenter from "../common/NotificationCenter.vue"
 import { useAddress } from "../../composables/useAddress"
 import { useWallet } from "../../composables/useWallet"
+import { X25519KeyService } from "../../services/crypto/x25519KeyService"
+import { buildX25519KeyFile, downloadX25519KeyFile } from "../../services/crypto/x25519KeyFile"
 import { useSettingsStore } from "../../stores/settings"
 
 const wallet = useWallet()
@@ -23,6 +25,9 @@ const x25519FileInputRef = ref<HTMLInputElement | null>(null)
 const showX25519CopyEffect = ref(false)
 const showWalletCopyEffect = ref(false)
 const isTopbarExpanded = ref(false)
+const isGeneratingX25519Key = ref(false)
+const isConfirmingX25519Removal = ref(false)
+const x25519KeyService = new X25519KeyService()
 let x25519CopyEffectTimeout: ReturnType<typeof setTimeout> | undefined
 let walletCopyEffectTimeout: ReturnType<typeof setTimeout> | undefined
 const isWalletConnected = computed(() => wallet.walletStatus.value === "connected" && Boolean(wallet.accountAddress.value))
@@ -74,6 +79,8 @@ async function selectWallet(address: string) {
 
 async function loadX25519SecretFromFile(event: Event) {
   x25519LoadError.value = ""
+  x25519LoadSuccess.value = ""
+  isConfirmingX25519Removal.value = false
 
   const input = event.target as HTMLInputElement | null
   const file = input?.files?.[0]
@@ -100,8 +107,50 @@ function openX25519FilePicker() {
   isTopbarExpanded.value = false
 }
 
+/**
+ * Generates a key, hands the user the only copy, then adopts it. The download
+ * happens before the key becomes active: if adopting were to fail afterwards,
+ * the user would be left with an unrecoverable key, whereas a saved file can
+ * always be loaded back through the file picker.
+ */
+async function generateX25519Key() {
+  if (isGeneratingX25519Key.value) {
+    return
+  }
+
+  isGeneratingX25519Key.value = true
+  isConfirmingX25519Removal.value = false
+  x25519LoadError.value = ""
+  x25519LoadSuccess.value = ""
+
+  try {
+    const material = await x25519KeyService.generate()
+    const keyFile = buildX25519KeyFile(material)
+
+    downloadX25519KeyFile(keyFile)
+    settings.setX25519SecretJwk({ publicJwk: material.publicJwk, privateJwk: material.privateJwk })
+
+    x25519LoadSuccess.value = `New key in use and saved as ${keyFile.fileName}. That download is the only copy — keep it safe.`
+  } catch (error) {
+    x25519LoadError.value = error instanceof Error ? error.message : "Unable to generate an X25519 key"
+  } finally {
+    isGeneratingX25519Key.value = false
+  }
+}
+
+function requestX25519Removal() {
+  x25519LoadError.value = ""
+  x25519LoadSuccess.value = ""
+  isConfirmingX25519Removal.value = true
+}
+
+function cancelX25519Removal() {
+  isConfirmingX25519Removal.value = false
+}
+
 function clearX25519Secret() {
   settings.clearX25519SecretJwk()
+  isConfirmingX25519Removal.value = false
   x25519LoadError.value = ""
   x25519LoadSuccess.value = "Stored X25519 secret key cleared."
 }
@@ -183,10 +232,6 @@ async function copyX25519PublicKey() {
       </div>
 
       <nav class="stack sidebar-nav" style="gap: 8px">
-        <NuxtLink aria-label="DID" class="btn sidebar-btn" to="/did" style="display: flex; align-items: center; gap: 8px; text-decoration: none" @click="collapseTopbar">
-          <Fingerprint :size="16" />
-          <span class="sidebar-label">DID</span>
-        </NuxtLink>
         <NuxtLink aria-label="Namespaces" class="btn sidebar-btn" to="/messages" style="display: flex; align-items: center; gap: 8px; text-decoration: none" @click="collapseTopbar">
           <Layers :size="16" />
           <span class="sidebar-label">Namespaces</span>
@@ -288,7 +333,63 @@ async function copyX25519PublicKey() {
             aria-label="Select X25519 key file"
             @change="loadX25519SecretFromFile"
           />
+
+          <button
+            v-if="!hasActiveX25519Key"
+            class="btn sidebar-btn sidebar-btn-stacked"
+            type="button"
+            style="width: 100%; display: flex; align-items: center; justify-content: space-between"
+            :disabled="isGeneratingX25519Key"
+            @click="generateX25519Key"
+          >
+            <span style="display: inline-flex; align-items: center; gap: 8px">
+              <WandSparkles :size="16" />
+              {{ isGeneratingX25519Key ? "Generating…" : "Generate X25519 Key" }}
+            </span>
+            <ChevronRight :size="14" />
+          </button>
+
+          <template v-else>
+            <button
+              v-if="!isConfirmingX25519Removal"
+              class="btn sidebar-btn sidebar-btn-stacked"
+              type="button"
+              style="width: 100%; display: flex; align-items: center; justify-content: space-between"
+              @click="requestX25519Removal"
+            >
+              <span style="display: inline-flex; align-items: center; gap: 8px">
+                <Trash2 :size="16" />
+                <span class="sidebar-label">Remove X25519 Key</span>
+              </span>
+              <ChevronRight :size="14" />
+            </button>
+            <div v-else class="stack sidebar-btn-stacked" style="gap: 6px">
+              <p class="muted sidebar-confirm-text">
+                Removing the key is permanent. Messages encrypted to it stay locked unless you kept the key file.
+              </p>
+              <div class="row" style="gap: 6px; flex-wrap: nowrap">
+                <button
+                  class="btn sidebar-btn sidebar-btn-danger"
+                  type="button"
+                  style="flex: 1; justify-content: center"
+                  @click="clearX25519Secret"
+                >
+                  Confirm remove
+                </button>
+                <button
+                  class="btn sidebar-btn"
+                  type="button"
+                  style="flex: 1; justify-content: center"
+                  @click="cancelX25519Removal"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </template>
+
           <p class="sidebar-status-error" v-if="x25519LoadError">{{ x25519LoadError }}</p>
+          <p class="sidebar-status-success" v-if="x25519LoadSuccess">{{ x25519LoadSuccess }}</p>
         </div>
       </div>
     </aside>
@@ -556,6 +657,21 @@ async function copyX25519PublicKey() {
   .sidebar-btn .sidebar-label {
     display: inline-block;
   }
+}
+
+.sidebar-btn-stacked {
+  margin-top: 8px;
+}
+
+.sidebar-btn-danger {
+  color: var(--status-error);
+  border-color: color-mix(in srgb, var(--status-error) 45%, transparent);
+}
+
+.sidebar-confirm-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .sidebar-status-error,

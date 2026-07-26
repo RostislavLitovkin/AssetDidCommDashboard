@@ -1077,7 +1077,6 @@ onMounted(async () => {
     </PageHeader>
 
     <div class="ib-container">
-      <ParticleLoader v-if="loading" label="Querying SubQuery indexer..." style="flex-shrink:0;" />
       <p v-if="error" class="ib-error">{{ error }}</p>
 
       <!-- Admin-only: some viewers are missing from the latest key-sharing message -->
@@ -1539,7 +1538,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding-top: 0;
+  padding-top: 16px;
   padding-bottom: 24px;
   flex: 1;
 }
