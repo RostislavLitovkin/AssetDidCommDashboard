@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useRoute } from "nuxt/app"
-import { decodeAddress, encodeAddress } from "@polkadot/util-crypto"
 import type { BucketMemberRole, OperationUpdate } from "../../../../services/buckets/types"
 import { ProfileClient } from "../../../../services/profile/profileClient"
+import { normalizeApiAddress } from "../../../../services/wallet/addressUtils"
 import type { Profile } from "../../../../types/profile"
 import { useOperationsStore } from "../../../../stores/operations"
 import { useSessionStore } from "../../../../stores/session"
@@ -14,19 +14,6 @@ const route = useRoute()
 const runtimeConfig = useRuntimeConfig()
 const session = useSessionStore()
 
-// Convert any SS58 address to prefix 42
-function convertToPrefix42(address: string): string {
-  try {
-    const input = address.trim()
-    // Decode the address to get the raw public key bytes
-    const bytes = decodeAddress(input)
-    // Encode with prefix 42
-    return encodeAddress(bytes, 42)
-  } catch {
-    // If decoding fails, return the original address
-    return input
-  }
-}
 const operations = useOperationsStore()
 const profileClient = new ProfileClient(String(runtimeConfig.public.profileApiUrl))
 const bucketsRepository = useBucketsRepository()
@@ -118,7 +105,7 @@ async function lookupProfile(): Promise<void> {
   }
 
   // Convert any SS58 address to prefix 42 for the profile API
-  const normalizedAddress = convertToPrefix42(address)
+  const normalizedAddress = normalizeApiAddress(address)
   lastQueriedAddress = normalizedAddress
   profileStatus.value = "loading"
   profile.value = null
@@ -171,7 +158,7 @@ function lookupProfileNow(): void {
     return
   }
   // Convert to prefix 42 for comparison with lastQueriedAddress
-  const normalizedAddress = convertToPrefix42(address)
+  const normalizedAddress = normalizeApiAddress(address)
   // Avoid a redundant request if this address is already resolved.
   if (normalizedAddress === lastQueriedAddress && profileStatus.value !== "idle" && profileStatus.value !== "loading") {
     return
@@ -258,7 +245,7 @@ async function submitAddMember(): Promise<void> {
       role.value,
       namespaceId.value,
       bucketId.value,
-      convertToPrefix42(memberAddress.value),
+      normalizeApiAddress(memberAddress.value),
       x25519Key,
       session.accountAddress,
       logOperationUpdate

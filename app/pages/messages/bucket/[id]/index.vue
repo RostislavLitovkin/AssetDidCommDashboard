@@ -7,7 +7,7 @@ import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } f
 import { Paperclip, X as XIcon, SendHorizontal } from "lucide-vue-next"
 import { useAddress } from "../../../../composables/useAddress"
 import { ProfileClient } from "../../../../services/profile/profileClient"
-import { toSs58Prefix42 } from "../../../../services/profile/avatarResolver"
+import { normalizeApiAddress } from "../../../../services/wallet/addressUtils"
 import * as jose from "jose"
 import { computed, nextTick, onMounted, ref, watch } from "vue"
 import { useRoute, useRuntimeConfig } from "nuxt/app"
@@ -502,7 +502,7 @@ async function loadContributorX25519Keys(addresses: string[]): Promise<void> {
     for (const address of addresses) {
       try {
         // The profile API keys on the generic Substrate SS58 format (prefix 42).
-        const profile = await profileClient.getProfile(toSs58Prefix42(address))
+        const profile = await profileClient.getProfile(normalizeApiAddress(address))
         const raw = profile?.x25519Key ?? null
         const normalized = raw ? normalizeX25519ToJwkX(raw.trim()) : null
         keysByAddress[address] = normalized ?? "Not found"

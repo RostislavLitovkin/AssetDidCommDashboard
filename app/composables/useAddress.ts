@@ -2,6 +2,7 @@ import { hexToU8a, u8aToHex } from "@polkadot/util"
 import { decodeAddress, encodeAddress } from "@polkadot/util-crypto"
 import { computed } from "vue"
 import { useSettingsStore } from "../stores/settings"
+import { isSolanaAddress } from "../services/wallet/addressUtils"
 
 function toAddressBytes(value: string): Uint8Array | undefined {
   const trimmed = value.trim()
@@ -59,6 +60,11 @@ export function useAddress() {
 
     if (leftHex && rightHex) {
       return leftHex === rightHex
+    }
+
+    // base58 is case-sensitive — never lowercase Solana addresses.
+    if (isSolanaAddress(left) || isSolanaAddress(right)) {
+      return left.trim() === right.trim()
     }
 
     return left.trim().toLowerCase() === right.trim().toLowerCase()

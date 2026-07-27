@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { resolveAvatarUrls, toSs58Prefix42 } from "../../app/services/profile/avatarResolver"
+import { resolveAvatarUrls } from "../../app/services/profile/avatarResolver"
 import type { Profile } from "../../app/types/profile"
 
 function profile(overrides: Partial<Profile>): Profile {
@@ -43,16 +43,5 @@ describe("resolveAvatarUrls", () => {
     )
 
     await expect(resolveAvatarUrls(["blank", "none"], getProfile)).resolves.toEqual({})
-  })
-})
-
-describe("toSs58Prefix42", () => {
-  it("is idempotent on a generic (prefix-42) address", () => {
-    const alice = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
-    expect(toSs58Prefix42(alice)).toBe(alice)
-  })
-
-  it("returns the input unchanged when it is not a valid address", () => {
-    expect(toSs58Prefix42("not-an-address")).toBe("not-an-address")
   })
 })

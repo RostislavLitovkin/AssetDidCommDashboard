@@ -3,7 +3,8 @@ import type { ApiBucket, ApiMessage, OperationUpdate } from "../../../services/b
 import { isFileMessage, KEY_SHARING_MESSAGE_TAG, normalizeX25519ToJwkX } from "../../../services/buckets/valueCodecs"
 import { ProfileClient } from "../../../services/profile/profileClient"
 import { findViewersWithoutKeyAccess } from "../../../services/messages/keySharingCoverage"
-import { resolveAvatarUrls, toSs58Prefix42 } from "../../../services/profile/avatarResolver"
+import { resolveAvatarUrls } from "../../../services/profile/avatarResolver"
+import { normalizeApiAddress } from "../../../services/wallet/addressUtils"
 import ParticleLoader from "../../../components/common/ParticleLoader.vue"
 import PageHeader from "../../../components/common/PageHeader.vue"
 import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } from "../../../components/common/ChatMessageEntry.vue"
@@ -504,7 +505,7 @@ async function loadSenderProfiles(msgs: ApiMessage[]) {
 
   await Promise.all(senders.map(async addr => {
     try {
-      const profile = await profileClient.getProfile(toSs58Prefix42(addr))
+      const profile = await profileClient.getProfile(normalizeApiAddress(addr))
       if (!profile) return
       profilesByAddress.value[addr] = profile
       if (profile.profilePicture) {

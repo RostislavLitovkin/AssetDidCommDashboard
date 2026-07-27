@@ -7,7 +7,7 @@ import SkeletonCard from "../../../../components/common/SkeletonCard.vue"
 import PageHeader from "../../../../components/common/PageHeader.vue"
 import { useAddress } from "../../../../composables/useAddress"
 import { Trash2, File } from "lucide-vue-next"
-import { decodeAddress, encodeAddress } from "@polkadot/util-crypto"
+import { normalizeApiAddress } from "../../../../services/wallet/addressUtils"
 import * as jose from "jose"
 import { computed, nextTick, onMounted, ref, watch } from "vue"
 import { useRoute, useRuntimeConfig } from "nuxt/app"
@@ -446,7 +446,7 @@ async function loadMemberProfiles(addresses: string[]): Promise<void> {
       uniqueAddresses.map(async (address) => {
         try {
           // The profile API keys on the generic Substrate SS58 format (prefix 42).
-          profilesByAddress[address] = await profileClient.getProfile(toSs58Prefix42(address))
+          profilesByAddress[address] = await profileClient.getProfile(normalizeApiAddress(address))
         } catch {
           // Treat a failed lookup the same as a missing profile.
           profilesByAddress[address] = null
@@ -456,15 +456,6 @@ async function loadMemberProfiles(addresses: string[]): Promise<void> {
     memberProfiles.value = profilesByAddress
   } finally {
     profilesLoading.value = false
-  }
-}
-
-function toSs58Prefix42(address: string): string {
-  const trimmed = address.trim()
-  try {
-    return encodeAddress(decodeAddress(trimmed), 42)
-  } catch {
-    return trimmed
   }
 }
 

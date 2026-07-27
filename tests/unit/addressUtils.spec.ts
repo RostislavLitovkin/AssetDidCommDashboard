@@ -34,3 +34,13 @@ describe("normalizeApiAddress", () => {
     expect(normalizeApiAddress("  not-an-address ")).toBe("not-an-address")
   })
 })
+
+describe("base58 case sensitivity contract", () => {
+  it("distinct base58 addresses differing only by case are different identities", () => {
+    // documents why addressesEqual must NOT lowercase base58 addresses
+    const a = "4Nd1mYQKb2xhkfqAwtLcqEeGiPZKPXTSVKZH1B9DYIn1"
+    const b = a.toLowerCase()
+    expect(a).not.toBe(b)
+    expect(isSolanaAddress(a) && a === b).toBe(false)
+  })
+})

@@ -7,7 +7,7 @@ import { computed, onMounted, ref, watch } from "vue"
 import { useRuntimeConfig } from "nuxt/app"
 import { useSessionStore } from "../../stores/session"
 import { useSettingsStore } from "../../stores/settings"
-import { decodeAddress, encodeAddress } from "@polkadot/util-crypto"
+import { normalizeApiAddress } from "../../services/wallet/addressUtils"
 import { base64url } from "jose"
 
 const runtimeConfig = useRuntimeConfig()
@@ -56,22 +56,6 @@ function resolveViewerKeyHex(): string {
     return hex
   } catch {
     return ""
-  }
-}
-
-// Re-encode to prefix 42, which the profile API keys on (see toSs58Prefix42 in
-// services/profile/avatarResolver.ts).
-function resolveApiAddress(address: string): string {
-  const trimmed = address.trim()
-  if (!trimmed) {
-    return trimmed
-  }
-
-  try {
-    const decoded = decodeAddress(trimmed)
-    return encodeAddress(decoded, 42)
-  } catch {
-    return trimmed
   }
 }
 
@@ -138,7 +122,7 @@ async function loadBuckets(reset = false): Promise<void> {
 
   try {
     const page = await bucketsRepository.fetchMyBuckets(
-      resolveApiAddress(session.accountAddress),
+      normalizeApiAddress(session.accountAddress),
       resolveViewerKeyHex(),
       { first: pageSize, after: reset ? null : endCursor.value }
     )

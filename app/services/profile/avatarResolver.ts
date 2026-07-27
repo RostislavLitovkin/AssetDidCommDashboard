@@ -1,15 +1,4 @@
-import { decodeAddress, encodeAddress } from "@polkadot/util-crypto"
 import type { Profile } from "../../types/profile"
-
-/** Re-encode an SS58 address to the generic Substrate prefix (42), which the profile API keys on. */
-export function toSs58Prefix42(address: string): string {
-  const trimmed = address.trim()
-  try {
-    return encodeAddress(decodeAddress(trimmed), 42)
-  } catch {
-    return trimmed
-  }
-}
 
 /**
  * Resolve profile-picture URLs for a set of sender addresses.
