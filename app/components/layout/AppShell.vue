@@ -2,6 +2,7 @@
 import { ChevronRight, FileUp, Layers, Menu, MessageSquare, Settings, Trash2, UserRound, WandSparkles, Wallet, X } from "lucide-vue-next"
 import { computed, ref } from "vue"
 import NotificationCenter from "../common/NotificationCenter.vue"
+import WalletSelectModal from "../common/WalletSelectModal.vue"
 import { useAddress } from "../../composables/useAddress"
 import { useWallet } from "../../composables/useWallet"
 import { X25519KeyService } from "../../services/crypto/x25519KeyService"
@@ -16,9 +17,6 @@ const route = useRoute()
 settings.initialize()
 
 const showWalletPopup = ref(false)
-const accounts = ref<Array<{ address: string; name: string; source: string }>>([])
-const isLoadingWallets = ref(false)
-const walletListError = ref("")
 const x25519LoadError = ref("")
 const x25519LoadSuccess = ref("")
 const walletCopyError = ref("")
@@ -53,29 +51,9 @@ const isHeaderVisible = computed(() => {
   return normalizedValue !== "false"
 })
 
-const formattedAccounts = computed(() =>
-  accounts.value.map((account) => ({
-    ...account,
-    formattedAddress: formatAddress(account.address)
-  }))
-)
-
-async function openWalletPopup() {
+function openWalletPopup() {
   showWalletPopup.value = true
   isTopbarExpanded.value = false
-  walletListError.value = ""
-  isLoadingWallets.value = true
-
-  try {
-    accounts.value = await wallet.listAccounts()
-  } catch {
-    accounts.value = []
-    walletListError.value = settings.walletType === "solana"
-      ? "No Solana wallet found. Install Phantom, Solflare, or Backpack."
-      : "No Polkadot extension accounts found."
-  } finally {
-    isLoadingWallets.value = false
-  }
 }
 
 function toggleTopbar(): void {
@@ -84,11 +62,6 @@ function toggleTopbar(): void {
 
 function collapseTopbar(): void {
   isTopbarExpanded.value = false
-}
-
-async function selectWallet(address: string) {
-  await wallet.connectToAddress(address)
-  showWalletPopup.value = false
 }
 
 async function loadX25519SecretFromFile(event: Event) {
@@ -416,41 +389,7 @@ async function copyX25519PublicKey() {
 
     <NotificationCenter />
 
-    <div
-      v-if="showWalletPopup"
-      style="position: fixed; inset: 0; background: rgba(0,0,0,0.25); display: grid; place-items: center; z-index: 40"
-      @click.self="showWalletPopup = false"
-    >
-      <div class="card stack" style="width: min(560px, 92vw)">
-        <div class="row" style="justify-content: space-between; align-items: center">
-          <h3 style="margin: 0">Select Wallet</h3>
-          <button class="btn" type="button" aria-label="Close" @click="showWalletPopup = false">
-            <X :size="14" />
-          </button>
-        </div>
-
-        <div class="stack" style="max-height: 300px; overflow: auto">
-          <button
-            v-for="account in formattedAccounts"
-            :key="account.address"
-            class="btn"
-            type="button"
-            style="display: flex; justify-content: space-between; align-items: center; text-align: left"
-            @click="selectWallet(account.address)"
-          >
-            <span class="stack" style="gap: 2px">
-              <strong>{{ account.name }}</strong>
-              <span class="muted" style="font-size: 12px">{{ account.formattedAddress }}</span>
-            </span>
-            <span class="muted" style="font-size: 12px">{{ account.source }}</span>
-          </button>
-        </div>
-
-        <p class="muted" style="margin: 0" v-if="isLoadingWallets">Loading wallets.</p>
-        <p class="sidebar-status-error" style="margin: 0" v-else-if="walletListError">{{ walletListError }}</p>
-        <p class="muted" style="margin: 0" v-else-if="!accounts.length">No wallets found.</p>
-      </div>
-    </div>
+    <WalletSelectModal v-if="showWalletPopup" @close="showWalletPopup = false" />
 
   </main>
 </template>

@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue"
 import { Link, Wallet } from "lucide-vue-next"
-import ParticleLoader from "./ParticleLoader.vue"
-import { useWallet } from "../../composables/useWallet"
+import WalletSelectModal from "./WalletSelectModal.vue"
 import { useSettingsStore } from "../../stores/settings"
 
 const DEFAULT_DESCRIPTION = "Connect your wallet to continue."
@@ -31,37 +30,7 @@ const effectiveDescription = computed(() =>
       : "Connect the Polkadot browser extension to continue."
 )
 
-const noWalletsMessage = computed(() =>
-  settings.walletType === "solana"
-    ? "No Solana wallet found. Install Phantom, Solflare, or Backpack."
-    : "No Polkadot extension accounts found. Install and unlock a polkadot.js-compatible extension."
-)
-
-const wallet = useWallet()
 const showWalletPopup = ref(false)
-const walletAccounts = ref<Array<{ address: string; name: string; source: string }>>([])
-const loadingWallet = ref(false)
-const selectingWallet = ref(false)
-
-async function openWalletPopup(): Promise<void> {
-  showWalletPopup.value = true
-  loadingWallet.value = true
-  try {
-    walletAccounts.value = await wallet.listAccounts()
-  } finally {
-    loadingWallet.value = false
-  }
-}
-
-async function selectWallet(address: string): Promise<void> {
-  selectingWallet.value = true
-  try {
-    await wallet.connectToAddress(address)
-    showWalletPopup.value = false
-  } finally {
-    selectingWallet.value = false
-  }
-}
 </script>
 
 <template>
@@ -90,7 +59,7 @@ async function selectWallet(address: string): Promise<void> {
           class="btn btn-primary"
           type="button"
           style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 12px 16px"
-          @click="openWalletPopup"
+          @click="showWalletPopup = true"
         >
           <Wallet :size="16" />
           {{ props.actionLabel }}
@@ -98,42 +67,6 @@ async function selectWallet(address: string): Promise<void> {
       </div>
     </div>
 
-    <div
-      v-if="showWalletPopup"
-      style="position: fixed; inset: 0; background: rgba(0,0,0,0.25); display: grid; place-items: center; z-index: 20"
-      @click.self="showWalletPopup = false"
-    >
-      <div class="card stack" style="width: min(560px, 92vw)">
-        <div class="row" style="justify-content: space-between; align-items: center">
-          <h3 style="margin: 0">Select Wallet</h3>
-          <button class="btn" type="button" aria-label="Close" @click="showWalletPopup = false" :disabled="selectingWallet">
-            ✕
-          </button>
-        </div>
-
-        <ParticleLoader v-if="loadingWallet" label="Loading wallets..." />
-
-        <div v-else-if="walletAccounts.length" class="stack" style="max-height: 300px; overflow: auto; gap: 8px">
-          <button
-            v-for="account in walletAccounts"
-            :key="account.address"
-            class="btn"
-            type="button"
-            :disabled="selectingWallet"
-            style="display: flex; justify-content: space-between; align-items: center; text-align: left"
-            @click="selectWallet(account.address)"
-          >
-            <ParticleLoader v-if="selectingWallet" size="inline" label="Connecting wallet" style="min-width: 0" />
-            <span v-else class="stack" style="gap: 2px; min-width: 0; flex: 1">
-              <strong>{{ account.name }}</strong>
-              <span class="muted" style="font-size: 12px">{{ account.address.slice(0, 10) }}...{{ account.address.slice(-10) }}</span>
-            </span>
-            <span class="muted" style="font-size: 12px; white-space: nowrap; margin-left: 8px">{{ account.source }}</span>
-          </button>
-        </div>
-
-        <p v-else class="muted" style="margin: 0">{{ noWalletsMessage }}</p>
-      </div>
-    </div>
+    <WalletSelectModal v-if="showWalletPopup" @close="showWalletPopup = false" />
   </div>
 </template>

@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { computed, ref } from "vue"
-import { Check } from "lucide-vue-next"
+import { computed, onMounted, ref } from "vue"
+import { Check, ExternalLink } from "lucide-vue-next"
 import { useSettingsStore } from "../stores/settings"
 import { useSessionStore } from "../stores/session"
 import { useWallet } from "../composables/useWallet"
 import { PRIMARY_COLOR_OPTIONS } from "../services/theme/primaryColor"
 import type { WalletKind } from "../services/wallet/types"
+import type { WalletBrandId } from "../services/wallet/walletCatalog"
+import { detectInstalledWallets, hasInstalledWallet, walletsForKind } from "../services/wallet/walletCatalog"
 import PageHeader from "../components/common/PageHeader.vue"
+import WalletBrandIcon from "../components/common/WalletBrandIcon.vue"
 
 const settings = useSettingsStore()
 settings.initialize()
@@ -14,9 +17,41 @@ const sessionStore = useSessionStore()
 const wallet = useWallet()
 
 const WALLET_TYPE_OPTIONS: Array<{ value: WalletKind; name: string; hint: string }> = [
-  { value: "solana", name: "Solana", hint: "Phantom, Solflare, Backpack" },
-  { value: "polkadot", name: "Polkadot", hint: "Browser extension (polkadot.js compatible)" }
+  { value: "solana", name: "Solana", hint: "Sign with an injected Solana wallet" },
+  { value: "polkadot", name: "Polkadot", hint: "Sign with a polkadot.js-compatible extension" }
 ]
+
+// Wallet extensions inject after page load, so detection is client-only and
+// gated behind detectionReady to keep hydration deterministic.
+const detectionReady = ref(false)
+const installedIds = ref<Set<WalletBrandId>>(new Set())
+const hasWalletByKind = ref<Record<WalletKind, boolean>>({ solana: false, polkadot: false })
+
+function refreshWalletDetection(): void {
+  installedIds.value = new Set([...detectInstalledWallets("solana"), ...detectInstalledWallets("polkadot")])
+  hasWalletByKind.value = {
+    solana: hasInstalledWallet("solana"),
+    polkadot: hasInstalledWallet("polkadot")
+  }
+  detectionReady.value = true
+}
+
+onMounted(() => {
+  refreshWalletDetection()
+  // Extensions can still be injecting while the page settles; check once more.
+  setTimeout(refreshWalletDetection, 1500)
+})
+
+const selectedKindLabel = computed(() =>
+  WALLET_TYPE_OPTIONS.find((option) => option.value === settings.walletType)?.name ?? ""
+)
+const missingWalletForSelection = computed(
+  () => detectionReady.value && !hasWalletByKind.value[settings.walletType]
+)
+
+function downloadHost(url: string): string {
+  return new URL(url).hostname.replace(/^www\./, "")
+}
 
 function selectWalletType(kind: WalletKind): void {
   if (kind === settings.walletType) {
@@ -24,6 +59,7 @@ function selectWalletType(kind: WalletKind): void {
   }
 
   settings.setWalletType(kind)
+  refreshWalletDetection()
 
   if (sessionStore.walletStatus === "connected" || sessionStore.walletStatus === "connecting") {
     wallet.disconnect()
@@ -80,10 +116,55 @@ function selectPrimaryColor(color: string): void {
           :aria-pressed="option.value === settings.walletType"
           @click="selectWalletType(option.value)"
         >
-          <strong>{{ option.name }}</strong>
-          <span class="muted" style="font-size: 12px">{{ option.hint }}</span>
+          <span class="wallet-option-head">
+            <WalletBrandIcon :brand="option.value" :size="28" />
+            <span class="stack" style="gap: 1px; text-align: left">
+              <strong>{{ option.name }}</strong>
+              <span class="muted" style="font-size: 12px">{{ option.hint }}</span>
+            </span>
+            <Check v-if="option.value === settings.walletType" :size="16" class="wallet-option-check" />
+          </span>
+          <span v-if="detectionReady" class="wallet-chip-row">
+            <span
+              v-for="entry in walletsForKind(option.value)"
+              :key="entry.id"
+              class="wallet-chip"
+              :class="{ 'wallet-chip-installed': installedIds.has(entry.id) }"
+            >
+              <WalletBrandIcon :brand="entry.id" :size="14" />
+              {{ entry.name }}
+              <span v-if="installedIds.has(entry.id)" class="wallet-chip-dot" aria-label="Installed" />
+            </span>
+          </span>
         </button>
       </div>
+
+      <div v-if="missingWalletForSelection" class="wallet-install-callout stack" style="gap: 8px">
+        <p style="margin: 0; font-size: 13px; font-weight: 600">
+          No {{ selectedKindLabel }} wallet detected in this browser
+        </p>
+        <div class="row" style="gap: 8px">
+          <a
+            v-for="entry in walletsForKind(settings.walletType)"
+            :key="entry.id"
+            class="wallet-install-link"
+            :href="entry.downloadUrl"
+            target="_blank"
+            rel="noreferrer noopener"
+          >
+            <WalletBrandIcon :brand="entry.id" :size="24" />
+            <span class="stack" style="gap: 0">
+              <strong style="font-size: 12px">{{ entry.name }}</strong>
+              <span class="muted" style="font-size: 11px">{{ downloadHost(entry.downloadUrl) }}</span>
+            </span>
+            <ExternalLink :size="12" class="muted" />
+          </a>
+        </div>
+        <p class="muted" style="margin: 0; font-size: 12px">
+          After installing, refresh this page — extensions only load with it.
+        </p>
+      </div>
+
       <span class="muted" style="font-size: 13px;">
         Which wallet family the app uses for your identity and request signing.
         Switching disconnects the currently connected wallet.
@@ -233,14 +314,92 @@ function selectPrimaryColor(color: string): void {
   display: inline-flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 2px;
-  padding: 10px 14px;
+  gap: 10px;
+  padding: 12px 14px;
   border: 1px solid var(--border-default);
   border-radius: 10px;
   background: var(--surface-card);
   color: var(--text-primary);
   font-size: 13px;
   cursor: pointer;
+}
+
+.wallet-option-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.wallet-option-check {
+  color: var(--color-primary);
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+.wallet-chip-row {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.wallet-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  opacity: 0.55;
+}
+
+.wallet-chip svg {
+  filter: grayscale(1);
+}
+
+.wallet-chip-installed {
+  opacity: 1;
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--status-success) 40%, var(--border-default));
+}
+
+.wallet-chip-installed svg {
+  filter: none;
+}
+
+.wallet-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--status-success);
+}
+
+.wallet-install-callout {
+  padding: 12px 14px;
+  border: 1px dashed color-mix(in srgb, var(--status-warning) 45%, var(--border-default));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--status-warning) 6%, var(--surface-card));
+}
+
+.wallet-install-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--surface-card);
+  color: var(--text-primary);
+  text-decoration: none;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.wallet-install-link:hover,
+.wallet-install-link:focus-visible {
+  border-color: var(--color-primary);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+  transform: translateY(-1px);
 }
 
 .wallet-option:hover,
