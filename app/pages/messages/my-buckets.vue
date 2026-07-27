@@ -2,120 +2,36 @@
 import SkeletonCard from "../../components/common/SkeletonCard.vue"
 import WalletConnectPrompt from "../../components/common/WalletConnectPrompt.vue"
 import PageHeader from "../../components/common/PageHeader.vue"
+import type { MyBucketSummary } from "../../services/buckets/types"
 import { computed, onMounted, ref, watch } from "vue"
-import { useNuxtApp, useRuntimeConfig } from "nuxt/app"
+import { useRuntimeConfig } from "nuxt/app"
 import { useSessionStore } from "../../stores/session"
 import { useSettingsStore } from "../../stores/settings"
-import { hexToU8a, u8aToHex } from "@polkadot/util"
-import { decodeAddress, encodeAddress, xxhashAsHex } from "@polkadot/util-crypto"
+import { decodeAddress, encodeAddress } from "@polkadot/util-crypto"
 import { base64url } from "jose"
 
-interface BucketConnectionNode {
-  id: string
-  bucketId: number
-  namespaceId: number
-  name?: string | null
-  admins: { totalCount: number }
-  contributors: { totalCount: number }
-  viewers: { totalCount: number }
-  messages: { nodes: Array<{ createdBlock: number }> }
-}
-
 const runtimeConfig = useRuntimeConfig()
-const { $papiClient } = useNuxtApp()
 const session = useSessionStore()
 const settings = useSettingsStore()
+const bucketsRepository = useBucketsRepository()
 
 const pageSize = 20
-const buckets = ref<BucketConnectionNode[]>([])
+const buckets = ref<MyBucketSummary[]>([])
 const totalCount = ref(0)
-const offset = ref(0)
 const loading = ref(true)
 const loadingMore = ref(false)
 const error = ref("")
-const blockTimestampByNumber = ref<Record<number, number>>({})
 const sentinelElement = ref<HTMLElement | null>(null)
+
+const endCursor = ref<string | null>(null)
+const hasNextPage = ref(false)
+const lastMessageAtByBucket = ref<Record<string, string>>({})
 
 const isWalletConnected = computed(() => session.walletStatus === "connected" && Boolean(session.accountAddress))
 const showDebug = computed(() => settings.showMessageDebug)
-const hasMoreData = computed(() => offset.value + buckets.value.length < totalCount.value)
+const hasMoreData = computed(() => hasNextPage.value)
 
-
-const timestampStorageKey = `${xxhashAsHex("Timestamp", 128)}${xxhashAsHex("Now", 128).slice(2)}`
-
-function parseU64FromHex(value: string): number | null {
-  if (!value || !value.startsWith("0x")) {
-    return null
-  }
-
-  const bytes = hexToU8a(value)
-  if (bytes.length < 8) {
-    return null
-  }
-
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-  const raw = view.getBigUint64(0, true)
-  return Number(raw)
-}
-
-async function fetchTimestampForBlock(blockNumber: number): Promise<number | null> {
-  try {
-    const blockHash = await ($papiClient as { rpc(method: string, params?: unknown[]): Promise<string> }).rpc(
-      "chain_getBlockHash",
-      [blockNumber]
-    )
-
-    const storage = await ($papiClient as { rpc(method: string, params?: unknown[]): Promise<string | null> }).rpc(
-      "state_getStorage",
-      [timestampStorageKey, blockHash]
-    )
-
-    if (!storage) {
-      return null
-    }
-
-    return parseU64FromHex(storage)
-  } catch {
-    return null
-  }
-}
-
-async function loadBlockTimestamps(blockNumbers: number[]): Promise<void> {
-  const unique = Array.from(new Set(blockNumbers)).filter(
-    (value) => Number.isFinite(value) && value > 0 && blockTimestampByNumber.value[value] === undefined
-  )
-
-  if (!unique.length) {
-    return
-  }
-
-  const updates = await Promise.all(
-    unique.map(async (blockNumber) => ({
-      blockNumber,
-      timestamp: await fetchTimestampForBlock(blockNumber)
-    }))
-  )
-
-  const next = { ...blockTimestampByNumber.value }
-  for (const update of updates) {
-    if (update.timestamp !== null) {
-      next[update.blockNumber] = update.timestamp
-    }
-  }
-
-  blockTimestampByNumber.value = next
-}
-
-function resolveIndexerUrl(): string {
-  const url = runtimeConfig.public.subqueryIndexerUrl
-  if (typeof url === "string" && url.trim()) {
-    return url.trim()
-  }
-
-  throw new Error("Subquery indexer URL is not configured")
-}
-
-function resolveDisplayName(bucket: BucketConnectionNode): string {
+function resolveDisplayName(bucket: MyBucketSummary): string {
   const name = typeof bucket.name === "string" ? bucket.name.trim() : ""
   if (name) {
     return name
@@ -132,7 +48,12 @@ function resolveViewerKeyHex(): string {
   }
 
   try {
-    return u8aToHex(base64url.decode(x.trim()))
+    const bytes = base64url.decode(x.trim())
+    let hex = "0x"
+    for (const value of bytes) {
+      hex += value.toString(16).padStart(2, "0")
+    }
+    return hex
   } catch {
     return ""
   }
@@ -174,120 +95,57 @@ function timeAgo(timestamp: number): string {
   return "just now"
 }
 
-function formatLastMessage(bucket: BucketConnectionNode): string {
-  const createdBlock = bucket.messages.nodes[0]?.createdBlock
-  if (createdBlock === undefined || createdBlock === null) {
+function formatLastMessage(bucket: MyBucketSummary): string {
+  const iso = lastMessageAtByBucket.value[bucket.bucketId]
+  if (!iso) {
     return "No messages yet"
   }
 
-  const timestamp = blockTimestampByNumber.value[createdBlock]
-  if (!timestamp) {
-    return showDebug.value ? `Block ${createdBlock}` : "..."
+  const timestamp = Date.parse(iso)
+  if (Number.isNaN(timestamp)) {
+    return "No messages yet"
   }
 
   const relative = timeAgo(timestamp)
   if (showDebug.value) {
     const formatted = new Date(timestamp).toLocaleString()
-    return `${relative} (${formatted} · block ${createdBlock})`
+    return `${relative} (${formatted})`
   }
 
   return relative
 }
 
-async function loadBuckets(): Promise<void> {
+async function loadBuckets(reset = false): Promise<void> {
   error.value = ""
-
   if (!isWalletConnected.value || !session.accountAddress) {
     buckets.value = []
     totalCount.value = 0
-    offset.value = 0
+    endCursor.value = null
+    hasNextPage.value = false
     return
   }
 
-  if (offset.value === 0) {
+  if (reset) {
+    endCursor.value = null
     loading.value = true
   } else {
     loadingMore.value = true
   }
 
   try {
-    const response = await fetch(resolveIndexerUrl(), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        query: `
-          query MyBuckets($address: String!, $viewerKey: String!, $first: Int!, $offset: Int!) {
-            buckets(
-              first: $first
-              offset: $offset
-              orderBy: [MESSAGES_MAX_CREATED_BLOCK_DESC, NAME_ASC, PRIMARY_KEY_ASC]
-              filter: {
-                or: [
-                  { admins: { some: { subjectId: { equalToInsensitive: $address } } } }
-                  { contributors: { some: { subjectId: { equalToInsensitive: $address } } } }
-                  { viewers: { some: { viewerId: { equalToInsensitive: $viewerKey } } } }
-                ]
-              }
-            ) {
-              totalCount
-              nodes {
-                id
-                bucketId
-                namespaceId
-                name
-                admins(filter: { subjectId: { equalToInsensitive: $address } }) {
-                  totalCount
-                }
-                contributors(filter: { subjectId: { equalToInsensitive: $address } }) {
-                  totalCount
-                }
-                viewers(filter: { viewerId: { equalToInsensitive: $viewerKey } }) {
-                  totalCount
-                }
-                messages(first: 1, orderBy: [CREATED_BLOCK_DESC]) {
-                  nodes {
-                    createdBlock
-                  }
-                }
-              }
-            }
-          }
-        `,
-        variables: {
-          address: resolveIndexerAddress(session.accountAddress),
-          viewerKey: resolveViewerKeyHex(),
-          first: pageSize,
-          offset: offset.value
-        }
-      })
-    })
-
-    const payload = (await response.json()) as {
-      data?: { buckets?: { totalCount?: number; nodes?: BucketConnectionNode[] } }
-      errors?: Array<{ message?: string }>
-    }
-
-    if (!response.ok || payload.errors?.length) {
-      const message = payload.errors?.[0]?.message || `Indexer request failed (${response.status})`
-      throw new Error(message)
-    }
-
-    const newBuckets = payload.data?.buckets?.nodes ?? []
-    totalCount.value = payload.data?.buckets?.totalCount ?? 0
-
-    if (offset.value === 0) {
-      buckets.value = newBuckets
-    } else {
-      buckets.value.push(...newBuckets)
-    }
-
-    offset.value += newBuckets.length
-
-    await loadBlockTimestamps(
-      newBuckets
-        .map((bucket) => bucket.messages.nodes[0]?.createdBlock)
-        .filter((value): value is number => typeof value === "number")
+    const page = await bucketsRepository.fetchMyBuckets(
+      resolveIndexerAddress(session.accountAddress),
+      resolveViewerKeyHex(),
+      { first: pageSize, after: reset ? null : endCursor.value }
     )
+
+    totalCount.value = page.totalCount
+    hasNextPage.value = page.hasNextPage
+    endCursor.value = page.endCursor
+    buckets.value = reset ? page.nodes : [...buckets.value, ...page.nodes]
+
+    const times = await bucketsRepository.fetchLatestMessageTimes(page.nodes.map((b) => b.bucketId))
+    lastMessageAtByBucket.value = { ...lastMessageAtByBucket.value, ...times }
   } catch (fetchError) {
     error.value = fetchError instanceof Error ? fetchError.message : "Unable to load buckets"
   } finally {
@@ -305,7 +163,7 @@ function setupIntersectionObserver(): void {
     (entries) => {
       const entry = entries[0]
       if (entry?.isIntersecting && hasMoreData.value && !loading.value && !loadingMore.value) {
-        void loadBuckets()
+        void loadBuckets(false)
       }
     },
     { rootMargin: "100px" }
@@ -317,16 +175,14 @@ function setupIntersectionObserver(): void {
 watch(
   () => session.accountAddress,
   () => {
-    offset.value = 0
-    void loadBuckets()
+    void loadBuckets(true)
   }
 )
 
 watch(
   () => settings.x25519SecretJwk?.x,
   () => {
-    offset.value = 0
-    void loadBuckets()
+    void loadBuckets(true)
   }
 )
 
@@ -334,7 +190,7 @@ onMounted(() => {
   settings.initialize()
   setupIntersectionObserver()
   if (isWalletConnected.value) {
-    void loadBuckets()
+    void loadBuckets(true)
   }
 })
 </script>
@@ -377,15 +233,15 @@ onMounted(() => {
             </div>
 
             <div class="row" style="gap: 6px; flex-wrap: wrap">
-              <span v-if="bucket.admins.totalCount > 0"
+              <span v-if="bucket.isAdmin"
                 style="padding: 6px 12px; border-radius: 999px; font-size: 12px; background: var(--color-primary); color: white; font-weight: 500">
                 Admin
               </span>
-              <span v-if="bucket.contributors.totalCount > 0"
+              <span v-if="bucket.isContributor"
                 style="padding: 6px 12px; border-radius: 999px; font-size: 12px; background: var(--color-primary); color: white; font-weight: 500">
                 Contributor
               </span>
-              <span v-if="bucket.viewers.totalCount > 0"
+              <span v-if="bucket.isViewer"
                 style="padding: 6px 12px; border-radius: 999px; font-size: 12px; background: var(--color-primary); color: white; font-weight: 500">
                 Viewer
               </span>

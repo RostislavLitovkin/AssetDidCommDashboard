@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { fetchIndexedBucketDetail, fetchIndexedMessages, fetchIndexedMessagesByTag, fetchIndexedNamespaceManagers, type IndexedBucket, type IndexedMessage, type IndexedBucketMember, type IndexedBucketViewer } from "../../../services/indexer/subqueryClient"
-import { DidCommRepository, type ExtrinsicUpdate } from "../../../services/papi/didCommRepository"
+import type { ApiBucket, ApiMessage, OperationUpdate } from "../../../services/buckets/types"
+import { isFileMessage, normalizeX25519ToJwkX } from "../../../services/buckets/valueCodecs"
 import { ProfileClient } from "../../../services/profile/profileClient"
 import { findViewersWithoutKeyAccess } from "../../../services/messages/keySharingCoverage"
 import { resolveAvatarUrls, toSs58Prefix42 } from "../../../services/profile/avatarResolver"
@@ -8,20 +8,17 @@ import ParticleLoader from "../../../components/common/ParticleLoader.vue"
 import PageHeader from "../../../components/common/PageHeader.vue"
 import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } from "../../../components/common/ChatMessageEntry.vue"
 import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, Check } from "lucide-vue-next"
-import { hexToU8a } from "@polkadot/util"
-import { deriveBlockTimestampMs, parseTimestampU64, TIMESTAMP_STORAGE_KEY } from "../../../services/chain/blockTime"
 import { useAddress } from "../../../composables/useAddress"
 import { useWallet } from "../../../composables/useWallet"
 import * as jose from "jose"
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue"
-import { useNuxtApp, useRoute, useRuntimeConfig } from "nuxt/app"
+import { computed, nextTick, onMounted, ref, shallowRef, watch } from "vue"
+import { useRoute, useRuntimeConfig } from "nuxt/app"
 import { useOperationsStore } from "../../../stores/operations"
 import { useSessionStore } from "../../../stores/session"
 import { useSettingsStore } from "../../../stores/settings"
 
 const route = useRoute()
 const config = useRuntimeConfig()
-const { $papiClient } = useNuxtApp()
 const session = useSessionStore()
 const settings = useSettingsStore()
 const operations = useOperationsStore()
@@ -54,28 +51,9 @@ async function selectWalletAccount(address: string): Promise<void> {
   }
 }
 
-const asOptionalString = (value: unknown): string | undefined => {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined
-}
-
-const didCommRepository = new DidCommRepository(
-  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string },
-  // Positional args 2-15 (extrinsic submitters / storage readers) use their defaults.
-  undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
-  { // 16 pinataConfig
-    jwt: asOptionalString(config.public.pinataJwt),
-    apiKey: asOptionalString(config.public.pinataApiKey),
-    apiSecret: asOptionalString(config.public.pinataApiSecret),
-    publicGateway: asOptionalString(config.public.pinataGateway)
-  },
-  undefined, // 17 submitBucketKeyRotationBatchExtrinsic
-  undefined, // 18 submitAddNamespaceManagerExtrinsic
-  undefined, // 19 submitRemoveNamespaceManagerExtrinsic
-  String(config.public.subqueryIndexerUrl || "") // 20 indexerUrl
-)
+const bucketsRepository = useBucketsRepository()
 const profileClient = new ProfileClient(String(config.public.profileApiUrl))
 
-const indexerUrl = computed(() => String(config.public.subqueryIndexerUrl || ""))
 const pinataGateway = computed(() => {
   const gw = String(config.public.pinataGateway || "https://gateway.pinata.cloud/ipfs")
   return gw.replace(/\/+$/, "")
@@ -90,12 +68,12 @@ const bucketId = computed(() => {
 // ── State ──────────────────────────────────────────────────────────
 const loading = ref(true)
 const error = ref("")
-const bucket = ref<IndexedBucket | null>(null)
-const admins = ref<IndexedBucketMember[]>([])
-const contributors = ref<IndexedBucketMember[]>([])
-const viewers = ref<IndexedBucketViewer[]>([])
+const bucket = ref<ApiBucket | null>(null)
+const admins = ref<string[]>([])
+const contributors = ref<string[]>([])
+const viewers = ref<string[]>([])
 const namespaceManagers = ref<string[]>([])
-const messages = ref<IndexedMessage[]>([])
+const messages = ref<ApiMessage[]>([])
 const avatarUrlByAddress = ref<Record<string, string>>({})
 const profilesByAddress = ref<Record<string, import("../../../types/profile").Profile>>({})
 
@@ -109,8 +87,8 @@ const attachmentById = ref<Record<string, ChatMessageAttachment>>({})
 // chronologically. Messages are decrypted with the key of their era (the most
 // recent key shared before them); sending always uses the latest key.
 interface BucketKeyEntry {
-  createdBlock: number
-  messageId: number
+  createdAt: string
+  messageId: string
   jwk: jose.JWK
   key: Awaited<ReturnType<typeof jose.importJWK>>
 }
@@ -122,11 +100,10 @@ const activeSecretJwk = computed<jose.JWK | null>(() => {
   return entries.length ? entries[entries.length - 1]!.jwk : null
 })
 const keySharingError = ref("")
-const keySharingMessages = ref<IndexedMessage[]>([])
+const keySharingMessages = ref<ApiMessage[]>([])
 // null = not yet checked (lazy, admins only); a number is the count of viewers
 // whose X25519 key is missing from the latest key-sharing message.
 const viewersMissingKeyCount = ref<number | null>(null)
-const blockTimestamps = ref<Record<number, string>>({})
 
 const sendText = ref("")
 const sendError = ref("")
@@ -134,14 +111,12 @@ const sending = ref(false)
 
 // ── Optimistic outgoing messages ───────────────────────────────────
 // A pending message is rendered as a normal outgoing bubble whose timestamp
-// slot shows the send status until the indexer picks the message up.
-type PendingStatus = "signing" | "submitting" | "processing" | "finalizing" | "indexing" | "failed"
+// slot shows the send status until it has been submitted and the page has
+// reloaded to pick it up.
+type PendingStatus = "signing" | "indexing" | "failed"
 
 const pendingStatusLabels: Record<PendingStatus, string> = {
   signing: "signing…",
-  submitting: "submitting…",
-  processing: "processing…",
-  finalizing: "finalizing…",
   indexing: "indexing…",
   failed: "failed"
 }
@@ -153,11 +128,6 @@ interface PendingOutgoingMessage {
   status: PendingStatus
   errorMessage?: string
   senderAddress: string
-  /** Indexed message ids that existed when the send started. */
-  baselineIds: Set<string>
-  /** How many new own messages must appear before this one counts as indexed
-   *  (covers earlier sends that were still in flight when this one started). */
-  requiredNewCount: number
 }
 
 const pendingMessages = ref<PendingOutgoingMessage[]>([])
@@ -170,11 +140,11 @@ const keySharingTag = "didcomm/key-sharing-v1"
 const bucketDisplayName = computed(() => bucket.value?.name || `Bucket ${bucketId.value}`)
 const connectedAdmin = computed(() => {
   if (!session.accountAddress) return false
-  return admins.value.some(a => addressesEqual(a.subjectId, session.accountAddress!))
+  return admins.value.some(a => addressesEqual(a, session.accountAddress!))
 })
 const connectedContributor = computed(() => {
   if (!session.accountAddress) return false
-  return contributors.value.some(c => addressesEqual(c.subjectId, session.accountAddress!))
+  return contributors.value.some(c => addressesEqual(c, session.accountAddress!))
 })
 const connectedAdminOrContributor = computed(() => connectedAdmin.value || connectedContributor.value)
 const connectedNamespaceManager = computed(() => {
@@ -186,15 +156,15 @@ const canManageBucket = computed(() => connectedAdmin.value || connectedNamespac
 // ── Empty-bucket setup timeline ────────────────────────────────────
 const memberCount = computed(() => {
   const unique = new Set<string>()
-  for (const member of [...admins.value, ...contributors.value]) unique.add(member.subjectId)
+  for (const member of [...admins.value, ...contributors.value]) unique.add(member)
   return unique.size
 })
 
 // Viewers are keyed on-chain by their X25519 key, so the identifier itself is the key.
 const viewerRecipients = computed(() => {
-  return viewers.value.flatMap(viewer => {
-    const x25519 = normalizeX25519Value(viewer.subjectId)
-    return x25519 ? [{ address: viewer.subjectId, x25519 }] : []
+  return viewers.value.flatMap(viewerKey => {
+    const x25519 = normalizeX25519ToJwkX(viewerKey)
+    return x25519 ? [{ address: viewerKey, x25519 }] : []
   })
 })
 
@@ -209,62 +179,10 @@ const addMemberUrl = computed(() => {
   return `/messages/bucket/add-member/${encodeURIComponent(bucketId.value)}?namespaceId=${encodeURIComponent(namespaceId)}`
 })
 
-// ── Block timestamp caching ────────────────────────────────────────
-// Substrate block headers carry no timestamp — it lives in the Timestamp::Now
-// storage item. Rather than querying every message block (each RPC opens its own
-// WebSocket), we fetch the real timestamp of the newest message block once and
-// derive the rest at a fixed 6s block time.
-let timestampLoading = false
-// Real on-chain timestamp (ms) for blocks we've actually queried, keyed by block
-// number. Kept separate from `blockTimestamps` (formatted display strings) so a
-// fetched anchor is never mistaken for a derived estimate.
-const anchorTimestampMsByBlock = new Map<number, number>()
-
-async function fetchBlockTimestampMs(blockNumber: number): Promise<number | null> {
-  try {
-    const blockHash = await $papiClient.rpc("chain_getBlockHash", [blockNumber]) as string | null
-    if (!blockHash) return null
-    const storage = await $papiClient.rpc("state_getStorage", [TIMESTAMP_STORAGE_KEY, blockHash]) as string | null
-    return parseTimestampU64(storage)
-  } catch {
-    return null
-  }
-}
-
-async function lazyLoadBlockTimestamps() {
-  if (timestampLoading) return
-  timestampLoading = true
-  try {
-    const blocks = Array.from(new Set(messages.value.map(m => m.createdBlock)))
-      .filter(n => Number.isFinite(n) && n > 0)
-    if (!blocks.length) return
-
-    // Anchor on the newest message block: fetch its real timestamp once, then
-    // derive every other block's time from it (1 block ≈ 6 seconds).
-    const anchorBlock = Math.max(...blocks)
-    let anchorMs = anchorTimestampMsByBlock.get(anchorBlock)
-    if (anchorMs === undefined) {
-      const fetched = await fetchBlockTimestampMs(anchorBlock)
-      if (fetched === null) return // leave the block-number fallback showing
-      anchorMs = fetched
-      anchorTimestampMsByBlock.set(anchorBlock, anchorMs)
-    }
-
-    const next = { ...blockTimestamps.value }
-    for (const blockNumber of blocks) {
-      const estimatedMs = deriveBlockTimestampMs(anchorBlock, anchorMs, blockNumber)
-      next[blockNumber] = new Date(estimatedMs).toLocaleString()
-    }
-    blockTimestamps.value = next
-  } finally {
-    timestampLoading = false
-  }
-}
-
 // ── Chat message rendering ─────────────────────────────────────────
 const chatMessages = computed<ChatMessageProps[]>(() => {
   // Sort messages chronologically so oldest is at the top, newest at the bottom
-  const sortedMessages = [...messages.value].sort((a, b) => a.createdBlock - b.createdBlock)
+  const sortedMessages = [...messages.value].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
 
   const entries = sortedMessages.map(m => {
     const payload = decryptedById.value[m.id] ?? payloadById.value[m.id]
@@ -287,16 +205,12 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
     if (m.tag) debugEntries.push({ key: "Tag", value: m.tag })
     if (m.contentType) debugEntries.push({ key: "Content Type", value: m.contentType })
     if (m.reference) debugEntries.push({ key: "IPFS Ref", value: m.reference })
-    // Show block number only in debug mode
+    // Show the raw createdAt only in debug mode
     if (settings.showMessageDebug) {
-      debugEntries.push({ key: "Block", value: formatBlock(m.createdBlock) })
+      debugEntries.push({ key: "Created At", value: m.createdAt })
     }
 
-    // Use cached timestamp or fallback to block number for display
-    // Lazy loading happens via watcher after initial render
-    const timestampLabel = settings.showMessageDebug
-      ? formatBlock(m.createdBlock)
-      : (blockTimestamps.value[m.createdBlock] ?? formatBlock(m.createdBlock))
+    const timestampLabel = new Date(m.createdAt).toLocaleString()
 
     return {
       id: m.id, body, outgoing,
@@ -312,19 +226,10 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
     }
   })
 
-  // Optimistic in-flight messages sit at the bottom, newest last. Once the
-  // indexed copy of a pending message lands in `messages`, the pending bubble
-  // is hidden immediately so the message never renders twice while the
-  // tracker finishes reloading.
+  // Optimistic in-flight messages sit at the bottom, newest last. They stay in
+  // `pendingMessages` only until their submit call resolves and the page has
+  // reloaded to include them, so there is never a duplicate bubble to hide.
   for (const p of pendingMessages.value) {
-    const failed = p.status === "failed"
-    // Failed entries never went on-chain — the arrival check is meaningless
-    // for them (a later successful send would wrongly satisfy it).
-    if (!failed) {
-      const indexedOwn = messages.value
-        .filter(m => !p.baselineIds.has(m.id) && addressesEqual(m.contributor, p.senderAddress)).length
-      if (indexedOwn >= p.requiredNewCount) continue
-    }
     entries.push({
       id: p.id,
       body: p.body,
@@ -334,7 +239,7 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
       attachment: p.attachment,
       timestampLabel: pendingStatusLabels[p.status],
       pending: true,
-      failed,
+      failed: p.status === "failed",
       payloadError: p.errorMessage
     })
   }
@@ -342,14 +247,12 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
   return entries
 })
 
-// ── Load everything via GraphQL ────────────────────────────────────
+// ── Load everything ────────────────────────────────────────────────
 async function loadAll() {
   error.value = ""
   loading.value = true
   try {
-    const url = indexerUrl.value
-    if (!url) throw new Error("SubQuery indexer URL is not configured")
-    const detail = await fetchIndexedBucketDetail(url, bucketId.value)
+    const detail = await bucketsRepository.fetchBucketDetail(bucketId.value)
     if (!detail) { error.value = "Bucket not found in indexer"; return }
     bucket.value = detail.bucket
     admins.value = detail.admins
@@ -359,15 +262,15 @@ async function loadAll() {
 
     // Namespace managers gate the setup timeline; a failed lookup must not break the page.
     try {
-      namespaceManagers.value = detail.bucket.namespaceId != null
-        ? (await fetchIndexedNamespaceManagers(url, String(detail.bucket.namespaceId))).map(m => m.manager)
+      namespaceManagers.value = detail.bucket.namespaceId
+        ? await bucketsRepository.fetchNamespaceManagers(detail.bucket.namespaceId)
         : []
     } catch {
       namespaceManagers.value = []
     }
 
     // 1. Fetch key-sharing messages by tag first
-    keySharingMessages.value = await fetchIndexedMessagesByTag(url, bucketId.value, keySharingTag)
+    keySharingMessages.value = await bucketsRepository.fetchMessagesByTag(bucketId.value, keySharingTag)
     viewersMissingKeyCount.value = null // data changed — the lazy viewer check must re-run
 
     // 2. Hydrate their payloads so we can decrypt them
@@ -401,7 +304,7 @@ function resolveUrl(ref: string): string {
   return `${pinataGateway.value}/ipfs/${t}`
 }
 
-async function hydratePayloads(msgs: IndexedMessage[]) {
+async function hydratePayloads(msgs: ApiMessage[]) {
   const nextP: Record<string, string> = { ...payloadById.value }
   const nextE: Record<string, string> = { ...payloadErrorById.value }
   await Promise.all(msgs.map(async m => {
@@ -437,7 +340,7 @@ function looksLikeCompactJwe(s: string): boolean {
 
 function parseJson(s: string): unknown { try { return JSON.parse(s) } catch { return undefined } }
 
-async function decryptKeySharingFromMessages(keySharingMessages: IndexedMessage[]) {
+async function decryptKeySharingFromMessages(keySharingMessages: ApiMessage[]) {
   keySharingError.value = ""
   bucketKeyEntries.value = []
 
@@ -470,7 +373,7 @@ async function decryptKeySharingFromMessages(keySharingMessages: IndexedMessage[
         if (isX25519Secret(k)) {
           const jwk: jose.JWK = { ...k, use: "enc" }
           entries.push({
-            createdBlock: ksMsg.createdBlock,
+            createdAt: ksMsg.createdAt,
             messageId: ksMsg.messageId,
             jwk,
             key: await jose.importJWK(jwk, "ECDH-ES+A256KW")
@@ -483,7 +386,7 @@ async function decryptKeySharingFromMessages(keySharingMessages: IndexedMessage[
     }
   }))
 
-  entries.sort((a, b) => a.createdBlock - b.createdBlock || a.messageId - b.messageId)
+  entries.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || Number(a.messageId) - Number(b.messageId))
   bucketKeyEntries.value = entries
 
   if (!entries.length) {
@@ -492,15 +395,15 @@ async function decryptKeySharingFromMessages(keySharingMessages: IndexedMessage[
 }
 
 // The key that was current when the message was written: the most recent
-// key-sharing entry strictly before it (by block, then on-chain messageId for
-// same-block ordering). Falls back to the earliest known key for messages
-// older than anything we could decrypt.
-function keyEntryForMessage(m: IndexedMessage): BucketKeyEntry | null {
+// key-sharing entry strictly before it (by createdAt, then on-chain messageId
+// for same-timestamp ordering). Falls back to the earliest known key for
+// messages older than anything we could decrypt.
+function keyEntryForMessage(m: ApiMessage): BucketKeyEntry | null {
   const entries = bucketKeyEntries.value
   let match: BucketKeyEntry | null = null
   for (const entry of entries) {
-    const sharedBefore = entry.createdBlock < m.createdBlock
-      || (entry.createdBlock === m.createdBlock && entry.messageId < m.messageId)
+    const sharedBefore = Date.parse(entry.createdAt) < Date.parse(m.createdAt)
+      || (entry.createdAt === m.createdAt && Number(entry.messageId) < Number(m.messageId))
     if (sharedBefore) match = entry
   }
   return match ?? entries[0] ?? null
@@ -508,7 +411,7 @@ function keyEntryForMessage(m: IndexedMessage): BucketKeyEntry | null {
 
 // Decrypts with the message's era key first, then falls back to the remaining
 // keys (newest first) — defensive against share/rotation edge cases.
-async function decryptCompactWithEraKey(m: IndexedMessage, compactJwe: string): Promise<jose.CompactDecryptResult> {
+async function decryptCompactWithEraKey(m: ApiMessage, compactJwe: string): Promise<jose.CompactDecryptResult> {
   const entries = bucketKeyEntries.value
   const primary = keyEntryForMessage(m)
   const candidates: BucketKeyEntry[] = primary ? [primary] : []
@@ -528,7 +431,7 @@ async function decryptCompactWithEraKey(m: IndexedMessage, compactJwe: string): 
   throw lastError instanceof Error ? lastError : new Error("Decrypt failed")
 }
 
-async function decryptMessages(msgs: IndexedMessage[]) {
+async function decryptMessages(msgs: ApiMessage[]) {
   const nextD: Record<string, string> = {}
   const nextE: Record<string, string> = {}
   if (!bucketKeyEntries.value.length) { decryptedById.value = {}; decryptErrorById.value = {}; return }
@@ -553,15 +456,7 @@ async function decryptMessages(msgs: IndexedMessage[]) {
 }
 
 // ── File attachments (CID-pointer messages) ────────────────────────
-const textMessageContentType = "text/plain;charset=utf-8"
-const keySharingContentType = "application/didcomm-encrypted+json"
-
-// A file message carries a real MIME contentType on-chain; its reference points at the encrypted file.
-function isFileMessage(m: IndexedMessage): boolean {
-  if (m.tag === keySharingTag) return false
-  const ct = m.contentType?.trim()
-  return Boolean(ct && ct !== textMessageContentType && ct !== keySharingContentType)
-}
+// isFileMessage is imported from services/buckets/valueCodecs.
 
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = ""
@@ -572,7 +467,7 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
-async function hydrateAttachments(msgs: IndexedMessage[]) {
+async function hydrateAttachments(msgs: ApiMessage[]) {
   const next: Record<string, ChatMessageAttachment> = { ...attachmentById.value }
   const nextE: Record<string, string> = { ...decryptErrorById.value }
 
@@ -603,7 +498,7 @@ async function hydrateAttachments(msgs: IndexedMessage[]) {
 // name their sender by nickname even when that sender is you. Avatars are only
 // rendered for incoming messages, so the extra own-profile lookup costs one
 // request and nothing else.
-async function loadSenderProfiles(msgs: IndexedMessage[]) {
+async function loadSenderProfiles(msgs: ApiMessage[]) {
   const senders = Array.from(new Set(
     msgs.map(m => m.contributor).filter((addr): addr is string => Boolean(addr))
   ))
@@ -640,7 +535,7 @@ async function encryptOutgoing(plaintext: Uint8Array | string, extraProtectedHea
     .encrypt(publicKey)
 }
 
-function logExtrinsicUpdate(update: ExtrinsicUpdate): void {
+function logOperationUpdate(update: OperationUpdate): void {
   operations.add(
     "bucket_write",
     `buckets.write:${update.stage}`,
@@ -676,69 +571,6 @@ function updatePendingStatus(id: string, status: PendingStatus): void {
   if (entry) entry.status = status
 }
 
-const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
-
-// Stops in-flight trackers from polling and mutating state after navigation.
-let pageDisposed = false
-onBeforeUnmount(() => { pageDisposed = true })
-
-function parseHeaderNumber(header: unknown): number {
-  const number = (header as { number?: string } | null)?.number
-  return typeof number === "string" ? parseInt(number, 16) : NaN
-}
-
-// The repository resolves (and unsubscribes) at inBlock, so finalization is
-// tracked here by polling the finalized head until it reaches the inclusion block.
-async function waitForFinalization(inBlockHash: string | undefined): Promise<void> {
-  if (!inBlockHash) return
-  try {
-    const inclusionNumber = parseHeaderNumber(await $papiClient.rpc("chain_getHeader", [inBlockHash]))
-    if (!Number.isFinite(inclusionNumber)) return
-    const deadline = Date.now() + 90_000
-    while (!pageDisposed && Date.now() < deadline) {
-      const finalizedHash = await $papiClient.rpc("chain_getFinalizedHead") as string | null
-      if (finalizedHash) {
-        const finalizedNumber = parseHeaderNumber(await $papiClient.rpc("chain_getHeader", [finalizedHash]))
-        if (Number.isFinite(finalizedNumber) && finalizedNumber >= inclusionNumber) return
-      }
-      await sleep(3000)
-    }
-  } catch {
-    // Finalization tracking is best-effort; fall through to the indexing phase.
-  }
-}
-
-async function trackPendingMessage(pending: PendingOutgoingMessage, inBlockHash: string | undefined): Promise<void> {
-  const isNewOwnMessage = (m: IndexedMessage) =>
-    !pending.baselineIds.has(m.id) && addressesEqual(m.contributor, pending.senderAddress)
-
-  try {
-    await waitForFinalization(inBlockHash)
-    if (pageDisposed) return
-    updatePendingStatus(pending.id, "indexing")
-
-    let arrived = false
-    const deadline = Date.now() + 120_000
-    while (!pageDisposed && Date.now() < deadline) {
-      try {
-        const indexed = await fetchIndexedMessages(indexerUrl.value, bucketId.value)
-        if (indexed.filter(isNewOwnMessage).length >= pending.requiredNewCount) { arrived = true; break }
-      } catch {
-        // Transient indexer error — keep polling until the deadline.
-      }
-      await sleep(3000)
-    }
-
-    if (pageDisposed) return
-    await loadAll()
-    if (!arrived && messages.value.filter(isNewOwnMessage).length < pending.requiredNewCount) {
-      sendError.value = "Message submitted, but the indexer has not picked it up yet. Use Reload to check again."
-    }
-  } finally {
-    pendingMessages.value = pendingMessages.value.filter(p => p.id !== pending.id)
-  }
-}
-
 function base64ToBytes(b64: string): Uint8Array {
   const binary = atob(b64)
   const bytes = new Uint8Array(binary.length)
@@ -746,19 +578,16 @@ function base64ToBytes(b64: string): Uint8Array {
   return bytes
 }
 
-// Signs and submits a pending entry's payload, driving its status through the
-// extrinsic lifecycle. On failure the entry stays in the chat as "failed"
-// with Retry/Discard actions instead of being dropped.
+// Signs and submits a pending entry's payload. On failure the entry stays in
+// the chat as "failed" with Retry/Discard actions instead of being dropped.
+// The buckets API is synchronous, so a resolved call means the message is
+// already readable — reload and drop the pending bubble immediately.
 async function submitPending(pending: PendingOutgoingMessage): Promise<void> {
   sending.value = true
 
-  let inBlockHash: string | undefined
-  const onExtrinsicUpdate = (update: ExtrinsicUpdate): void => {
-    logExtrinsicUpdate(update)
-    if (update.stage === "submitted") updatePendingStatus(pending.id, "submitting")
-    else if (update.stage === "broadcast") updatePendingStatus(pending.id, "processing")
-    else if (update.stage === "inBlock") { inBlockHash = update.blockHash; updatePendingStatus(pending.id, "finalizing") }
-    else if (update.stage === "finalized") updatePendingStatus(pending.id, "indexing")
+  const onOperationUpdate = (update: OperationUpdate): void => {
+    logOperationUpdate(update)
+    if (update.stage === "error") updatePendingStatus(pending.id, "failed")
   }
 
   try {
@@ -769,18 +598,21 @@ async function submitPending(pending: PendingOutgoingMessage): Promise<void> {
         cty: pending.attachment.contentType,
         filename: pending.attachment.fileName ?? "attachment"
       })
-      result = await didCommRepository.createFileMessage(
-        bucketId.value, fileJwe, pending.attachment.contentType, pending.senderAddress, onExtrinsicUpdate
+      result = await bucketsRepository.createFileMessage(
+        bucketId.value, fileJwe, pending.attachment.contentType, pending.senderAddress, onOperationUpdate
       )
     } else {
       const encrypted = await encryptOutgoing(pending.body)
-      result = await didCommRepository.createMessage(
-        bucketId.value, encrypted, pending.senderAddress, onExtrinsicUpdate
+      result = await bucketsRepository.createMessage(
+        bucketId.value, encrypted, pending.senderAddress, onOperationUpdate
       )
     }
-    operations.add("bucket_write", result.method, "success", `Message submitted: ${result.txHash}`)
-    // The composer unlocks now; the bubble keeps reporting finalization/indexing.
-    void trackPendingMessage(pending, inBlockHash)
+    operations.add("bucket_write", result.method, "success", `Message submitted: ${result.id}`)
+    // The API is synchronous: once the call resolves the message is already
+    // readable, so advance straight to "indexing", reload, and drop the bubble.
+    updatePendingStatus(pending.id, "indexing")
+    await loadAll()
+    pendingMessages.value = pendingMessages.value.filter(p => p.id !== pending.id)
   } catch (e) {
     const entry = pendingMessages.value.find(p => p.id === pending.id)
     if (entry) {
@@ -815,9 +647,7 @@ async function sendMessage() {
         }
       : undefined,
     status: "signing",
-    senderAddress: session.accountAddress,
-    baselineIds: new Set(messages.value.map(m => m.id)),
-    requiredNewCount: pendingMessages.value.filter(p => p.status !== "failed").length + 1
+    senderAddress: session.accountAddress
   }
   pendingMessages.value = [...pendingMessages.value, pending]
 
@@ -829,9 +659,6 @@ async function retryFailedMessage(id: string): Promise<void> {
   if (!entry || entry.status !== "failed" || sending.value) return
   entry.status = "signing"
   entry.errorMessage = undefined
-  // The chat may have moved on since the failed attempt — re-baseline.
-  entry.baselineIds = new Set(messages.value.map(m => m.id))
-  entry.requiredNewCount = pendingMessages.value.filter(p => p.id !== id && p.status !== "failed").length + 1
   await submitPending(entry)
 }
 
@@ -842,19 +669,6 @@ function discardFailedMessage(id: string): void {
 }
 
 // ── Create & share bucket encryption key (setup timeline step 2) ───
-function isHex32(value: string): boolean {
-  return /^0x[0-9a-fA-F]{64}$/.test(value)
-}
-
-function normalizeX25519Value(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined
-  const trimmed = value.trim()
-  if (!trimmed || trimmed === "Not found") return undefined
-  // Some chains return x25519 as hex; convert to JWK x (base64url)
-  if (isHex32(trimmed)) return jose.base64url.encode(hexToU8a(trimmed))
-  return trimmed
-}
-
 function randomNumericKeyId(): number {
   return Math.floor(Math.random() * 1_000_000_000_000)
 }
@@ -978,27 +792,27 @@ async function createAndShareEncryptionKey(): Promise<void> {
     const plaintextBytes = new TextEncoder().encode(keySharingMessage)
     const jweObject = await encryptJweForMultipleRecipients(plaintextBytes, recipientJwks)
 
-    const batchResult = await didCommRepository.rotateBucketKeyAndShare(
+    const batchResult = await bucketsRepository.rotateBucketKeyAndShare(
       namespaceId,
       bucketId.value,
       bucketEncryptionKey,
       keySharingTag,
       JSON.stringify(jweObject),
       session.accountAddress,
-      logExtrinsicUpdate
+      logOperationUpdate
     )
 
     operations.add(
       "bucket_write",
       batchResult.method,
       "success",
-      `Bucket key rotated and shared via batchAll. keyId=${keyId}, tx=${batchResult.txHash}`
+      `Bucket key rotated and shared. keyId=${keyId}, id=${batchResult.id}`
     )
 
     await loadAll()
   } catch (e) {
     createKeyError.value = e instanceof Error ? e.message : "Unable to rotate bucket encryption key"
-    operations.add("bucket_write", "utility.batchAll", "error", createKeyError.value)
+    operations.add("bucket_write", "rotateKey+write", "error", createKeyError.value)
   } finally {
     creatingKey.value = false
   }
@@ -1034,8 +848,6 @@ function summarize(payload: string): string | undefined {
   return JSON.stringify(r, null, 2)
 }
 
-function formatBlock(n: number): string { return `Block #${n.toLocaleString()}` }
-
 // ── Lifecycle ──────────────────────────────────────────────────────
 async function scrollToBottom() {
   await nextTick()
@@ -1045,19 +857,12 @@ async function scrollToBottom() {
 
 watch(() => chatMessages.value.length, () => scrollToBottom())
 watch(() => settings.x25519SecretJwk, async () => {
-  const url = indexerUrl.value
-  if (!url) return
-  keySharingMessages.value = await fetchIndexedMessagesByTag(url, bucketId.value, keySharingTag)
+  keySharingMessages.value = await bucketsRepository.fetchMessagesByTag(bucketId.value, keySharingTag)
   await hydratePayloads(keySharingMessages.value)
   await decryptKeySharingFromMessages(keySharingMessages.value)
   await decryptMessages(messages.value)
   await hydrateAttachments(messages.value)
 }, { deep: true })
-
-// Lazy load block timestamps when messages change
-watch(messages, () => {
-  lazyLoadBlockTimestamps()
-}, { immediate: true })
 
 onMounted(async () => {
   settings.initialize()
