@@ -19,35 +19,31 @@ vi.mock("@polkadot/util-crypto", () => ({
   cryptoWaitReady: walletMocks.cryptoWaitReady
 }))
 
-import { WalletExtensionProvider } from "../../app/services/wallet/extensionProvider"
+import { PolkadotWalletProvider } from "../../app/services/wallet/polkadotProvider"
 
-describe("useWallet", () => {
+describe("PolkadotWalletProvider.signApiRequest", () => {
   afterEach(() => {
     vi.useRealTimers()
     vi.clearAllMocks()
   })
 
-  it("signs the API's Blake2-128 hash of the canonical request payload", async () => {
+  it("signs the blake2-128 hash of the composed payload (sr25519 contract)", async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date("2026-07-11T22:58:41.735Z"))
     walletMocks.web3FromAddress.mockResolvedValue({ signer: { signRaw: walletMocks.signRaw } })
-    walletMocks.blake2AsHex
-      .mockReturnValueOnce("0xbodyhash")
-      .mockReturnValueOnce("0xpayloadhash")
+    walletMocks.blake2AsHex.mockReturnValueOnce("0xpayloadhash")
 
-    const provider = new WalletExtensionProvider()
-    const headers = await provider.signProfileRequest(
+    const provider = new PolkadotWalletProvider()
+    const headers = await provider.signApiRequest(
       "5Example",
       "PUT",
       "/api/profiles/5Example",
-      { kind: "json", canonicalJson: "{\"nickname\":\"alice\"}" }
+      "0xBODYHASH"
     )
 
-    expect(walletMocks.blake2AsHex).toHaveBeenNthCalledWith(1, "{\"nickname\":\"alice\"}", 128)
-    // Body hash embedded as C# Bytes2HexString form (0x + UPPERCASE); timestamp in
-    // C# :o form (7 fractional digits).
-    expect(walletMocks.blake2AsHex).toHaveBeenNthCalledWith(
-      2,
+    // Payload uses the C# Bytes2HexString body hash (0x+UPPERCASE, precomputed
+    // by the caller) and the C# :o timestamp (7 fractional digits).
+    expect(walletMocks.blake2AsHex).toHaveBeenCalledWith(
       "PUT:/api/profiles/5Example:0xBODYHASH:2026-07-11T22:58:41.7350000Z",
       128
     )
@@ -63,59 +59,46 @@ describe("useWallet", () => {
     })
   })
 
-  it("signs an empty body hash for multipart image uploads", async () => {
+  it("supports the empty body-hash segment (multipart image uploads)", async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date("2026-07-11T22:58:41.735Z"))
     walletMocks.web3FromAddress.mockResolvedValue({ signer: { signRaw: walletMocks.signRaw } })
     walletMocks.blake2AsHex.mockReturnValue("0xpayloadhash")
 
-    const provider = new WalletExtensionProvider()
-    await provider.signProfileRequest(
-      "5Example",
-      "POST",
-      "/api/profiles/5Example/image",
-      { kind: "empty" }
-    )
+    const provider = new PolkadotWalletProvider()
+    await provider.signApiRequest("5Example", "POST", "/api/profiles/5Example/image", "")
 
-    // No body is hashed; the payload carries an empty body-hash segment (::).
-    expect(walletMocks.blake2AsHex).toHaveBeenCalledTimes(1)
     expect(walletMocks.blake2AsHex).toHaveBeenCalledWith(
       "POST:/api/profiles/5Example/image::2026-07-11T22:58:41.7350000Z",
       128
     )
   })
 
-  it("signs the GraphQL API's Blake2-128 hash of the raw request body", async () => {
+  it("signs GraphQL requests with the fixed POST /graphql method and path", async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date("2026-07-11T22:58:41.735Z"))
     walletMocks.web3FromAddress.mockResolvedValue({ signer: { signRaw: walletMocks.signRaw } })
-    walletMocks.blake2AsHex
-      .mockReturnValueOnce("0xbodyhash")
-      .mockReturnValueOnce("0xpayloadhash")
+    walletMocks.blake2AsHex.mockReturnValueOnce("0xpayloadhash")
 
-    const provider = new WalletExtensionProvider()
-    const rawBody = "{\"query\":\"mutation { write { id } }\"}"
-    const headers = await provider.signGraphqlRequest("5Example", rawBody)
+    const provider = new PolkadotWalletProvider()
+    const headers = await provider.signApiRequest("5Example", "POST", "/graphql", "0xBODYHASH")
 
-    // The GraphQL signer hashes the RAW request body (no re-serialization),
-    // unlike signProfileRequest which hashes a canonicalized body.
-    expect(walletMocks.blake2AsHex).toHaveBeenNthCalledWith(1, rawBody, 128)
-    // Body hash embedded as C# Bytes2HexString form (0x + UPPERCASE); timestamp in
-    // C# :o form (7 fractional digits); method/path are fixed to POST /graphql.
-    expect(walletMocks.blake2AsHex).toHaveBeenNthCalledWith(
-      2,
+    expect(walletMocks.blake2AsHex).toHaveBeenCalledWith(
       "POST:/graphql:0xBODYHASH:2026-07-11T22:58:41.7350000Z",
       128
     )
-    expect(walletMocks.signRaw).toHaveBeenCalledWith({
-      address: "5Example",
-      data: "0xpayloadhash",
-      type: "bytes"
-    })
     expect(headers).toEqual({
       "X-SS58-Address": "5Example",
       "X-Signature": "0xsigned",
       "X-Timestamp": "2026-07-11T22:58:41.7350000Z"
     })
+  })
+
+  it("rejects when the extension exposes no signRaw", async () => {
+    walletMocks.web3FromAddress.mockResolvedValue({ signer: {} })
+    const provider = new PolkadotWalletProvider()
+    await expect(
+      provider.signApiRequest("5Example", "POST", "/graphql", "0xB")
+    ).rejects.toThrow("WALLET_SIGNING_UNAVAILABLE")
   })
 })
