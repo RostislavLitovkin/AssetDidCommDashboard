@@ -4,7 +4,7 @@ import { useSettingsStore } from "../stores/settings"
 import { useOperationsStore } from "../stores/operations"
 import type { WalletSession } from "../services/wallet/types"
 
-export default defineNuxtPlugin(async () => {
+export default defineNuxtPlugin(() => {
   if (!import.meta.client) {
     return
   }
@@ -23,14 +23,21 @@ export default defineNuxtPlugin(async () => {
     settings.setWalletType(kind)
   }
 
+  // Never block app boot on wallet startup: web3Enable can hang indefinitely
+  // while an extension authorization prompt is pending. The session store
+  // already restored any persisted session optimistically, so autoConnect
+  // only reconciles it in the background.
   const provider = resolveWalletProvider(kind)
-  const restored = await provider.autoConnect(stored)
-
-  if (restored) {
-    session.setConnected(restored.address, restored.provider, restored.kind)
-    operations.add("wallet", restored.address, "success", "Wallet auto-connected")
-  } else {
-    session.disconnect()
-    operations.add("wallet", "session", "error", "Wallet unavailable")
-  }
+  provider
+    .autoConnect(stored)
+    .catch(() => null)
+    .then((restored) => {
+      if (restored) {
+        session.setConnected(restored.address, restored.provider, restored.kind)
+        operations.add("wallet", restored.address, "success", "Wallet auto-connected")
+      } else {
+        session.disconnect()
+        operations.add("wallet", "session", "error", "Wallet unavailable")
+      }
+    })
 })

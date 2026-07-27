@@ -2,6 +2,7 @@
 import { ChevronRight, FileUp, Layers, Menu, MessageSquare, Settings, Trash2, UserRound, WandSparkles, Wallet, X } from "lucide-vue-next"
 import { computed, ref } from "vue"
 import NotificationCenter from "../common/NotificationCenter.vue"
+import ProfileSetupBanners from "../common/ProfileSetupBanners.vue"
 import WalletSelectModal from "../common/WalletSelectModal.vue"
 import { useAddress } from "../../composables/useAddress"
 import { useWallet } from "../../composables/useWallet"
@@ -382,6 +383,7 @@ async function copyX25519PublicKey() {
     </aside>
 
     <section class="app-shell-content" :class="{ 'header-hidden': !isHeaderVisible }">
+      <ProfileSetupBanners />
       <div class="container">
         <slot />
       </div>

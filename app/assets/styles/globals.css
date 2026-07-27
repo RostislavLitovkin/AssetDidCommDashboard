@@ -261,6 +261,13 @@ select:focus-visible {
   }
 }
 
+/* The profile cover reclaims the shell's top padding with a negative margin. When
+   an account-setup banner occupies that space instead, there is nothing to
+   reclaim — otherwise the cover would slide up over the banner. */
+.app-shell-content:has(.profile-setup-banners) .profile-cover {
+  margin-top: 0;
+}
+
 .notification-center {
   position: fixed;
   bottom: 16px;

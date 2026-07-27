@@ -44,9 +44,9 @@ withDefaults(
     <!-- Backpack: red tile, white backpack -->
     <template v-else-if="brand === 'backpack'">
       <rect width="32" height="32" rx="7" fill="#E33E3F" />
-      <path d="M12.7 12v-1c0-2.7 1.5-4.6 3.3-4.6s3.3 1.9 3.3 4.6v1" stroke="#ffffff" stroke-width="2.2" />
-      <rect x="9.5" y="11.5" width="13" height="13" rx="3.5" fill="#ffffff" />
-      <circle cx="16" cy="17.5" r="2.2" fill="#E33E3F" />
+      <path d="M12.6 11.4v-1.2c0-2.5 1.4-4.2 3.4-4.2s3.4 1.7 3.4 4.2v1.2" stroke="#ffffff" stroke-width="2.2" />
+      <rect x="9.2" y="11" width="13.6" height="13.5" rx="4.2" fill="#ffffff" />
+      <circle cx="16" cy="15.6" r="2" fill="#E33E3F" />
     </template>
 
     <!-- polkadot.js: light tile, pink-to-orange ball -->
