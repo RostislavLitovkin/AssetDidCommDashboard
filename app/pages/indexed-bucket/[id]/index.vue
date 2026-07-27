@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ApiBucket, ApiMessage, OperationUpdate } from "../../../services/buckets/types"
-import { isFileMessage, normalizeX25519ToJwkX } from "../../../services/buckets/valueCodecs"
+import { isFileMessage, KEY_SHARING_MESSAGE_TAG, normalizeX25519ToJwkX } from "../../../services/buckets/valueCodecs"
 import { ProfileClient } from "../../../services/profile/profileClient"
 import { findViewersWithoutKeyAccess } from "../../../services/messages/keySharingCoverage"
 import { resolveAvatarUrls, toSs58Prefix42 } from "../../../services/profile/avatarResolver"
@@ -136,7 +136,6 @@ const createKeyError = ref("")
 const pendingAttachment = ref<{ file: File; dataUrl: string } | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
-const keySharingTag = "didcomm/key-sharing-v1"
 const bucketDisplayName = computed(() => bucket.value?.name || `Bucket ${bucketId.value}`)
 const connectedAdmin = computed(() => {
   if (!session.accountAddress) return false
@@ -195,7 +194,7 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
     // connected user's own key rotations.
     const senderAddress = m.contributor ?? ""
     const profile = profilesByAddress.value[senderAddress]
-    const senderLabel = m.tag !== keySharingTag && outgoing
+    const senderLabel = m.tag !== KEY_SHARING_MESSAGE_TAG && outgoing
       ? "You"
       : profile?.nickname || formatAddress(senderAddress)
 
@@ -253,7 +252,7 @@ async function loadAll() {
   loading.value = true
   try {
     const detail = await bucketsRepository.fetchBucketDetail(bucketId.value)
-    if (!detail) { error.value = "Bucket not found in indexer"; return }
+    if (!detail) { error.value = "Bucket not found"; return }
     bucket.value = detail.bucket
     admins.value = detail.admins
     contributors.value = detail.contributors
@@ -270,7 +269,7 @@ async function loadAll() {
     }
 
     // 1. Fetch key-sharing messages by tag first
-    keySharingMessages.value = await bucketsRepository.fetchMessagesByTag(bucketId.value, keySharingTag)
+    keySharingMessages.value = await bucketsRepository.fetchMessagesByTag(bucketId.value, KEY_SHARING_MESSAGE_TAG)
     viewersMissingKeyCount.value = null // data changed — the lazy viewer check must re-run
 
     // 2. Hydrate their payloads so we can decrypt them
@@ -437,7 +436,7 @@ async function decryptMessages(msgs: ApiMessage[]) {
   if (!bucketKeyEntries.value.length) { decryptedById.value = {}; decryptErrorById.value = {}; return }
 
   await Promise.all(msgs.map(async m => {
-    if (m.tag === keySharingTag) return
+    if (m.tag === KEY_SHARING_MESSAGE_TAG) return
     if (isFileMessage(m)) return
     const p = payloadById.value[m.id]
     if (!p) return
@@ -732,7 +731,7 @@ function buildRecipientJwks(bucketPublicJwk: jose.JWK): { recipientJwks: jose.JW
 async function encryptJweForMultipleRecipients(plaintextBytes: Uint8Array, recipientJwks: jose.JWK[]): Promise<jose.GeneralJWE> {
   const encryptor = new jose.GeneralEncrypt(plaintextBytes).setProtectedHeader({
     enc: "A256GCM",
-    typ: keySharingTag
+    typ: KEY_SHARING_MESSAGE_TAG
   })
 
   for (const recipientJwk of recipientJwks) {
@@ -796,7 +795,7 @@ async function createAndShareEncryptionKey(): Promise<void> {
       namespaceId,
       bucketId.value,
       bucketEncryptionKey,
-      keySharingTag,
+      KEY_SHARING_MESSAGE_TAG,
       JSON.stringify(jweObject),
       session.accountAddress,
       logOperationUpdate
@@ -857,7 +856,7 @@ async function scrollToBottom() {
 
 watch(() => chatMessages.value.length, () => scrollToBottom())
 watch(() => settings.x25519SecretJwk, async () => {
-  keySharingMessages.value = await bucketsRepository.fetchMessagesByTag(bucketId.value, keySharingTag)
+  keySharingMessages.value = await bucketsRepository.fetchMessagesByTag(bucketId.value, KEY_SHARING_MESSAGE_TAG)
   await hydratePayloads(keySharingMessages.value)
   await decryptKeySharingFromMessages(keySharingMessages.value)
   await decryptMessages(messages.value)
@@ -972,7 +971,7 @@ onMounted(async () => {
         </div>
 
         <p v-else-if="!chatMessages.length && !loading" class="muted" style="text-align:center">
-          No messages found for this bucket in the indexer.
+          No messages found for this bucket.
         </p>
 
         <div id="chat-bottom-anchor"></div>

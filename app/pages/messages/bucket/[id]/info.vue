@@ -936,14 +936,21 @@ async function hydrateMessagePayloads(entries: ApiMessage[]): Promise<void> {
 
   await Promise.all(
     entries.map(async (entry) => {
-      const reference = resolveMessageReference(entry)
-      if (!reference) {
-        return
-      }
-
       const cachedPayload = messagePayloadById.value[entry.id]
       if (cachedPayload) {
         nextPayloadById[entry.id] = cachedPayload
+        return
+      }
+
+      // Use the mirrored IPFS content when present and skip the gateway fetch;
+      // only fall back to fetching from the reference when it's empty.
+      if (entry.ipfsContent) {
+        nextPayloadById[entry.id] = entry.ipfsContent
+        return
+      }
+
+      const reference = resolveMessageReference(entry)
+      if (!reference) {
         return
       }
 

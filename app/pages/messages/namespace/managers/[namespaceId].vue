@@ -86,7 +86,7 @@ async function submitAddManager(): Promise<void> {
         <PageHeader title="Add Manager" />
 
         <WalletConnectPrompt v-if="!session.accountAddress" title="Connect Wallet to Manage Namespace"
-          description="You must connect your wallet to submit manager management extrinsics." />
+          description="You must connect your wallet to manage namespace managers." />
 
         <div v-else class="card stack" style="gap: 16px;">
           <label class="stack" style="gap: 8px">

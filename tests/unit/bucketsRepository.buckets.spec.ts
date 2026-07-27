@@ -110,4 +110,36 @@ describe("member address lists", () => {
     expect(await repo.fetchBucketAdmins("12")).toEqual(["5A"])
     expect(requests[0]!.query).toContain("bucketAdmins")
   })
+
+  it("fetchBucketContributors uses the bucketContributors root query and maps to subjectId strings", async () => {
+    const { repo, requests } = makeRepo([
+      {
+        data: {
+          bucketContributors: {
+            nodes: [{ subjectId: "5B" }, { subjectId: "5C" }],
+            pageInfo: { hasNextPage: false, endCursor: null }
+          }
+        }
+      }
+    ])
+    const contributors = await repo.fetchBucketContributors("12")
+    expect(contributors).toEqual(["5B", "5C"])
+    expect(requests[0]!.query).toContain("bucketContributors")
+  })
+
+  it("fetchBucketViewers uses the bucketViewers root query and maps to viewerId strings", async () => {
+    const { repo, requests } = makeRepo([
+      {
+        data: {
+          bucketViewers: {
+            nodes: [{ viewerId: "0xkey1" }, { viewerId: "0xkey2" }],
+            pageInfo: { hasNextPage: false, endCursor: null }
+          }
+        }
+      }
+    ])
+    const viewers = await repo.fetchBucketViewers("12")
+    expect(viewers).toEqual(["0xkey1", "0xkey2"])
+    expect(requests[0]!.query).toContain("bucketViewers")
+  })
 })

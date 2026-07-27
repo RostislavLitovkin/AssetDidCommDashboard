@@ -84,4 +84,38 @@ describe("useWallet", () => {
       128
     )
   })
+
+  it("signs the GraphQL API's Blake2-128 hash of the raw request body", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-07-11T22:58:41.735Z"))
+    walletMocks.web3FromAddress.mockResolvedValue({ signer: { signRaw: walletMocks.signRaw } })
+    walletMocks.blake2AsHex
+      .mockReturnValueOnce("0xbodyhash")
+      .mockReturnValueOnce("0xpayloadhash")
+
+    const provider = new WalletExtensionProvider()
+    const rawBody = "{\"query\":\"mutation { write { id } }\"}"
+    const headers = await provider.signGraphqlRequest("5Example", rawBody)
+
+    // The GraphQL signer hashes the RAW request body (no re-serialization),
+    // unlike signProfileRequest which hashes a canonicalized body.
+    expect(walletMocks.blake2AsHex).toHaveBeenNthCalledWith(1, rawBody, 128)
+    // Body hash embedded as C# Bytes2HexString form (0x + UPPERCASE); timestamp in
+    // C# :o form (7 fractional digits); method/path are fixed to POST /graphql.
+    expect(walletMocks.blake2AsHex).toHaveBeenNthCalledWith(
+      2,
+      "POST:/graphql:0xBODYHASH:2026-07-11T22:58:41.7350000Z",
+      128
+    )
+    expect(walletMocks.signRaw).toHaveBeenCalledWith({
+      address: "5Example",
+      data: "0xpayloadhash",
+      type: "bytes"
+    })
+    expect(headers).toEqual({
+      "X-SS58-Address": "5Example",
+      "X-Signature": "0xsigned",
+      "X-Timestamp": "2026-07-11T22:58:41.7350000Z"
+    })
+  })
 })

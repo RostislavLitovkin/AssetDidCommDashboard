@@ -59,7 +59,9 @@ function resolveViewerKeyHex(): string {
   }
 }
 
-function resolveIndexerAddress(address: string): string {
+// Re-encode to prefix 42, which the profile API keys on (see toSs58Prefix42 in
+// services/profile/avatarResolver.ts).
+function resolveApiAddress(address: string): string {
   const trimmed = address.trim()
   if (!trimmed) {
     return trimmed
@@ -67,7 +69,7 @@ function resolveIndexerAddress(address: string): string {
 
   try {
     const decoded = decodeAddress(trimmed)
-    return encodeAddress(decoded, 0)
+    return encodeAddress(decoded, 42)
   } catch {
     return trimmed
   }
@@ -127,6 +129,8 @@ async function loadBuckets(reset = false): Promise<void> {
 
   if (reset) {
     endCursor.value = null
+    buckets.value = []
+    lastMessageAtByBucket.value = {}
     loading.value = true
   } else {
     loadingMore.value = true
@@ -134,7 +138,7 @@ async function loadBuckets(reset = false): Promise<void> {
 
   try {
     const page = await bucketsRepository.fetchMyBuckets(
-      resolveIndexerAddress(session.accountAddress),
+      resolveApiAddress(session.accountAddress),
       resolveViewerKeyHex(),
       { first: pageSize, after: reset ? null : endCursor.value }
     )

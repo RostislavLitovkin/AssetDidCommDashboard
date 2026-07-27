@@ -25,7 +25,6 @@ jobs:
           cache: npm
       - name: Create .env from GitHub secrets
         run: |
-          echo "NUXT_PUBLIC_XCAVATE_WS_ENDPOINT=${{ secrets.NUXT_PUBLIC_XCAVATE_WS_ENDPOINT }}" >> .env
           echo "NUXT_PUBLIC_PINATA_API_KEY=${{ secrets.NUXT_PUBLIC_PINATA_API_KEY }}" >> .env
           echo "NUXT_PUBLIC_PINATA_API_SECRET=${{ secrets.NUXT_PUBLIC_PINATA_API_SECRET }}" >> .env
           echo "NUXT_PUBLIC_PINATA_JWT=${{ secrets.NUXT_PUBLIC_PINATA_JWT }}" >> .env

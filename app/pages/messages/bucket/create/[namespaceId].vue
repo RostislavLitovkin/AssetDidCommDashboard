@@ -159,7 +159,7 @@ onMounted(async () => {
             <button class="btn btn-primary" type="button" :disabled="submitting || managersLoading || !isManager" @click="submitCreateBucket">
               <span v-if="submitting">Submitting...</span>
               <span v-else-if="bucketCreated">Bucket successfully created</span>
-              <span v-else>Submit Extrinsic</span>
+              <span v-else>Create Bucket</span>
             </button>
           </div>
 

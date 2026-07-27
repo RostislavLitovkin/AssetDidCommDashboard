@@ -139,6 +139,23 @@ describe("addBucketMemberWithRole", () => {
     expect(requests[0]!.query).toContain("addViewer")
     expect(requests[0]!.query).not.toContain("addAdmin")
   })
+
+  it("contributor role sends addContributor and addViewer in one document", async () => {
+    const { repo, requests } = makeRepo([
+      { data: { addContributor: { id: "x" }, addViewer: { id: "y" } } }
+    ])
+    const jwkX = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+
+    await repo.addBucketMemberWithRole("contributor", "3", "9", "5NEW", jwkX, "5OWNER")
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.query).toContain("addContributor")
+    expect(requests[0]!.query).toContain("addViewer")
+    expect(requests[0]!.query).not.toContain("addAdmin")
+    const vars = requests[0]!.variables!
+    expect(vars.subject).toBe("5NEW")
+    expect(String(vars.viewerKey)).toMatch(/^0x[0-9a-f]{64}$/i)
+  })
 })
 
 describe("removeBucketMemberRoles", () => {
@@ -159,6 +176,13 @@ describe("removeBucketMemberRoles", () => {
     await expect(
       repo.removeBucketMemberRoles("3", "9", "5X", ["viewer"], undefined, "5OWNER")
     ).rejects.toThrow(/viewer key/i)
+  })
+
+  it("rejects with an empty roles array", async () => {
+    const { repo } = makeRepo([])
+    await expect(
+      repo.removeBucketMemberRoles("3", "9", "5X", [], undefined, "5OWNER")
+    ).rejects.toThrow("At least one role is required")
   })
 
   it("rejects when a requested role removal reports false", async () => {

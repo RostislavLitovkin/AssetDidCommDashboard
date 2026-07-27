@@ -258,7 +258,7 @@ async function submitAddMember(): Promise<void> {
       role.value,
       namespaceId.value,
       bucketId.value,
-      memberAddress.value,
+      convertToPrefix42(memberAddress.value),
       x25519Key,
       session.accountAddress,
       logOperationUpdate
@@ -286,7 +286,7 @@ async function submitAddMember(): Promise<void> {
       <WalletConnectPrompt
         v-if="!session.accountAddress"
         title="Connect Wallet to Manage Members"
-        description="You must connect your wallet to submit member management extrinsics."
+        description="You must connect your wallet to manage bucket members."
       />
 
       <div v-else class="card stack" style="gap: 16px;">

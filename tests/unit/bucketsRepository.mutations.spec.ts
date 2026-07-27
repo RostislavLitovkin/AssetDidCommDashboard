@@ -79,11 +79,36 @@ describe("member and manager mutations", () => {
     expect(updates.map((u) => u.stage)).toEqual(["pending", "error"])
   })
 
+  it("removeBucketContributor sends string ids and the member address", async () => {
+    const { repo, requests } = makeRepo([{ data: { removeContributor: true } }])
+    await repo.removeBucketContributor("3", "9", "5X", "5OWNER")
+    expect(requests[0]!.query).toContain("removeContributor")
+    expect(requests[0]!.variables).toMatchObject({ namespaceId: "3", bucketId: "9", contributor: "5X" })
+  })
+
+  it("removeBucketViewer normalizes the viewer key to 0x-hex", async () => {
+    const { repo, requests } = makeRepo([{ data: { removeViewer: true } }])
+    const jwkX = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    await repo.removeBucketViewer("3", "9", jwkX, "5OWNER")
+    expect(requests[0]!.query).toContain("removeViewer")
+    const vars = requests[0]!.variables!
+    expect(vars).toMatchObject({ namespaceId: "3", bucketId: "9" })
+    expect(String(vars.viewer)).toMatch(/^0x[0-9a-f]{64}$/i)
+  })
+
   it("addNamespaceManager maps to addManager", async () => {
     const { repo, requests } = makeRepo([{ data: { addManager: { id: "3-5X" } } }])
     const result = await repo.addNamespaceManager("3", "5X", "5OWNER")
     expect(result.method).toBe("addManager")
     expect(requests[0]!.variables).toMatchObject({ namespaceId: "3", newManager: "5X" })
+  })
+
+  it("removeNamespaceManager resolves when the API returns true", async () => {
+    const { repo, requests } = makeRepo([{ data: { removeManager: true } }])
+    const result = await repo.removeNamespaceManager("3", "5X", "5OWNER")
+    expect(result).toEqual({ id: "5X", method: "removeManager" })
+    expect(requests[0]!.query).toContain("removeManager")
+    expect(requests[0]!.variables).toMatchObject({ namespaceId: "3", oldManager: "5X" })
   })
 
   it("removeNamespaceManager rejects when the API returns false", async () => {
@@ -93,6 +118,18 @@ describe("member and manager mutations", () => {
       "removeManager reported no change"
     )
     expect(updates.map((u) => u.stage)).toEqual(["pending", "error"])
+  })
+})
+
+describe("createTag", () => {
+  it("sends bucketId and newTag as strings", async () => {
+    const { repo, requests } = makeRepo([{ data: { createTag: { id: "9-tag" } } }])
+    const result = await repo.createTag("9", "my-tag", "5OWNER")
+    expect(result).toEqual({ id: "9-tag", method: "createTag" })
+    expect(requests[0]!.query).toContain("createTag")
+    expect(requests[0]!.variables).toMatchObject({ bucketId: "9", newTag: "my-tag" })
+    expect(typeof requests[0]!.variables!.bucketId).toBe("string")
+    expect(typeof requests[0]!.variables!.newTag).toBe("string")
   })
 })
 

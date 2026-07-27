@@ -11,7 +11,7 @@ realXmessage dashboard for Asset DIDComm workflows on Xcavate Substrate.
 
 ## Stack
 - Nuxt 3 + Vue 3 + TypeScript
-- PAPI for blockchain interactions
+- XcavateProfile GraphQL/REST API (profile-api.xcavate.io) for namespaces, buckets, messages, and profiles
 - Polkadot extension wallet integration
 - JOSE for X25519 key
 - Pinata for IPFS storage

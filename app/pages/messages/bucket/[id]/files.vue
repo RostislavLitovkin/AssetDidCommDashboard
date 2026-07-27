@@ -352,7 +352,7 @@ onBeforeUnmount(() => {
           <!-- Empty state -->
           <div v-if="!fileCards.length && !error" class="files-empty muted">
             <Paperclip :size="48" class="files-empty-icon" />
-            <p style="margin: 0;">No files found for this bucket in the indexer.</p>
+            <p style="margin: 0;">No files found for this bucket.</p>
           </div>
 
           <!-- First-load error (no cards to show) -->
