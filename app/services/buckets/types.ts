@@ -35,7 +35,7 @@ export interface PinataConfig {
 export interface BucketsRepositoryOptions {
   apiUrl: string
   pinataConfig?: PinataConfig
-  /** Signs a raw GraphQL body for `address`. Wire to WalletExtensionProvider.signGraphqlRequest. */
+  /** Signs a raw GraphQL body for `address`. Wire via resolveWalletProvider(...).signApiRequest. */
   sign?: (address: string, rawBody: string) => Promise<HeadersInit>
   fetcher?: typeof fetch
 }

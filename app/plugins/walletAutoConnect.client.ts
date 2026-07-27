@@ -1,47 +1,36 @@
-import { WalletExtensionProvider } from "../services/wallet/extensionProvider"
+import { resolveWalletProvider } from "../services/wallet/resolveWalletProvider"
 import { useSessionStore } from "../stores/session"
+import { useSettingsStore } from "../stores/settings"
 import { useOperationsStore } from "../stores/operations"
+import type { WalletSession } from "../services/wallet/types"
 
 export default defineNuxtPlugin(async () => {
   if (!import.meta.client) {
     return
   }
 
-  const provider = new WalletExtensionProvider()
   const session = useSessionStore()
+  const settings = useSettingsStore()
   const operations = useOperationsStore()
+  settings.initialize()
 
-  // Wait for Polkadot.js extension to inject accounts, then auto-connect
-  const connectWhenReady = async (): Promise<boolean> => {
-    try {
-      const accounts = await provider.listAccounts()
-      if (!accounts.length) {
-        return false
-      }
-
-      // Prefer the previously connected address, otherwise use the first account
-      const targetAddress = session.accountAddress || accounts[0].address
-      const walletSession = await provider.connectToAddress(targetAddress)
-
-      session.setConnected(walletSession.address, walletSession.provider)
-      operations.add("wallet", walletSession.address, "success", "Wallet auto-connected")
-      return true
-    } catch {
-      return false
-    }
+  // A stored session's kind wins; sync the setting so the UI reflects reality.
+  const stored: WalletSession | null = session.accountAddress
+    ? { address: session.accountAddress, provider: session.providerName, kind: session.walletKind }
+    : null
+  const kind = stored?.kind ?? settings.walletType
+  if (settings.walletType !== kind) {
+    settings.setWalletType(kind)
   }
 
-  // Poll until extension injects accounts (max 5 seconds)
-  let connected = false
-  for (let i = 0; i < 50 && !connected; i++) {
-    connected = await connectWhenReady()
-    if (!connected) {
-      await new Promise((resolve) => setTimeout(resolve, 100))
-    }
-  }
+  const provider = resolveWalletProvider(kind)
+  const restored = await provider.autoConnect(stored)
 
-  if (!connected) {
+  if (restored) {
+    session.setConnected(restored.address, restored.provider, restored.kind)
+    operations.add("wallet", restored.address, "success", "Wallet auto-connected")
+  } else {
     session.disconnect()
-    operations.add("wallet", "session", "error", "Wallet extension unavailable")
+    operations.add("wallet", "session", "error", "Wallet unavailable")
   }
 })

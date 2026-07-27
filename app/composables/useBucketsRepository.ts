@@ -1,6 +1,8 @@
 import { useRuntimeConfig } from "nuxt/app"
 import { BucketsRepository } from "../services/buckets/bucketsRepository"
-import { WalletExtensionProvider } from "../services/wallet/extensionProvider"
+import { resolveWalletProvider } from "../services/wallet/resolveWalletProvider"
+import { hashApiBody } from "../services/wallet/signingCore"
+import { useSettingsStore } from "../stores/settings"
 
 /**
  * Build the buckets repository from runtime config. Pages must use this
@@ -8,7 +10,8 @@ import { WalletExtensionProvider } from "../services/wallet/extensionProvider"
  */
 export function useBucketsRepository(): BucketsRepository {
   const config = useRuntimeConfig()
-  const provider = new WalletExtensionProvider()
+  const settings = useSettingsStore()
+  settings.initialize()
 
   return new BucketsRepository({
     apiUrl: String(config.public.profileApiUrl),
@@ -18,6 +21,12 @@ export function useBucketsRepository(): BucketsRepository {
       apiSecret: String(config.public.pinataApiSecret || ""),
       publicGateway: String(config.public.pinataGateway || "")
     },
-    sign: (address, rawBody) => provider.signGraphqlRequest(address, rawBody)
+    sign: async (address, rawBody) =>
+      resolveWalletProvider(settings.walletType).signApiRequest(
+        address,
+        "POST",
+        "/graphql",
+        await hashApiBody(rawBody)
+      )
   })
 }

@@ -7,11 +7,13 @@ import {
   normalizePrimaryColor,
   resolvePrimaryColor
 } from "../services/theme/primaryColor"
+import type { WalletKind } from "../services/wallet/types"
 
 const SETTINGS_STORAGE_KEY = "asset-didcomm.ss58-prefix"
 const X25519_SECRET_JWK_STORAGE_KEY = "asset-didcomm.x25519-secret-jwk"
 const MESSAGE_DEBUG_STORAGE_KEY = "asset-didcomm.message-debug"
 const NOTIFICATIONS_ENABLED_STORAGE_KEY = "asset-didcomm.notifications-enabled"
+const WALLET_TYPE_STORAGE_KEY = "asset-didcomm.wallet-type"
 const DEFAULT_SS58_PREFIX = 42
 const MAX_SS58_PREFIX = 16383
 
@@ -127,6 +129,15 @@ function loadStoredNotificationsEnabled(): boolean {
   return raw === "true"
 }
 
+function loadStoredWalletType(): WalletKind {
+  if (!import.meta.client) {
+    return "solana"
+  }
+
+  const raw = window.localStorage.getItem(WALLET_TYPE_STORAGE_KEY)
+  return raw === "polkadot" ? "polkadot" : "solana"
+}
+
 /**
  * Reads `?primaryColor=` off the address bar rather than through `useRoute()`:
  * `initialize()` is called from plugins, component setup and lifecycle hooks
@@ -164,7 +175,8 @@ export const useSettingsStore = defineStore("settings", {
     x25519SecretJwk: null as X25519SecretJwk | null,
     showMessageDebug: false,
     notificationsEnabled: false,
-    primaryColor: DEFAULT_PRIMARY_COLOR
+    primaryColor: DEFAULT_PRIMARY_COLOR,
+    walletType: "solana" as WalletKind
   }),
   actions: {
     initialize(): void {
@@ -177,6 +189,7 @@ export const useSettingsStore = defineStore("settings", {
       this.showMessageDebug = loadStoredMessageDebug()
       this.notificationsEnabled = loadStoredNotificationsEnabled()
       this.primaryColor = loadStoredPrimaryColor()
+      this.walletType = loadStoredWalletType()
       applyPrimaryColor(this.primaryColor)
       this.applyQueryPrimaryColor(loadQueryPrimaryColor())
       this.initialized = true
@@ -229,6 +242,13 @@ export const useSettingsStore = defineStore("settings", {
 
       if (import.meta.client) {
         window.localStorage.setItem(NOTIFICATIONS_ENABLED_STORAGE_KEY, String(value))
+      }
+    },
+    setWalletType(kind: WalletKind): void {
+      this.walletType = kind
+
+      if (import.meta.client) {
+        window.localStorage.setItem(WALLET_TYPE_STORAGE_KEY, kind)
       }
     },
     setPrimaryColor(value: string): void {

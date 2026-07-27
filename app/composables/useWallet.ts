@@ -1,16 +1,23 @@
-import { WalletExtensionProvider } from "../services/wallet/extensionProvider"
+import { resolveWalletProvider } from "../services/wallet/resolveWalletProvider"
+import { hashApiBody } from "../services/wallet/signingCore"
 import type { ProfilePayloadBody } from "../services/profile/profileSigning"
+import { useSettingsStore } from "../stores/settings"
 
 export function useWallet() {
   const store = useSessionStore()
   const operations = useOperationsStore()
-  const provider = new WalletExtensionProvider()
+  const settings = useSettingsStore()
+  settings.initialize()
+
+  function provider() {
+    return resolveWalletProvider(settings.walletType)
+  }
 
   async function connect(): Promise<void> {
     try {
       store.setConnecting()
-      const session = await provider.connect()
-      store.setConnected(session.address, session.provider)
+      const session = await provider().connect()
+      store.setConnected(session.address, session.provider, session.kind)
       operations.add("wallet", session.address, "success", "Wallet connected")
     } catch (error) {
       store.setRejected()
@@ -19,14 +26,14 @@ export function useWallet() {
   }
 
   async function listAccounts(): Promise<Array<{ address: string; name: string; source: string }>> {
-    return provider.listAccounts()
+    return provider().listAccounts()
   }
 
   async function connectToAddress(address: string): Promise<void> {
     try {
       store.setConnecting()
-      const session = await provider.connectToAddress(address)
-      store.setConnected(session.address, session.provider)
+      const session = await provider().connectToAddress(address)
+      store.setConnected(session.address, session.provider, session.kind)
       operations.add("wallet", session.address, "success", "Wallet switched")
     } catch (error) {
       store.setRejected()
@@ -50,11 +57,12 @@ export function useWallet() {
       throw new Error("Connect a wallet before saving your profile")
     }
 
-    return provider.signProfileRequest(address, method, path, body)
+    const bodyHash = body.kind === "empty" ? "" : await hashApiBody(body.canonicalJson)
+    return provider().signApiRequest(address, method, path, bodyHash)
   }
 
   async function signGraphqlRequest(address: string, rawBody: string): Promise<HeadersInit> {
-    return provider.signGraphqlRequest(address, rawBody)
+    return provider().signApiRequest(address, "POST", "/graphql", await hashApiBody(rawBody))
   }
 
   return {
