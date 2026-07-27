@@ -10,7 +10,10 @@ export function useWallet() {
   settings.initialize()
 
   function provider() {
-    return resolveWalletProvider(settings.walletType)
+    const kind = store.walletStatus === "connected" && store.accountAddress
+      ? store.walletKind
+      : settings.walletType
+    return resolveWalletProvider(kind)
   }
 
   async function connect(): Promise<void> {
@@ -61,10 +64,6 @@ export function useWallet() {
     return provider().signApiRequest(address, method, path, bodyHash)
   }
 
-  async function signGraphqlRequest(address: string, rawBody: string): Promise<HeadersInit> {
-    return provider().signApiRequest(address, "POST", "/graphql", await hashApiBody(rawBody))
-  }
-
   return {
     walletStatus: computed(() => store.walletStatus),
     accountAddress: computed(() => store.accountAddress),
@@ -73,7 +72,6 @@ export function useWallet() {
     listAccounts,
     connectToAddress,
     signProfileRequest,
-    signGraphqlRequest,
     disconnect
   }
 }

@@ -102,6 +102,11 @@ export class SolanaWalletProvider implements WalletProvider {
     bodyHash: string
   ): Promise<HeadersInit> {
     const wallet = this.requireWallet()
+    const activeAddress = wallet.provider.publicKey?.toBase58()
+    if (activeAddress && activeAddress !== address) {
+      throw new Error("WALLET_ACCOUNT_NOT_FOUND")
+    }
+
     const { base58Encode } = await import("@polkadot/util-crypto")
     const { payload, timestamp } = composeApiSignaturePayload(method, path, bodyHash)
 

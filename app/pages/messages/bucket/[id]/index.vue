@@ -501,7 +501,7 @@ async function loadContributorX25519Keys(addresses: string[]): Promise<void> {
   try {
     for (const address of addresses) {
       try {
-        // The profile API keys on the generic Substrate SS58 format (prefix 42).
+        // Addresses are normalized for the API (SS58 -> prefix 42, Solana base58 passthrough).
         const profile = await profileClient.getProfile(normalizeApiAddress(address))
         const raw = profile?.x25519Key ?? null
         const normalized = raw ? normalizeX25519ToJwkX(raw.trim()) : null

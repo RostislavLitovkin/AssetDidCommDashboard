@@ -445,7 +445,7 @@ async function loadMemberProfiles(addresses: string[]): Promise<void> {
     await Promise.all(
       uniqueAddresses.map(async (address) => {
         try {
-          // The profile API keys on the generic Substrate SS58 format (prefix 42).
+          // Addresses are normalized for the API (SS58 -> prefix 42, Solana base58 passthrough).
           profilesByAddress[address] = await profileClient.getProfile(normalizeApiAddress(address))
         } catch {
           // Treat a failed lookup the same as a missing profile.

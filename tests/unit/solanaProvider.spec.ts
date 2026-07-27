@@ -130,4 +130,15 @@ describe("SolanaWalletProvider.signApiRequest", () => {
     const headers = await new SolanaWalletProvider().signApiRequest(ADDRESS, "POST", "/graphql", "0xB")
     expect((headers as Record<string, string>)["X-Signature"]).toBe(base58Encode(SIGNATURE))
   })
+
+  it("rejects with WALLET_ACCOUNT_NOT_FOUND when the wallet's active account differs from the requested address", async () => {
+    const OTHER_ADDRESS = "SoLOtherAddr22222222222222222222222222222222"
+    const injected = fakeInjected({ publicKey: { toBase58: () => OTHER_ADDRESS } })
+    vi.stubGlobal("window", { phantom: { solana: injected } })
+
+    await expect(
+      new SolanaWalletProvider().signApiRequest(ADDRESS, "POST", "/graphql", "0xB")
+    ).rejects.toThrow("WALLET_ACCOUNT_NOT_FOUND")
+    expect(injected.signMessage).not.toHaveBeenCalled()
+  })
 })

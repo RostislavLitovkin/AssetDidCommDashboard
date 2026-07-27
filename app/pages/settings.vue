@@ -25,7 +25,7 @@ function selectWalletType(kind: WalletKind): void {
 
   settings.setWalletType(kind)
 
-  if (sessionStore.walletStatus === "connected") {
+  if (sessionStore.walletStatus === "connected" || sessionStore.walletStatus === "connecting") {
     wallet.disconnect()
   }
 }

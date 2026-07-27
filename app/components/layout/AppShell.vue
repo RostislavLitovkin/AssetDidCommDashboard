@@ -17,6 +17,8 @@ settings.initialize()
 
 const showWalletPopup = ref(false)
 const accounts = ref<Array<{ address: string; name: string; source: string }>>([])
+const isLoadingWallets = ref(false)
+const walletListError = ref("")
 const x25519LoadError = ref("")
 const x25519LoadSuccess = ref("")
 const walletCopyError = ref("")
@@ -61,7 +63,19 @@ const formattedAccounts = computed(() =>
 async function openWalletPopup() {
   showWalletPopup.value = true
   isTopbarExpanded.value = false
-  accounts.value = await wallet.listAccounts()
+  walletListError.value = ""
+  isLoadingWallets.value = true
+
+  try {
+    accounts.value = await wallet.listAccounts()
+  } catch {
+    accounts.value = []
+    walletListError.value = settings.walletType === "solana"
+      ? "No Solana wallet found. Install Phantom, Solflare, or Backpack."
+      : "No Polkadot extension accounts found."
+  } finally {
+    isLoadingWallets.value = false
+  }
 }
 
 function toggleTopbar(): void {
@@ -432,7 +446,9 @@ async function copyX25519PublicKey() {
           </button>
         </div>
 
-        <p class="muted" style="margin: 0" v-if="!accounts.length">Loading wallets.</p>
+        <p class="muted" style="margin: 0" v-if="isLoadingWallets">Loading wallets.</p>
+        <p class="sidebar-status-error" style="margin: 0" v-else-if="walletListError">{{ walletListError }}</p>
+        <p class="muted" style="margin: 0" v-else-if="!accounts.length">No wallets found.</p>
       </div>
     </div>
 
