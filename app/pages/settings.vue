@@ -2,11 +2,33 @@
 import { computed, ref } from "vue"
 import { Check } from "lucide-vue-next"
 import { useSettingsStore } from "../stores/settings"
+import { useSessionStore } from "../stores/session"
+import { useWallet } from "../composables/useWallet"
 import { PRIMARY_COLOR_OPTIONS } from "../services/theme/primaryColor"
+import type { WalletKind } from "../services/wallet/types"
 import PageHeader from "../components/common/PageHeader.vue"
 
 const settings = useSettingsStore()
 settings.initialize()
+const sessionStore = useSessionStore()
+const wallet = useWallet()
+
+const WALLET_TYPE_OPTIONS: Array<{ value: WalletKind; name: string; hint: string }> = [
+  { value: "solana", name: "Solana", hint: "Phantom, Solflare, Backpack" },
+  { value: "polkadot", name: "Polkadot", hint: "Browser extension (polkadot.js compatible)" }
+]
+
+function selectWalletType(kind: WalletKind): void {
+  if (kind === settings.walletType) {
+    return
+  }
+
+  settings.setWalletType(kind)
+
+  if (sessionStore.walletStatus === "connected") {
+    wallet.disconnect()
+  }
+}
 
 const ss58PrefixInput = ref(String(settings.ss58Prefix))
 const saveError = ref("")
@@ -44,6 +66,29 @@ function selectPrimaryColor(color: string): void {
 <template>
   <main class="stack">
     <PageHeader title="Settings" />
+
+    <section class="card stack" style="gap: 10px">
+      <h4 style="margin: 0; font-size: 16px;">Wallet</h4>
+      <span style="font-weight: 600; font-size: 14px;">Wallet type</span>
+      <div class="swatch-row">
+        <button
+          v-for="option in WALLET_TYPE_OPTIONS"
+          :key="option.value"
+          type="button"
+          class="wallet-option"
+          :class="{ 'wallet-option-active': option.value === settings.walletType }"
+          :aria-pressed="option.value === settings.walletType"
+          @click="selectWalletType(option.value)"
+        >
+          <strong>{{ option.name }}</strong>
+          <span class="muted" style="font-size: 12px">{{ option.hint }}</span>
+        </button>
+      </div>
+      <span class="muted" style="font-size: 13px;">
+        Which wallet family the app uses for your identity and request signing.
+        Switching disconnects the currently connected wallet.
+      </span>
+    </section>
 
     <section class="card stack" style="gap: 10px" aria-live="polite">
       <h4 style="margin: 0; font-size: 16px;">Chain Configuration</h4>
@@ -182,6 +227,30 @@ function selectPrimaryColor(color: string): void {
 
 .swatch-check {
   color: var(--color-white);
+}
+
+.wallet-option {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.wallet-option:hover,
+.wallet-option:focus-visible {
+  border-color: var(--color-primary);
+}
+
+.wallet-option-active {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 30%, transparent);
 }
 
 @media (max-width: 720px) {

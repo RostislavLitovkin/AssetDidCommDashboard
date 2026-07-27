@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { ref } from "vue"
+import { computed, ref } from "vue"
 import { Link, Wallet } from "lucide-vue-next"
 import ParticleLoader from "./ParticleLoader.vue"
 import { useWallet } from "../../composables/useWallet"
+import { useSettingsStore } from "../../stores/settings"
+
+const DEFAULT_DESCRIPTION = "Connect your wallet to continue."
 
 const props = withDefaults(
   defineProps<{
@@ -12,9 +15,26 @@ const props = withDefaults(
   }>(),
   {
     title: "Connect Your Wallet",
-    description: "Connect your wallet to continue.",
+    description: DEFAULT_DESCRIPTION,
     actionLabel: "Connect Wallet"
   }
+)
+
+const settings = useSettingsStore()
+settings.initialize()
+
+const effectiveDescription = computed(() =>
+  props.description !== DEFAULT_DESCRIPTION
+    ? props.description
+    : settings.walletType === "solana"
+      ? "Connect a Solana wallet (Phantom, Solflare, or Backpack) to continue."
+      : "Connect the Polkadot browser extension to continue."
+)
+
+const noWalletsMessage = computed(() =>
+  settings.walletType === "solana"
+    ? "No Solana wallet found. Install Phantom, Solflare, or Backpack."
+    : "No Polkadot extension accounts found. Install and unlock a polkadot.js-compatible extension."
 )
 
 const wallet = useWallet()
@@ -63,7 +83,7 @@ async function selectWallet(address: string): Promise<void> {
         <div class="stack" style="gap: 12px">
           <h2 style="margin: 0; font-size: 24px">{{ props.title }}</h2>
           <p class="muted" style="margin: 0; font-size: 14px; line-height: 1.6">
-            {{ props.description }}
+            {{ effectiveDescription }}
           </p>
         </div>
         <button
@@ -112,7 +132,7 @@ async function selectWallet(address: string): Promise<void> {
           </button>
         </div>
 
-        <p v-else class="muted" style="margin: 0">No wallets found.</p>
+        <p v-else class="muted" style="margin: 0">{{ noWalletsMessage }}</p>
       </div>
     </div>
   </div>
