@@ -78,6 +78,23 @@ describe("SolanaWalletProvider.autoConnect", () => {
     vi.stubGlobal("window", {})
     expect(await new SolanaWalletProvider().autoConnect(null, 0)).toBeNull()
   })
+
+  it("retries until a late-injecting wallet appears", async () => {
+    vi.useFakeTimers()
+    const injected = fakeInjected()
+    const w: Record<string, unknown> = {}
+    vi.stubGlobal("window", w)
+
+    const pending = new SolanaWalletProvider().autoConnect(null, 3)
+    // Wallet script "injects" after the first 500ms wait.
+    await vi.advanceTimersByTimeAsync(500)
+    w.phantom = { solana: injected }
+    await vi.advanceTimersByTimeAsync(500)
+
+    const session = await pending
+    expect(injected.connect).toHaveBeenCalledWith({ onlyIfTrusted: true })
+    expect(session).toEqual({ address: ADDRESS, provider: "Phantom", kind: "solana" })
+  })
 })
 
 describe("SolanaWalletProvider.signApiRequest", () => {
