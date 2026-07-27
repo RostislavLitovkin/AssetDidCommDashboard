@@ -6,7 +6,8 @@ import PageHeader from "../../../../components/common/PageHeader.vue"
 import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } from "../../../../components/common/ChatMessageEntry.vue"
 import { Paperclip, X as XIcon, SendHorizontal } from "lucide-vue-next"
 import { useAddress } from "../../../../composables/useAddress"
-import { hexToU8a } from "@polkadot/util"
+import { ProfileClient } from "../../../../services/profile/profileClient"
+import { toSs58Prefix42 } from "../../../../services/profile/avatarResolver"
 import * as jose from "jose"
 import { computed, nextTick, onMounted, ref, watch } from "vue"
 import { useRoute, useRuntimeConfig } from "nuxt/app"
@@ -26,6 +27,7 @@ const asOptionalString = (value: unknown): string | undefined => {
 }
 
 const bucketsRepository = useBucketsRepository()
+const profileClient = new ProfileClient(String(runtimeConfig.public.profileApiUrl))
 
 type DeliveryState = "sending" | "sent" | "failed"
 
@@ -476,10 +478,6 @@ async function loadBucketMembers() {
   }
 }
 
-function isHex32(value: string): boolean {
-  return /^0x[0-9a-fA-F]{64}$/.test(value)
-}
-
 function isValidX25519(value: string | undefined): value is string {
   if (typeof value !== "string") {
     return false
@@ -493,123 +491,26 @@ function isValidX25519(value: string | undefined): value is string {
   return trimmed !== "Not found"
 }
 
-function normalizeX25519Value(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined
-  }
-
-  const trimmed = value.trim()
-  if (!trimmed) {
-    return undefined
-  }
-
-  // Some chains return x25519 as hex; convert to JWK x (base64url)
-  if (isHex32(trimmed)) {
-    return jose.base64url.encode(hexToU8a(trimmed))
-  }
-
-  // If already base64url (as in did.publicKeys.publicEncryptionKey.x25519), keep as-is
-  return trimmed
-}
-
-function extractX25519FromPublicKeyEntry(entry: unknown): string | undefined {
-  const keyRecord = toRecord(toRecord(entry)?.key)
-  const publicEncryptionKey = toRecord(keyRecord?.publicEncryptionKey)
-  return normalizeX25519Value(publicEncryptionKey?.x25519)
-}
-
-function extractContributorX25519(payload: unknown): string | undefined {
-  const record = toRecord(payload)
-  if (!record) {
-    return undefined
-  }
-
-  const publicKeys = toRecord(record.publicKeys)
-  const keyAgreementKeys = Array.isArray(record.keyAgreementKeys)
-    ? record.keyAgreementKeys.filter((value): value is string => typeof value === "string")
-    : []
-
-  // Canonical path for this runtime:
-  // keyAgreementKeys[] -> publicKeys[keyId].key.publicEncryptionKey.x25519
-  if (publicKeys && keyAgreementKeys.length) {
-    for (const keyId of keyAgreementKeys) {
-      const normalizedId = keyId.trim().toLowerCase()
-      const matchedEntry = Object.entries(publicKeys).find(([mapKey]) => mapKey.trim().toLowerCase() === normalizedId)?.[1]
-      const x25519 = extractX25519FromPublicKeyEntry(matchedEntry)
-      if (x25519) {
-        return x25519
-      }
-    }
-  }
-
-  // Fallback: any encryption key in publicKeys map
-  if (publicKeys) {
-    for (const entry of Object.values(publicKeys)) {
-      const x25519 = extractX25519FromPublicKeyEntry(entry)
-      if (x25519) {
-        return x25519
-      }
-    }
-  }
-
-  return undefined
-}
-
-async function queryDidPayloadByAddress(address: string): Promise<unknown> {
-  const endpoint = session.networkEndpoint || runtimeConfig.public.xcavateWsEndpoint || "wss://xcavate-paseo.api.onfinality.io/public-ws"
-  const { ApiPromise, WsProvider } = await import("@polkadot/api")
-
-  const provider = new WsProvider(endpoint)
-  const api = await ApiPromise.create({ provider })
-
-  try {
-    const queryDid = api.query?.did?.did
-    if (typeof queryDid !== "function") {
-      return undefined
-    }
-
-    const result = await queryDid(address)
-
-    try {
-      if (typeof result.toJSON === "function") {
-        return result.toJSON()
-      }
-    } catch {
-    }
-
-    try {
-      if (typeof result.toHuman === "function") {
-        return result.toHuman()
-      }
-    } catch {
-    }
-
-    return typeof result.toString === "function" ? result.toString() : undefined
-  } finally {
-    await api.disconnect().catch(() => undefined)
-    provider.disconnect()
-  }
-}
-
 async function loadContributorX25519Keys(addresses: string[]): Promise<void> {
   contributorX25519Keys.value = {}
-
-  if (!addresses.length) {
-    return
-  }
+  if (!addresses.length) return
 
   loadingContributorKeys.value = true
   const keysByAddress: Record<string, string> = {}
 
   try {
     for (const address of addresses) {
-      const payload = await queryDidPayloadByAddress(address)
-      keysByAddress[address] = extractContributorX25519(payload) ?? "Not found"
+      try {
+        // The profile API keys on the generic Substrate SS58 format (prefix 42).
+        const profile = await profileClient.getProfile(toSs58Prefix42(address))
+        keysByAddress[address] = profile?.x25519Key ?? "Not found"
+      } catch {
+        keysByAddress[address] = "Not found"
+      }
     }
-
     contributorX25519Keys.value = keysByAddress
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to load contributor DID key agreements"
+    const message = error instanceof Error ? error.message : "Unable to load contributor keys"
     membersError.value = message
     operations.add("did_read", bucketId.value, "error", message)
   } finally {
