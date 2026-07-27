@@ -1,10 +1,6 @@
 <script setup lang="ts">
-import {
-  fetchFileMessagesPage,
-  fetchIndexedMessagesByTag,
-  isFileMessage,
-  type IndexedMessage
-} from "../../../../services/indexer/subqueryClient"
+import type { ApiMessage } from "../../../../services/buckets/types"
+import { isFileMessage } from "../../../../services/buckets/valueCodecs"
 import BucketFileCard from "../../../../components/common/BucketFileCard.vue"
 import type { ChatMessageAttachment } from "../../../../components/common/ChatMessageEntry.vue"
 import ParticleLoader from "../../../../components/common/ParticleLoader.vue"
@@ -26,7 +22,8 @@ const session = useSessionStore()
 const settings = useSettingsStore()
 const { formatAddress, addressesEqual } = useAddress()
 
-const indexerUrl = computed(() => String(config.public.subqueryIndexerUrl || ""))
+const bucketsRepository = useBucketsRepository()
+
 const pinataGateway = computed(() => {
   const gw = String(config.public.pinataGateway || "https://gateway.pinata.cloud/ipfs")
   return gw.replace(/\/+$/, "")
@@ -39,7 +36,7 @@ const bucketId = computed(() => {
 })
 
 // ── State ──────────────────────────────────────────────────────────
-const files = ref<IndexedMessage[]>([])
+const files = ref<ApiMessage[]>([])
 const cursor = ref<string | null>(null)
 const hasNextPage = ref(true)
 const loadingPage = ref(false)
@@ -84,8 +81,16 @@ function resolveUrl(ref: string): string {
   return `${pinataGateway.value}/ipfs/${t}`
 }
 
+function formatCreatedAt(value: string): string {
+  const date = new Date(Date.parse(value))
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString([], {
+    month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit"
+  })
+}
+
 // ── IPFS payload hydration ─────────────────────────────────────────
-async function hydratePayloads(msgs: IndexedMessage[]) {
+async function hydratePayloads(msgs: ApiMessage[]) {
   const nextP: Record<string, string> = { ...payloadById.value }
   const nextE: Record<string, string> = { ...payloadErrorById.value }
   await Promise.all(msgs.map(async m => {
@@ -108,7 +113,7 @@ async function hydratePayloads(msgs: IndexedMessage[]) {
 }
 
 // ── Bucket key recovery (from key-sharing messages) ────────────────
-async function decryptKeySharing(keySharingMessages: IndexedMessage[]) {
+async function decryptKeySharing(keySharingMessages: ApiMessage[]) {
   const secretJwk = settings.x25519SecretJwk
   if (!secretJwk) return
 
@@ -142,11 +147,9 @@ async function decryptKeySharing(keySharingMessages: IndexedMessage[]) {
 // The bucket's decryption secret lives in its key-sharing messages, which the
 // file-only query deliberately excludes — so we fetch them separately here.
 async function loadKeySharing() {
-  const url = indexerUrl.value
-  if (!url) return
   keyMissing.value = !settings.x25519SecretJwk
   try {
-    const keySharingMessages = await fetchIndexedMessagesByTag(url, bucketId.value, keySharingTag)
+    const keySharingMessages = await bucketsRepository.fetchMessagesByTag(bucketId.value, keySharingTag)
     await hydratePayloads(keySharingMessages)
     await decryptKeySharing(keySharingMessages)
   } catch {
@@ -155,7 +158,7 @@ async function loadKeySharing() {
 }
 
 // ── File attachment decryption ─────────────────────────────────────
-async function hydrateAttachments(msgs: IndexedMessage[]) {
+async function hydrateAttachments(msgs: ApiMessage[]) {
   const sk = activeSecretJwk.value
   if (!sk || !isX25519Secret(sk)) return // locked: no bucket key yet
 
@@ -194,10 +197,7 @@ async function loadNextPage() {
   loadingPage.value = true
   error.value = ""
   try {
-    const url = indexerUrl.value
-    if (!url) throw new Error("SubQuery indexer URL is not configured")
-
-    const page = await fetchFileMessagesPage(url, bucketId.value, { first: PAGE_SIZE, after: cursor.value })
+    const page = await bucketsRepository.fetchFileMessagesPage(bucketId.value, { first: PAGE_SIZE, after: cursor.value })
     const pageFiles = page.nodes.filter(isFileMessage)
 
     // Show the cards immediately; their previews fill in as decryption resolves,
@@ -216,7 +216,7 @@ async function loadNextPage() {
 
 // Fetch and decrypt a page's file payloads in the background, after the cards are
 // already on screen. Thumbnails and filenames appear as each page resolves.
-async function hydratePageContent(pageFiles: IndexedMessage[]) {
+async function hydratePageContent(pageFiles: ApiMessage[]) {
   await hydratePayloads(pageFiles)
   await hydrateAttachments(pageFiles)
 }
@@ -278,7 +278,7 @@ const fileCards = computed<FileCardVm[]>(() =>
       attachment: attachmentById.value[m.id],
       contentType: m.contentType?.trim() || "application/octet-stream",
       senderLabel: outgoing ? "You" : formatAddress(m.contributor ?? ""),
-      timestampLabel: `Block #${m.createdBlock}`,
+      timestampLabel: formatCreatedAt(m.createdAt),
       cid: m.reference ?? undefined,
       error: payloadErrorById.value[m.id] ?? decryptErrorById.value[m.id]
     }

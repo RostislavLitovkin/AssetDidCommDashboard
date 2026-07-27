@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { DidCommRepository, type BucketMessage, type BucketRecord, type ExtrinsicUpdate } from "../../../../services/papi/didCommRepository"
+import type { ApiBucket, ApiMessage, OperationUpdate } from "../../../../services/buckets/types"
+import { isFileMessage } from "../../../../services/buckets/valueCodecs"
 import ParticleLoader from "../../../../components/common/ParticleLoader.vue"
 import PageHeader from "../../../../components/common/PageHeader.vue"
 import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } from "../../../../components/common/ChatMessageEntry.vue"
@@ -8,13 +9,12 @@ import { useAddress } from "../../../../composables/useAddress"
 import { hexToU8a } from "@polkadot/util"
 import * as jose from "jose"
 import { computed, nextTick, onMounted, ref, watch } from "vue"
-import { useNuxtApp, useRoute, useRuntimeConfig } from "nuxt/app"
+import { useRoute, useRuntimeConfig } from "nuxt/app"
 import { useOperationsStore } from "../../../../stores/operations"
 import { useSessionStore } from "../../../../stores/session"
 import { useSettingsStore } from "../../../../stores/settings"
 
 const route = useRoute()
-const { $papiClient } = useNuxtApp()
 const runtimeConfig = useRuntimeConfig()
 const session = useSessionStore()
 const settings = useSettingsStore()
@@ -25,31 +25,7 @@ const asOptionalString = (value: unknown): string | undefined => {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
 }
 
-const didCommRepository = new DidCommRepository(
-  $papiClient as { rpc(method: string, params?: unknown[]): Promise<unknown>; getEndpoint?(): string },
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  {
-    jwt: asOptionalString(runtimeConfig.public.pinataJwt),
-    apiKey: asOptionalString(runtimeConfig.public.pinataApiKey),
-    apiSecret: asOptionalString(runtimeConfig.public.pinataApiSecret),
-    publicGateway: asOptionalString(runtimeConfig.public.pinataGateway)
-  },
-  undefined,
-  undefined,
-  undefined,
-  String(runtimeConfig.public.subqueryIndexerUrl || "")
-)
+const bucketsRepository = useBucketsRepository()
 
 type DeliveryState = "sending" | "sent" | "failed"
 
@@ -104,10 +80,10 @@ const bucketId = computed(() => {
   }
 })
 
-const messages = ref<BucketMessage[]>([])
+const messages = ref<ApiMessage[]>([])
 const messagesLoading = ref(true)
 const messagesError = ref("")
-const bucket = ref<BucketRecord | null>(null)
+const bucket = ref<ApiBucket | null>(null)
 const bucketLoading = ref(true)
 const bucketError = ref("")
 const membersError = ref("")
@@ -129,7 +105,7 @@ const removingAdminAddress = ref("")
 const removingContributorAddress = ref("")
 const loadingContributorKeys = ref(false)
 const contributorX25519Keys = ref<Record<string, string>>({})
-const currentBucketCall = ref("buckets.write")
+const currentBucketCall = ref("write")
 const generatingEncryptionKey = ref(false)
 const encryptionKeyError = ref("")
 const encryptionKeySuccess = ref("")
@@ -205,7 +181,7 @@ async function loadMessages() {
   messagesLoading.value = true
 
   try {
-    const loadedMessages = await didCommRepository.fetchMessages(bucketId.value)
+    const loadedMessages = await bucketsRepository.fetchMessages(bucketId.value)
     messages.value = loadedMessages
     await hydrateMessagePayloads(loadedMessages)
     await decryptLatestKeySharingPayload()
@@ -352,22 +328,8 @@ async function decryptLatestKeySharingPayload(): Promise<void> {
   }
 }
 
-function resolveMessageTag(message: BucketMessage): string | undefined {
-  const rawRecord = toRecord(message.raw)
-  return firstString(rawRecord, ["tag", "messageTag"])
-}
-
-function resolveMessageContentType(message: BucketMessage): string | undefined {
-  const rawRecord = toRecord(message.raw)
-  const metadataRecord =
-    toRecord(rawRecord?.metadataInput) ??
-    toRecord(rawRecord?.metadata) ??
-    toRecord(rawRecord?.messageMetadata)
-
-  return (
-    firstString(metadataRecord, ["contentType", "mimeType", "type"]) ??
-    firstString(rawRecord, ["contentType", "mimeType"])
-  )
+function resolveMessageTag(message: ApiMessage): string | undefined {
+  return message.tag?.trim() || undefined
 }
 
 function looksLikeCompactJwe(payload: string): boolean {
@@ -386,7 +348,7 @@ async function decryptMessagePayload(payload: string): Promise<string> {
   return new TextDecoder().decode(plaintext)
 }
 
-async function decryptReceivedMessages(entries: BucketMessage[]): Promise<void> {
+async function decryptReceivedMessages(entries: ApiMessage[]): Promise<void> {
   const nextDecryptedPayloadById: Record<string, string> = {}
   const nextDecryptErrorById: Record<string, string> = {}
 
@@ -431,15 +393,7 @@ async function decryptReceivedMessages(entries: BucketMessage[]): Promise<void> 
 }
 
 // ── File attachments (CID-pointer messages) ────────────────────────
-const textMessageContentType = "text/plain;charset=utf-8"
-const keySharingContentType = "application/didcomm-encrypted+json"
-
-// A file message carries a real MIME contentType on-chain; its reference points at the encrypted file.
-function isFileMessage(entry: BucketMessage): boolean {
-  if (resolveMessageTag(entry) === keySharingTag) return false
-  const contentType = resolveMessageContentType(entry)?.trim()
-  return Boolean(contentType && contentType !== textMessageContentType && contentType !== keySharingContentType)
-}
+// isFileMessage is imported from services/buckets/valueCodecs.
 
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = ""
@@ -450,7 +404,7 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
-async function hydrateMessageAttachments(entries: BucketMessage[]): Promise<void> {
+async function hydrateMessageAttachments(entries: ApiMessage[]): Promise<void> {
   const next: Record<string, ChatMessageAttachment> = { ...messageAttachmentById.value }
   const nextErrors: Record<string, string> = { ...messageDecryptErrorById.value }
   const secretJwk = activeBucketEncryptionSecretJwk.value
@@ -468,7 +422,7 @@ async function hydrateMessageAttachments(entries: BucketMessage[]): Promise<void
       const privateKey = await jose.importJWK(secretJwk as jose.JWK, "ECDH-ES+A256KW")
       const { plaintext, protectedHeader } = await jose.compactDecrypt(fileJwe, privateKey)
       next[entry.id] = {
-        contentType: resolveMessageContentType(entry)?.trim() || "application/octet-stream",
+        contentType: entry.contentType?.trim() || "application/octet-stream",
         fileName: typeof protectedHeader.filename === "string" ? protectedHeader.filename : undefined,
         data: bytesToBase64(plaintext)
       }
@@ -486,7 +440,7 @@ async function loadBucket() {
   bucketLoading.value = true
 
   try {
-    const record = await didCommRepository.fetchBucket(bucketId.value)
+    const record = await bucketsRepository.fetchBucket(bucketId.value)
     if (!record) {
       bucket.value = null
       bucketError.value = "Unable to find bucket metadata"
@@ -507,8 +461,8 @@ async function loadBucketMembers() {
 
   try {
     const [admins, contributors] = await Promise.all([
-      didCommRepository.fetchBucketAdmins(bucketId.value),
-      didCommRepository.fetchBucketContributors(bucketId.value)
+      bucketsRepository.fetchBucketAdmins(bucketId.value),
+      bucketsRepository.fetchBucketContributors(bucketId.value)
     ])
 
     bucketAdmins.value = admins
@@ -663,18 +617,8 @@ async function loadContributorX25519Keys(addresses: string[]): Promise<void> {
   }
 }
 
-function resolveNamespaceIdFromBucket(bucketRecord: BucketRecord | null): string {
-  if (!bucketRecord) {
-    return ""
-  }
-
-  if (bucketRecord.namespaceId?.trim()) {
-    return bucketRecord.namespaceId.trim()
-  }
-
-  const rawRecord = toRecord(bucketRecord.raw)
-  const candidate = rawRecord?.namespaceId ?? rawRecord?.namespace
-  return typeof candidate === "string" ? candidate.trim() : ""
+function resolveNamespaceIdFromBucket(bucketRecord: ApiBucket | null): string {
+  return bucketRecord?.namespaceId?.trim() ?? ""
 }
 
 async function removeAdmin(address: string): Promise<void> {
@@ -692,18 +636,18 @@ async function removeAdmin(address: string): Promise<void> {
   }
 
   removingAdminAddress.value = address
-  currentBucketCall.value = "buckets.removeAdmin"
+  currentBucketCall.value = "removeAdmin"
 
   try {
-    const result = await didCommRepository.removeBucketAdmin(
+    const result = await bucketsRepository.removeBucketAdmin(
       namespaceId,
       bucketId.value,
       address,
       session.accountAddress,
-      logExtrinsicUpdate
+      logOperationUpdate
     )
 
-    operations.add("bucket_write", result.method, "success", `Admin removed: ${result.txHash}`)
+    operations.add("bucket_write", result.method, "success", `Admin removed: ${result.id}`)
     await loadBucketMembers()
   } catch (error) {
     membersError.value = error instanceof Error ? error.message : "Unable to remove admin"
@@ -728,18 +672,18 @@ async function removeContributor(address: string): Promise<void> {
   }
 
   removingContributorAddress.value = address
-  currentBucketCall.value = "buckets.removeContributor"
+  currentBucketCall.value = "removeContributor"
 
   try {
-    const result = await didCommRepository.removeBucketContributor(
+    const result = await bucketsRepository.removeBucketContributor(
       namespaceId,
       bucketId.value,
       address,
       session.accountAddress,
-      logExtrinsicUpdate
+      logOperationUpdate
     )
 
-    operations.add("bucket_write", result.method, "success", `Contributor removed: ${result.txHash}`)
+    operations.add("bucket_write", result.method, "success", `Contributor removed: ${result.id}`)
     await loadBucketMembers()
   } catch (error) {
     membersError.value = error instanceof Error ? error.message : "Unable to remove contributor"
@@ -901,18 +845,18 @@ async function generateAndShareEncryptionKey(): Promise<void> {
     const jweDigestBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(jweString))
     const jweDigest = Array.from(new Uint8Array(jweDigestBuffer)).map((value) => value.toString(16).padStart(2, "0")).join("")
     console.log(`Key-sharing JWE digest (sha256): 0x${jweDigest}`)
-    console.log("--- [ADMIN] 4c. Submitting utility.batchAll for resumeWriting + createTag + write ---")
-    currentBucketCall.value = "utility.batchAll"
-    const batchResult = await didCommRepository.rotateBucketKeyAndShare(
+    console.log("--- [ADMIN] 4c. Submitting rotateKey + write mutation ---")
+    currentBucketCall.value = "rotateKey+write"
+    const batchResult = await bucketsRepository.rotateBucketKeyAndShare(
       namespaceId,
       bucketId.value,
       bucketEncryptionKey,
       keySharingTag,
       jweString,
       session.accountAddress,
-      logExtrinsicUpdate
+      logOperationUpdate
     )
-    console.log(`✅ Bucket key rotation + tag + key-sharing message finalized in batchAll. Transaction Hash: ${batchResult.txHash}`)
+    console.log(`✅ Bucket key rotation + tag + key-sharing message finalized. Result id: ${batchResult.id}`)
 
     latestGeneratedKeyId.value = keyId
     latestGeneratedPublicJwk.value = JSON.stringify(bucketPkJwk, null, 2)
@@ -922,7 +866,7 @@ async function generateAndShareEncryptionKey(): Promise<void> {
       "bucket_write",
       batchResult.method,
       "success",
-      `Bucket key rotated and shared via batchAll. keyId=${keyId}, tx=${batchResult.txHash}`
+      `Bucket key rotated and shared. keyId=${keyId}, id=${batchResult.id}`
     )
 
     await loadMessages()
@@ -1047,23 +991,8 @@ function summarizeJsonPayload(payload: string): string | undefined {
   return JSON.stringify(parsed, null, 2)
 }
 
-function resolveMessageReference(message: BucketMessage): string | undefined {
-  const rawRecord = toRecord(message.raw)
-
-  return (
-    firstString(rawRecord, ["reference", "ref", "cid", "ipfsCid", "messageCid"]) ??
-    firstStringAtPaths(rawRecord, [
-      "metadata.ref",
-      "metadata.reference",
-      "metadata.cid",
-      "metadataInput.ref",
-      "metadataInput.reference",
-      "value.ref",
-      "value.reference",
-      "messageInput.ref",
-      "messageInput.reference"
-    ])
-  )
+function resolveMessageReference(message: ApiMessage): string | undefined {
+  return message.reference?.trim() || undefined
 }
 
 function extractCidFromReference(reference: string): string | undefined {
@@ -1134,7 +1063,7 @@ async function fetchPayloadFromReference(reference: string): Promise<string> {
   return await response.text()
 }
 
-async function hydrateMessagePayloads(entries: BucketMessage[]): Promise<void> {
+async function hydrateMessagePayloads(entries: ApiMessage[]): Promise<void> {
   const nextPayloadById: Record<string, string> = {}
   const nextErrorById: Record<string, string> = {}
 
@@ -1273,50 +1202,36 @@ function appendMetadataEntries(entries: MetadataEntry[], key: string, value: unk
   })
 }
 
-function extractBucketMetadataEntries(bucketRecord: BucketRecord | null): MetadataEntry[] {
+function extractBucketMetadataEntries(bucketRecord: ApiBucket | null): MetadataEntry[] {
   if (!bucketRecord) {
     return []
   }
 
-  const rawRecord = toRecord(bucketRecord.raw)
-  const source: Record<string, unknown> = rawRecord ? { ...rawRecord } : {}
-
-  if (!("id" in source) && bucketRecord.id) {
-    source.id = bucketRecord.id
-  }
-
-  if (!("name" in source) && bucketRecord.name) {
-    source.name = bucketRecord.name
-  }
-
-  if (!("namespaceId" in source) && bucketRecord.namespaceId) {
-    source.namespaceId = bucketRecord.namespaceId
-  }
-
   const entries: MetadataEntry[] = []
-  Object.entries(source).forEach(([key, value]) => {
-    appendMetadataEntries(entries, key, value)
-  })
+  appendMetadataEntries(entries, "id", bucketRecord.id)
+  appendMetadataEntries(entries, "bucketId", bucketRecord.bucketId)
+  appendMetadataEntries(entries, "namespaceId", bucketRecord.namespaceId)
+  appendMetadataEntries(entries, "creator", bucketRecord.creator ?? "")
+  appendMetadataEntries(entries, "name", bucketRecord.name ?? "")
+  appendMetadataEntries(entries, "category", bucketRecord.category ?? "")
+  appendMetadataEntries(entries, "isWritable", bucketRecord.isWritable)
+  appendMetadataEntries(entries, "encryptionKey", bucketRecord.encryptionKey ?? "")
+  appendMetadataEntries(entries, "createdAt", bucketRecord.createdAt)
+  appendMetadataEntries(entries, "updatedAt", bucketRecord.updatedAt)
 
   return entries
 }
 
-function toChatMessage(message: BucketMessage): ChatMessage {
-  const rawRecord = toRecord(message.raw)
+function toChatMessage(message: ApiMessage): ChatMessage {
   const reference = resolveMessageReference(message)
   const payload = decryptedMessagePayloadById.value[message.id] ?? messagePayloadById.value[message.id]
   const payloadError = messagePayloadErrorById.value[message.id] ?? messageDecryptErrorById.value[message.id]
   const payloadBody = payload ? summarizeJsonPayload(payload) ?? payload : undefined
-  const body = payloadBody ?? firstString(rawRecord, ["message", "content", "payload", "body", "text", "summary"]) ?? message.summary
-  const contentType = resolveMessageContentType(message)
-  const tag = firstString(rawRecord, ["tag", "messageTag"])
-  const sender = firstString(rawRecord, ["sender", "from", "author", "owner", "account"])
-  const createdAt =
-    toDate(rawRecord?.createdAt) ??
-    toDate(rawRecord?.timestamp) ??
-    toDate(rawRecord?.time) ??
-    toDate(rawRecord?.submittedAt) ??
-    new Date(0)
+  const body = payloadBody ?? message.description?.trim() ?? message.ipfsContent ?? ""
+  const contentType = message.contentType ?? undefined
+  const tag = message.tag ?? undefined
+  const sender = message.contributor
+  const createdAt = toDate(message.createdAt) ?? new Date(0)
 
   const outgoing = Boolean(session.accountAddress && sender && addressesEqual(session.accountAddress, sender))
 
@@ -1434,20 +1349,12 @@ function formatTimestamp(value: Date): string {
   })
 }
 
-function logExtrinsicUpdate(update: ExtrinsicUpdate): void {
-  const details = [update.message]
-  if (update.txHash) {
-    details.push(`tx: ${update.txHash}`)
-  }
-  if (update.blockHash) {
-    details.push(`block: ${update.blockHash}`)
-  }
-
+function logOperationUpdate(update: OperationUpdate): void {
   operations.add(
     "bucket_write",
     `${currentBucketCall.value}:${update.stage}`,
     update.stage === "error" ? "error" : "info",
-    details.join(" · ")
+    update.message
   )
 }
 
@@ -1501,7 +1408,7 @@ async function sendMessage() {
   sendText.value = ""
   pendingAttachment.value = null
   sending.value = true
-  currentBucketCall.value = "buckets.write"
+  currentBucketCall.value = "write"
 
   try {
     let result
@@ -1509,20 +1416,20 @@ async function sendMessage() {
       const fileContentType = attachment.file.type || "application/octet-stream"
       const fileBytes = new Uint8Array(await attachment.file.arrayBuffer())
       const fileJwe = await encryptOutgoingBucketMessage(fileBytes, { cty: fileContentType, filename: attachment.file.name })
-      result = await didCommRepository.createFileMessage(
+      result = await bucketsRepository.createFileMessage(
         bucketId.value,
         fileJwe,
         fileContentType,
         session.accountAddress,
-        logExtrinsicUpdate
+        logOperationUpdate
       )
     } else {
       const encryptedPayload = await encryptOutgoingBucketMessage(textPayload)
-      result = await didCommRepository.createMessage(
+      result = await bucketsRepository.createMessage(
         bucketId.value,
         encryptedPayload,
         session.accountAddress,
-        logExtrinsicUpdate
+        logOperationUpdate
       )
     }
     const pending = pendingMessages.value.find((entry) => entry.id === pendingId)
@@ -1530,7 +1437,7 @@ async function sendMessage() {
       pending.deliveryState = "sent"
     }
 
-    operations.add("bucket_write", result.method, "success", `Message submitted: ${result.txHash}`)
+    operations.add("bucket_write", result.method, "success", `Message submitted: ${result.id}`)
     await loadMessages()
     pendingMessages.value = pendingMessages.value.filter((entry) => entry.deliveryState === "failed")
   } catch (error) {
