@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ApiBucket, ApiMessage, OperationUpdate } from "../../../../services/buckets/types"
-import { isFileMessage } from "../../../../services/buckets/valueCodecs"
+import { isFileMessage, normalizeX25519ToJwkX } from "../../../../services/buckets/valueCodecs"
 import ParticleLoader from "../../../../components/common/ParticleLoader.vue"
 import PageHeader from "../../../../components/common/PageHeader.vue"
 import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } from "../../../../components/common/ChatMessageEntry.vue"
@@ -503,7 +503,9 @@ async function loadContributorX25519Keys(addresses: string[]): Promise<void> {
       try {
         // The profile API keys on the generic Substrate SS58 format (prefix 42).
         const profile = await profileClient.getProfile(toSs58Prefix42(address))
-        keysByAddress[address] = profile?.x25519Key ?? "Not found"
+        const raw = profile?.x25519Key ?? null
+        const normalized = raw ? normalizeX25519ToJwkX(raw.trim()) : null
+        keysByAddress[address] = normalized ?? "Not found"
       } catch {
         keysByAddress[address] = "Not found"
       }

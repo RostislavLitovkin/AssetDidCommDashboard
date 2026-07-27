@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import type { ApiBucket, ApiMessage, BucketMemberRole, OperationUpdate } from "../../../../services/buckets/types"
+import { normalizeX25519ToJwkX } from "../../../../services/buckets/valueCodecs"
 import { ProfileClient } from "../../../../services/profile/profileClient"
 import type { Profile } from "../../../../types/profile"
 import SkeletonCard from "../../../../components/common/SkeletonCard.vue"
 import PageHeader from "../../../../components/common/PageHeader.vue"
 import { useAddress } from "../../../../composables/useAddress"
 import { Trash2, File } from "lucide-vue-next"
-import { hexToU8a } from "@polkadot/util"
 import { decodeAddress, encodeAddress } from "@polkadot/util-crypto"
 import * as jose from "jose"
 import { computed, nextTick, onMounted, ref, watch } from "vue"
@@ -491,10 +491,6 @@ interface MemberEntry {
   viewerKey?: string
 }
 
-function isHex32(value: string): boolean {
-  return /^0x[0-9a-fA-F]{64}$/.test(value)
-}
-
 function isValidX25519(value: string | undefined): value is string {
   if (typeof value !== "string") {
     return false
@@ -508,36 +504,17 @@ function isValidX25519(value: string | undefined): value is string {
   return trimmed !== "Not found"
 }
 
-function normalizeX25519Value(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined
-  }
-
-  const trimmed = value.trim()
-  if (!trimmed) {
-    return undefined
-  }
-
-  // Some chains return x25519 as hex; convert to JWK x (base64url)
-  if (isHex32(trimmed)) {
-    return jose.base64url.encode(hexToU8a(trimmed))
-  }
-
-  // If already base64url (as in did.publicKeys.publicEncryptionKey.x25519), keep as-is
-  return trimmed
-}
-
 function deriveMemberX25519Keys(contributors: string[], viewers: string[]): void {
   // Contributors are keyed by SS58 address, so their encryption key comes from their profile.
   contributorX25519Keys.value = Object.fromEntries(
     contributors.map((address) => [
       address,
-      normalizeX25519Value(memberProfiles.value[address]?.x25519Key) ?? "Not found"
+      normalizeX25519ToJwkX(memberProfiles.value[address]?.x25519Key ?? "") ?? "Not found"
     ])
   )
   // Viewers are keyed on-chain by their X25519 key, so the identifier itself is the key.
   viewerX25519Keys.value = Object.fromEntries(
-    viewers.map((viewerKey) => [viewerKey, normalizeX25519Value(viewerKey) ?? "Not found"])
+    viewers.map((viewerKey) => [viewerKey, normalizeX25519ToJwkX(viewerKey) ?? "Not found"])
   )
 }
 
@@ -1341,10 +1318,11 @@ const allMembers = computed<MemberEntry[]>(() => {
   // admin/contributor whose profile carries the same key and merge the viewer role in;
   // an unmatched viewer stays as its own row keyed by the raw key.
   for (const viewerKey of bucketViewers.value) {
-    const normalizedViewerKey = normalizeX25519Value(viewerKey)
+    const normalizedViewerKey = normalizeX25519ToJwkX(viewerKey)
     const matched = normalizedViewerKey
       ? Array.from(membersMap.values()).find(
-          (member) => normalizeX25519Value(memberProfiles.value[member.address]?.x25519Key) === normalizedViewerKey
+          (member) =>
+            normalizeX25519ToJwkX(memberProfiles.value[member.address]?.x25519Key ?? "") === normalizedViewerKey
         )
       : undefined
 

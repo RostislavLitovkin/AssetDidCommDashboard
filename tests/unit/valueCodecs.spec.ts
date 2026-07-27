@@ -4,6 +4,7 @@ import {
   KEY_SHARING_CONTENT_TYPE,
   KEY_SHARING_MESSAGE_TAG,
   normalizeFixed32ByteKey,
+  normalizeX25519ToJwkX,
   sha256HexUtf8,
   TEXT_CONTENT_TYPE
 } from "../../app/services/buckets/valueCodecs"
@@ -25,6 +26,28 @@ describe("normalizeFixed32ByteKey", () => {
 
   it("rejects values that are not 32 bytes", () => {
     expect(() => normalizeFixed32ByteKey("abc")).toThrow()
+  })
+})
+
+describe("normalizeX25519ToJwkX", () => {
+  const base64UrlX = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+
+  it("passes through a 43-char base64url value unchanged", () => {
+    expect(normalizeX25519ToJwkX(base64UrlX)).toBe(base64UrlX)
+  })
+
+  it("converts 0x-prefixed 64-char hex to the equivalent base64url value", () => {
+    const hex = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+    expect(normalizeX25519ToJwkX(hex)).toBe(base64UrlX)
+  })
+
+  it("converts hex without a 0x prefix to the equivalent base64url value", () => {
+    const hex = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+    expect(normalizeX25519ToJwkX(hex)).toBe(base64UrlX)
+  })
+
+  it("returns null for values that are neither hex nor a 32-byte base64url key", () => {
+    expect(normalizeX25519ToJwkX("hello world")).toBeNull()
   })
 })
 

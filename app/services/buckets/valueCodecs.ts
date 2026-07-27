@@ -9,6 +9,8 @@
  * re-verifying every caller of the old locations, which are slated for deletion.
  */
 
+import { base64url } from "jose"
+
 // -- sha256HexUtf8 (ported from app/services/papi/didCommRepository.ts:2641) --
 
 async function sha256HexUtf8(input: string): Promise<`0x${string}`> {
@@ -112,6 +114,41 @@ function bytesToHex(bytes: Uint8Array): `0x${string}` {
   return `0x${hex}`
 }
 
+// -- normalizeX25519ToJwkX (ported from app/pages/messages/bucket/[id]/info.vue's
+// normalizeX25519Value/isHex32; generalized to accept 32-byte hex with or without a
+// 0x prefix, and to validate passthrough values actually decode to 32 base64url bytes
+// instead of blindly trusting anything that isn't hex) --
+
+const HEX32_PATTERN = /^(?:0x)?[0-9a-fA-F]{64}$/
+
+/**
+ * Normalize a profile-stored X25519 public key to a base64url JWK "x" value.
+ * Profiles store user-entered text: accepts base64url (43 chars, passthrough)
+ * or 32-byte hex (with/without 0x, converted). Returns null when the value
+ * is neither.
+ */
+function normalizeX25519ToJwkX(value: string): string | null {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  if (HEX32_PATTERN.test(trimmed)) {
+    const prefixed = trimmed.startsWith("0x") || trimmed.startsWith("0X") ? trimmed : `0x${trimmed}`
+    const hexBytes = tryParseHexBytes(prefixed)
+    if (hexBytes) {
+      return base64url.encode(hexBytes)
+    }
+  }
+
+  const base64UrlBytes = tryDecodeBase64Url(trimmed)
+  if (base64UrlBytes && base64UrlBytes.length === 32) {
+    return trimmed
+  }
+
+  return null
+}
+
 // -- Content-type discriminators + isFileMessage (ported from app/services/indexer/subqueryClient.ts:276-292) --
 
 // Content-type discriminators shared with the message-sending path. A file message
@@ -135,4 +172,4 @@ export function isFileMessage(message: { contentType: string | null; tag: string
   return Boolean(contentType && contentType !== TEXT_CONTENT_TYPE && contentType !== KEY_SHARING_CONTENT_TYPE)
 }
 
-export { normalizeFixed32ByteKey, sha256HexUtf8 }
+export { normalizeFixed32ByteKey, normalizeX25519ToJwkX, sha256HexUtf8 }
