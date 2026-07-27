@@ -36,12 +36,6 @@ export default defineNuxtConfig({
   },
   runtimeConfig: {
     public: {
-      xcavateWsEndpoint:
-        process.env.NUXT_PUBLIC_XCAVATE_WS_ENDPOINT ||
-        "wss://xcavate-solochain.api.onfinality.io/public-ws",
-      subqueryIndexerUrl:
-        process.env.NUXT_PUBLIC_SUBQUERY_INDEXER_URL ||
-        "https://indexer.realxmarket.io/",
       pinataJwt: process.env.NUXT_PUBLIC_PINATA_JWT || "",
       pinataApiKey: process.env.NUXT_PUBLIC_PINATA_API_KEY || "",
       pinataApiSecret: process.env.NUXT_PUBLIC_PINATA_API_SECRET || "",

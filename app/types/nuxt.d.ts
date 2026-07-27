@@ -1,17 +1,4 @@
-import type { PapiClient } from "../services/papi/client"
 import type { AssetDidCommBridge } from "../services/injection/x25519InjectionBridge"
-
-declare module "#app" {
-  interface NuxtApp {
-    $papiClient: PapiClient
-  }
-}
-
-declare module "vue" {
-  interface ComponentCustomProperties {
-    $papiClient: PapiClient
-  }
-}
 
 declare global {
   interface Window {
