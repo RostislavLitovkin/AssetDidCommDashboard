@@ -325,30 +325,3 @@ async function submitAddMember(): Promise<void> {
     </div>
   </div>
 </template>
-<style scoped>
-.chat-custom-page {
-  display: flex;
-  flex-direction: column;
-  height: calc(100vh - 48px);
-  margin: -24px;
-  background: #f7f8fa;
-  overflow: hidden;
-}
-
-.info-content-scroll {
-  flex: 1;
-  overflow-y: auto;
-  padding: 24px;
-  overscroll-behavior: contain;
-}
-
-@media (max-width: 960px) {
-  .chat-custom-page {
-    height: calc(100vh - 56px);
-    margin: -16px;
-  }
-  .info-content-scroll {
-    padding: 16px;
-  }
-}
-</style>

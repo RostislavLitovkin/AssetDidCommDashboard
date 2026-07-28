@@ -1,9 +1,15 @@
+/* DM Sans Bold subset to "%" and the digits (the only glyphs the counter ever
+   shows), inlined so the percentage paints with no network request. Deliberately
+   a family name of its own rather than "DM Sans": a same-name face would be
+   overridden by the full-coverage Bold face in globals.css as soon as that
+   stylesheet parses, and the digits would fall back to Arial until the full
+   woff downloaded — exactly the flash this subset exists to prevent. */
 @font-face {
-  font-family: "Xcavate";
+  font-family: "DM Sans Digits";
   font-style: normal;
-  font-weight: 800;
+  font-weight: 700;
   font-display: block;
-  src: url("data:font/woff2;base64,d09GMgABAAAAAAUgAAwAAAAACNAAAATRAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGx4cLgZgAEQKiEiHAQscAAE2AiQDNAQgBYNaByAbGAfIxKdwy3+7ydkmXE2BM7Vpw5lITaAunn5xAQ6uqa+PA4vGATdq9O1XXdREw9ks2iJ5agMamO8BnmEA79bpGhAADJOtJSQuIU2COXgYeqOxlKxRuDFwmDu+sqrbB6MZKROt7REu57lWzgomANXSXFal1nmkGD4kiywWSPjNcHGylJCJa7BCMD/RsAOVfAvtsAJWoo9609sMVgdRUFJw6BgN7rRio8HDCx3mMF+esII9gk9E2CJeBcZPjB8YX8q6ElCQamKMkhzsyXLgLTAhBwWxMIoxDpTnnJ8XeSYyUTSd4Cpw1hNFs0miOFE0UfBig6jJzcmu4qS8bOkjWdC9xoxXTPuGtNSyho8xQ9AdJDMPsC+WauQlPVL8Z2+Y9tXh14JOJiVEwTMTWZbJzCOYOqZksixKSAJEMkVo6v1QCqeezBY2XRZ0V8nMJ4wR4fTDHT+oPTSe5ZAagQpgYKRAEnpEHIyKmfbNm2xhvYL5CtOeG884xXeuV9LBPYlOSTkTyzTs1SXMkO1qKGQlIlG8R2bKOzIH3d9YaKZT5StMiz0qpXxh2L5ddp158I2NIJ+ASHbdpd8v/b5zobTfcNd1v2G/YanesN+g6z6NCR0leRnpJXkaqSQ/Pb00X7q9s//Gpf4bc2vCwpxHN6lUTaPTykrz09OL8yVN8eq/m2ZWaFi4y6hmlbJ5FBxsdbfXrFl0+9AR3e21a7W3j8zKsy8ODbUvzi+0Kw4LsysuxAibc37vPbbFzK8HmqZ2+lvdnKz82fIKzU3s7AhIHOjpK6vVnq5J/HerYSV822b3dqc3+gXmB8dFZ23me92mRwaXNPmnDS3rpYNXxxU4KDmVAxdou9UmK8VZ/eFE5T7lVfj07PA5LR9JP5Dee6fXsn/hMy1C3N1abKPHOSWVRrs3RHXPndcztTcosgrRVx1GWNtGOjnm2k1itlcvfIh+F6Pa0y4HRRGpth5lnT2tKWHN7aEZG3uvHb81/eySju4ZpsVnSu7dtXdc72i3wMF+oT3+Tfop6f4v3sp9nyP2cm1AUG6Hn0bT4ReUG+DvkbYmxD8vPDm5dtA/LW3QP7k2Odw/L+TbTQEqZaKNTbxSGW9T8/h7B7sPHB0f2zm87wD9ugh3K6k4LNHavbSnpy0lvLk9NH1977ljtzuvL0lvjgipDj1berfX1mm+nd0CB9uFDgAAEAA8Mf0/ryyqZFjYH+Yc9zUAvN21/xEAvDc24L7+iH6dxXK+7Buhpl8h8XdhIYvZ+iN/6y2Wv88CGyW/I1c/yi3ARLocjmQ2RtJgqGk5nOhJ+NKlyKMDCKYCxtHF8KXFcN5BowLLIKIFpm95oQqmACq/MsLD2s1R/aVR8r8t1w686CkENjhGobDEDgqHKJQP8uspJmDIpZjCBgE2SwTwO7XoRCda0YEQeMITHahAO+rQik7CeaDj3EZ4oAXtqIEnMpGANGShBa1kq0OzxeiOePSi89vKEIMWNKISfvCAF7zgh2RISEAmQmGlYWUlFHTplpcjCFNQhRp0oRGnbVdD7FrouwCoubSEFXzglc9nBQm1qDoJRRYVtqAeVagQF0ajC52ovWThutFON8lRg7owtwvl8EAFO5rgOW+rRoud24xKtKMP+xwGnP8hAneW8TR8kAAAAA==") format("woff2");
+  src: url("data:font/woff2;base64,d09GMgABAAAAAAUMAA0AAAAACTAAAAS6AAEzMwAAAAAAAAAAAAAAAAAAAAAAAAAAGyAcKgZgADwRCAqIaIdBATYCJAMwCxoABCAFhBQHIBuMBwguB2wiw6OrEKPSUpGyLYdKURXlpIbHFz97XDxQa75vN+G7AjKNr1D1VYSaUHYq2f4M2VmT5F6o4D1pxQjaQJszqgdrq4aKTjVYdNe+Ade8zwAZyHjYhd02jCIb4Dip440jG9ZvfFtGmzYYbJ58s/tliy5SKiq7F+f//F9O/++9cFrZTfJeoolcayzbg7qsMKD43j1vLT26F5ZDYJrNpRHtHnhu0l/fFlDW1CmyseOdQbBTFioBeHh7A+TM9m9dNdkCR9jQ62wcFt8gR7xMJgBTjkzCcngYslIObk6Y4bEASC8u87MqGIOhP1cRfsXlYEsKRI54XQpB1qEjzEeD6EmbmRkBtKPyo/IU4uKhksYpBQ0B9YCwGYiREANZI6b1bNjeyohyNdMdTbvuUbRuse/oTvfW4YPZvXdfy13+vQ+n/h+SK993Tn7ezj/7D6d+5csfJ79Jbm6IJ3QS3nz40PnKHxCtyb4dqgA38vl7Zl/r+2W0HJIB3FKPpqJzX98t9qBaSMOGhEyUrU4oD7LW0jVDCMqyI1EN6dw7KWmZphwzrcTrr9fr577I2Ht5VLVsSYlqNopamfJKmm/gEbMuTtX8UtsPJ5+LxBoSgk/pgqefqdgG+9D9KbJsyaelF9b3NF6aNwaswVLVat3ifM6u1UnxUmry7c4W+52jddUVcqe91X67euW4p7DR3bONxGbmiVJ/A9w05rH8w+CMN+izbKs2pEU2Cw/DOpphLMSiLDyiVMX19enJFE82Q2Ih+o8mGEhMO1CDKAsfl9vHCuzbHuZm1WSVIgwI0g+PYtXBJUXhuCRa8zgeIASt9/9MWmzimUyNA5vTRestXz8vlZLrsV9nhTpxbafUacfSGc9AkjX7VBqzjR7VDX86Ilw8u7Pt6VsLppxCHAU90dDa1GNtHbAnsS2cLndiRjOle9pbHrUWWSZhnDk/7xG+efngYIYSeJFRiyaNst7SeZqs1UixNgPXe7M+0nYTaBSii5rf3F7AJ9Y9uDGl1uozxS2bjuFUsEa43VWCCuIo6/2TLqNVG1KTuPmRaTvLnX56tTvd7etanRqljIJKZRYoVK8GeGJbk4to6aMsS/FQM6iqN3V2T53TJj6gfdpf7pd6X2YU41hbhjvA1zLqGhr1MMyWOqYw1HlVDhXOLI6td8y/Z+iufL45nO+S5769shK6BW7qWEKjp86x+QMBoU+fd7devF5xwPyf1zI/4RNf7aricL6t/65q+i51F+RFsPaPyUD2OwvYgGD169LYiDHudAsxJ6OAiEFwXEOX2KCJ87B4yPE4hY/zuEzFABlSC+0wW4ffSkaEIV1MEcmW7AJckUH1kCWjYqhNZnQNx8ishsFM5owPuU/k1Q93MYakbc64qrKKSRAcCkMarfkzIDYtRVU5LZCgOW0iiJlkihMZN1cfG1DVUiLRkhF1TNb0Ut0LK5A0DXqAM9wmVUD8RBNE46aJitG0vioQtxwGxVg/rwRbOx67E/rBIFnHORALiaSsQREnJzYIM3KBBPKNTNBTpKEI2mAPx1ECCw8PCwEx1s5RNc+TC2psYTGxCVUZdMg3F8ikSSU5UyZJKqpSYwOmAXZYMMJgbJ/CSl2F3gAAAAA=") format("woff2");
   unicode-range: U+25, U+30-39;
 }
 /* Pre-hydration splash. Inlined into <head> at build time (see nuxt.config.ts),
@@ -17,7 +23,7 @@
   align-items: center;
   justify-content: center;
   background: #f7f7f7;
-  font-family: "Xcavate", Inter, Arial, sans-serif;
+  font-family: "DM Sans Digits", "DM Sans", Inter, Arial, sans-serif;
   opacity: 1;
   transition: opacity 500ms ease;
   -webkit-user-select: none;
@@ -56,9 +62,9 @@
 }
 
 .rx-splash__pct {
-  font-family: "Xcavate", Inter, Arial, sans-serif;
+  font-family: "DM Sans Digits", "DM Sans", Inter, Arial, sans-serif;
   font-size: clamp(18px, 3vw, 24px);
-  font-weight: 800;
+  font-weight: 700; /* the heaviest real DM Sans face — 800 would be synthesised */
   letter-spacing: 0.6px;
   font-variant-numeric: tabular-nums;
   color: #000; /* --color-primary */

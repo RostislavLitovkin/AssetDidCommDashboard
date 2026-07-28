@@ -420,6 +420,8 @@ async function copyX25519PublicKey() {
 .app-shell-content {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
   padding: 24px;
   overflow: auto;
   overflow-x: hidden;

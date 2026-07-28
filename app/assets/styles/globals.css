@@ -1,6 +1,52 @@
+/* DM Sans — the app typeface. Three real weights (400/500/700) plus italics, so
+   the browser never has to synthesise bold or oblique. Declared weights of 600
+   and 800 in components resolve to the 700 face by normal CSS font matching. */
 @font-face {
-  font-family: "Xcavate";
-  src: url("~/assets/fonts/xcavatefont.ttf") format("truetype");
+  font-family: "DM Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("~/assets/fonts/DMSans-Regular.woff") format("woff");
+}
+
+@font-face {
+  font-family: "DM Sans";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url("~/assets/fonts/DMSans-Italic.woff") format("woff");
+}
+
+@font-face {
+  font-family: "DM Sans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("~/assets/fonts/DMSans-Medium.woff") format("woff");
+}
+
+@font-face {
+  font-family: "DM Sans";
+  font-style: italic;
+  font-weight: 500;
+  font-display: swap;
+  src: url("~/assets/fonts/DMSans-MediumItalic.woff") format("woff");
+}
+
+@font-face {
+  font-family: "DM Sans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("~/assets/fonts/DMSans-Bold.woff") format("woff");
+}
+
+@font-face {
+  font-family: "DM Sans";
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: url("~/assets/fonts/DMSans-BoldItalic.woff") format("woff");
 }
 
 * {
@@ -38,7 +84,7 @@ pre,
 html,
 body {
   margin: 0;
-  font-family: "Xcavate", Arial, sans-serif;
+  font-family: "DM Sans", Arial, sans-serif;
   background: var(--surface-bg);
   color: var(--text-primary);
   overscroll-behavior: none;
@@ -77,6 +123,66 @@ select {
   width: min(1100px, 100%);
   margin: 0 auto;
   padding: 0 4px;
+}
+
+/* Whatever AppShell stacks above the page (the profile setup banners) keeps its
+   natural height and this column takes the rest. An ordinary page still grows
+   past the column and scrolls the shell, as before. */
+.app-shell-content > .container {
+  flex: 1 0 auto;
+}
+
+/* Full-height page shell: fills the height AppShell hands it and bleeds back over
+   the shell's content padding, so .info-content-scroll below is the only thing
+   that scrolls. The height comes from flexing against this column rather than
+   from the viewport on purpose — anything stacked above the page shrinks the
+   column, where a 100vh-based height would instead push the page past the bottom
+   of the screen and give the shell a second scrollbar of its own. Only a column
+   holding such a page turns into a flex container, so ordinary pages keep their
+   plain block layout. */
+.app-shell-content > .container:has(> .chat-custom-page) {
+  display: flex;
+  flex-direction: column;
+  /* A zero basis pins the column to exactly the space left over. Sized from its
+     content instead, it would report the page's full height and overflow the
+     shell — which is the second scrollbar we're avoiding. */
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.chat-custom-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  margin: -24px;
+  background: #f7f8fa;
+  overflow: hidden;
+}
+
+.info-content-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px;
+  overscroll-behavior: contain;
+}
+
+/* The shell stops being a fixed-height column here and the document scrolls
+   instead, so the page goes back to block flow and grows with its content. */
+@media (max-width: 960px) {
+  .app-shell-content > .container:has(> .chat-custom-page) {
+    display: block;
+    flex: 1 0 auto;
+  }
+
+  .chat-custom-page {
+    margin: -16px;
+  }
+
+  .info-content-scroll {
+    padding: 16px;
+  }
 }
 
 .card {

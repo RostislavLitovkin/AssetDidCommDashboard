@@ -16,7 +16,7 @@
   if (window.__rxSplash) return
   window.__rxSplash = true
 
-  var PRIMARY = "87, 160, 197" // --color-primary #57a0c5
+  var PARTICLE = "247, 203, 77" // #f7cb4d
   var DURATION = 6000 // ms to sweep 0 -> CAP%
   var CAP = 95 // hold here until the app is genuinely mounted
   var MAX_LIFETIME = 30000 // never trap the app if app:mounted never fires
@@ -200,7 +200,7 @@
       var alpha = p.maxAlpha * fi * fo
       if (alpha <= 0.01) continue
       var half = p.size / 2
-      ctx.fillStyle = "rgba(" + PRIMARY + ", " + alpha + ")"
+      ctx.fillStyle = "rgba(" + PARTICLE + ", " + alpha + ")"
       ctx.fillRect(cx + p.dirX * p.dist - half, cy + p.dirY * p.dist - half, p.size, p.size)
     }
   }

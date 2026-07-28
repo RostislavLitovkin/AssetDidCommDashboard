@@ -89,29 +89,33 @@ describe("createMessage", () => {
 })
 
 describe("rotateBucketKeyAndShare", () => {
-  it("sends rotateKey and write in ONE signed document", async () => {
+  // resumeWriting, not rotateKey: fresh buckets are born Locked and rotateKey
+  // refuses locked buckets, so the first key of a new bucket can only be set
+  // through resumeWriting (which also works on writable buckets).
+  it("sends resumeWriting and write in ONE signed document", async () => {
     const { repo, requests } = makeRepo([
-      { data: { rotateKey: { id: "9" }, write: { id: "9-8", messageId: "8" } } }
+      { data: { resumeWriting: { id: "9" }, write: { id: "9-8", messageId: "8" } } }
     ])
 
     const result = await repo.rotateBucketKeyAndShare(
       "3", "9", "0x" + "ab".repeat(32), "didcomm/key-sharing-v1", "jwe", "5OWNER"
     )
 
-    expect(result.method).toBe("rotateKey+write")
+    expect(result.method).toBe("resumeWriting+write")
     expect(requests).toHaveLength(1)
-    expect(requests[0]!.query).toContain("rotateKey")
+    expect(requests[0]!.query).toContain("resumeWriting")
+    expect(requests[0]!.query).not.toContain("rotateKey")
     expect(requests[0]!.query).toContain("write")
   })
 
-  it("rejects when rotateKey result is missing", async () => {
+  it("rejects when resumeWriting result is missing", async () => {
     const { repo } = makeRepo([
       { data: { write: { id: "9-8", messageId: "8" } } }
     ])
 
     await expect(
       repo.rotateBucketKeyAndShare("3", "9", "0x" + "ab".repeat(32), "didcomm/key-sharing-v1", "jwe", "5OWNER")
-    ).rejects.toThrow(/rotateKey reported no result/)
+    ).rejects.toThrow(/resumeWriting reported no result/)
   })
 })
 

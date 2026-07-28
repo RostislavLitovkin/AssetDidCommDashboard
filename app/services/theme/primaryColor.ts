@@ -16,9 +16,9 @@ export interface PrimaryColorOption {
 
 /** The three selectable accent colors, in display order. */
 export const PRIMARY_COLOR_OPTIONS: readonly PrimaryColorOption[] = [
+  { value: "#f7cb4d", name: "Gold" },
   { value: "#57a0c5", name: "Light blue" },
   { value: "#3B4F74", name: "Xcavate blue" },
-  { value: "#f7cb4d", name: "Gold" }
 ]
 
 /** Allowlisted color values, in canonical casing. */

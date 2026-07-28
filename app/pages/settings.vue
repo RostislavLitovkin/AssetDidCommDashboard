@@ -105,7 +105,6 @@ function selectPrimaryColor(color: string): void {
 
     <section class="card stack" style="gap: 10px">
       <h4 style="margin: 0; font-size: 16px;">Wallet</h4>
-      <span style="font-weight: 600; font-size: 14px;">Wallet type</span>
       <div class="swatch-row">
         <button
           v-for="option in WALLET_TYPE_OPTIONS"
@@ -164,17 +163,11 @@ function selectPrimaryColor(color: string): void {
           After installing, refresh this page — extensions only load with it.
         </p>
       </div>
-
-      <span class="muted" style="font-size: 13px;">
-        Which wallet family the app uses for your identity and request signing.
-        Switching disconnects the currently connected wallet.
-      </span>
     </section>
 
     <section class="card stack" style="gap: 10px" aria-live="polite">
-      <h4 style="margin: 0; font-size: 16px;">Address Format</h4>
+      <h4 style="margin: 0; font-size: 16px;">Address Format <span class="field-optional">(Polkadot only)</span></h4>
       <label class="stack" style="gap: 6px">
-        <span style="font-weight: 600; font-size: 14px;">SS58 Prefix</span>
         <div style="display: flex; gap: 8px; align-items: flex-end">
           <input
             v-model="ss58PrefixInput"
@@ -198,7 +191,6 @@ function selectPrimaryColor(color: string): void {
 
     <section class="card stack" style="gap: 10px">
       <h4 style="margin: 0; font-size: 16px;">Appearance</h4>
-      <span style="font-weight: 600; font-size: 14px;">Primary color</span>
       <div class="swatch-row">
         <button
           v-for="option in PRIMARY_COLOR_OPTIONS"
@@ -217,7 +209,6 @@ function selectPrimaryColor(color: string): void {
           <span>{{ option.name }}</span>
         </button>
       </div>
-      <span class="muted" style="font-size: 13px;">Sets the app's accent color. Applied immediately.</span>
     </section>
 
     <section class="card stack" style="gap: 10px">
@@ -426,4 +417,6 @@ function selectPrimaryColor(color: string): void {
     width: 100%;
   }
 }
+
+.field-optional { color: var(--text-secondary); font-size: 12px; font-weight: 500; }
 </style>

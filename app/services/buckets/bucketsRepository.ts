@@ -650,12 +650,16 @@ export class BucketsRepository {
     const key = normalizeFixed32ByteKey(newEncryptionKey.trim())
     const messageInput = await this.buildMessageInput(message.trim(), tag, undefined)
 
-    return this.runMutation<{ rotateKey?: { id: string }; write: { id: string } }>(
-      "rotateKey+write",
+    // resumeWriting, not rotateKey: a freshly created bucket is Locked and
+    // rotateKey refuses locked buckets, so the first key must be set with
+    // resumeWriting. It behaves identically on an already-writable bucket
+    // (sets the key, keeps it writable), so it covers key regeneration too.
+    return this.runMutation<{ resumeWriting?: { id: string }; write: { id: string } }>(
+      "resumeWriting+write",
       ownerAddress,
       onUpdate,
       `mutation RotateKeyAndShare($namespaceId: BigInt!, $bucketId: BigInt!, $newEncryptionKey: String!, $message: MessageInput!) {
-        rotateKey(namespaceId: $namespaceId, bucketId: $bucketId, newEncryptionKey: $newEncryptionKey) { id }
+        resumeWriting(namespaceId: $namespaceId, bucketId: $bucketId, newEncryptionKey: $newEncryptionKey) { id }
         write(namespaceId: $namespaceId, bucketId: $bucketId, message: $message) { id messageId }
       }`,
       {
@@ -665,8 +669,8 @@ export class BucketsRepository {
         message: messageInput
       },
       (d) => {
-        if (!d.rotateKey?.id) {
-          throw new Error("rotateKey reported no result — the key may not have been rotated")
+        if (!d.resumeWriting?.id) {
+          throw new Error("resumeWriting reported no result — the key may not have been set")
         }
         return d.write.id
       }

@@ -188,9 +188,6 @@ onMounted(() => {
     <div class="info-content-scroll stack">
     <section class="stack" aria-live="polite">
       <PageHeader title="My messages">
-        <template #actions>
-          <NuxtLink class="btn" :to="`/messages/bucket/create/${runtimeConfig.public.publicFreeCommunicationBucket}`">Add Bucket</NuxtLink>
-        </template>
       </PageHeader>
 
       <WalletConnectPrompt
@@ -265,32 +262,6 @@ onMounted(() => {
   </div>
 </template>
 <style scoped>
-.chat-custom-page {
-  display: flex;
-  flex-direction: column;
-  height: calc(100vh - 48px);
-  margin: -24px;
-  background: #f7f8fa;
-  overflow: hidden;
-}
-
-.info-content-scroll {
-  flex: 1;
-  overflow-y: auto;
-  padding: 24px;
-  overscroll-behavior: contain;
-}
-
-@media (max-width: 960px) {
-  .chat-custom-page {
-    height: calc(100vh - 56px);
-    margin: -16px;
-  }
-  .info-content-scroll {
-    padding: 16px;
-  }
-}
-
 .bucket-card {
   transition: transform 150ms ease, box-shadow 150ms ease, border-color 150ms ease;
 }

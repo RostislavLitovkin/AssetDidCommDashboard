@@ -69,6 +69,9 @@ onMounted(() => profileStatus.refresh())
 .profile-setup-banners {
   width: calc(100% + 48px);
   margin: -24px -24px 24px;
+  /* Keeps full height in the shell's content column so a short viewport squeezes
+     the page below (which scrolls internally) rather than crushing the banner. */
+  flex-shrink: 0;
 }
 
 /* A friendly light-green strip: these should read as a warm nudge rather than
