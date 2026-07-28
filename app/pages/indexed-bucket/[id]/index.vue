@@ -628,11 +628,13 @@ async function submitPending(pending: PendingOutgoingMessage): Promise<void> {
     await loadAll()
     pendingMessages.value = pendingMessages.value.filter(p => p.id !== pending.id)
   } catch (e) {
+    const message = e instanceof Error ? e.message : "Unable to send"
     const entry = pendingMessages.value.find(p => p.id === pending.id)
     if (entry) {
       entry.status = "failed"
-      entry.errorMessage = e instanceof Error ? e.message : "Unable to send"
+      entry.errorMessage = message
     }
+    operations.add("bucket_write", "Send message", "error", message)
   } finally {
     sending.value = false
   }
