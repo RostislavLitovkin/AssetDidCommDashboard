@@ -3,6 +3,9 @@ import type { OperationUpdate } from "../../../../services/buckets/types"
 import WalletConnectPrompt from "../../../../components/common/WalletConnectPrompt.vue"
 import PageHeader from "../../../../components/common/PageHeader.vue"
 import ParticleLoader from "../../../../components/common/ParticleLoader.vue"
+import SubmitButton from "../../../../components/common/SubmitButton.vue"
+import type { SubmitButtonLabels } from "../../../../components/common/submitButtonView"
+import { useSubmitState } from "../../../../composables/useSubmitState"
 import { ShieldAlert } from "lucide-vue-next"
 import { computed, onMounted, ref } from "vue"
 import { useRoute } from "nuxt/app"
@@ -30,18 +33,27 @@ const namespaceId = computed(() => {
 const namespaceRoutePath = computed(() => `/messages/namespace/${encodeURIComponent(namespaceId.value)}`)
 const isWalletConnected = computed(() => session.walletStatus === "connected" && Boolean(session.accountAddress))
 
+const {
+  phase: submitPhase,
+  errorMessage: submitError,
+  applyUpdate: applySubmitUpdate,
+  fail: failSubmit,
+  reset: resetSubmit,
+  run: runSubmit
+} = useSubmitState()
+
 const bucketName = ref("")
 const category = ref("")
-const submitting = ref(false)
-const submitError = ref("")
-const submittedId = ref("")
-const submittedMethod = ref("")
-const bucketCreated = ref(false)
 
-// Reset bucketCreated flag when user types in bucket name
-const onBucketNameInput = () => {
-  bucketCreated.value = false
+const submitLabels: SubmitButtonLabels = {
+  idle: "Create bucket",
+  signing: "Signing…",
+  submitting: "Creating bucket…",
+  success: "Bucket created",
+  error: "Create failed — retry"
 }
+
+const submitting = computed(() => submitPhase.value === "signing" || submitPhase.value === "submitting")
 
 // Manager check
 const managers = ref<string[]>([])
@@ -62,54 +74,46 @@ async function loadManagers() {
   }
 }
 
+// Drives the button only. The page logs one terminal entry per submit below —
+// see the "Loggers drive phases; pages log outcomes" global constraint.
 function logOperationUpdate(update: OperationUpdate): void {
-  // Signing drives the submit button only — logging it would add a notification
-  // popup to every signed operation.
-  if (update.stage === "signing") return
-  operations.add("bucket_write", `bucket:${update.stage}`, update.stage === "error" ? "error" : "info", update.message)
+  applySubmitUpdate(update)
 }
 
 async function submitCreateBucket(): Promise<void> {
-  submitError.value = ""
-  submittedId.value = ""
-  submittedMethod.value = ""
-
-  if (!namespaceId.value.trim()) {
-    submitError.value = "Namespace id is required"
+  const namespace = namespaceId.value.trim()
+  if (!namespace) {
+    failSubmit("Namespace id is required")
     return
   }
 
-  if (!bucketName.value.trim()) {
-    submitError.value = "Bucket name is required"
+  const name = bucketName.value.trim()
+  if (!name) {
+    failSubmit("Bucket name is required")
     return
   }
 
-  if (!session.accountAddress) {
-    submitError.value = "Connect wallet before creating a bucket"
+  const address = session.accountAddress
+  if (!address) {
+    failSubmit("Connect wallet before creating a bucket")
     return
   }
 
-  submitting.value = true
-
-  try {
+  await runSubmit(async () => {
     const result = await bucketsRepository.createBucket(
-      namespaceId.value,
-      bucketName.value,
-      session.accountAddress,
+      namespace,
+      name,
+      address,
       logOperationUpdate,
       category.value
     )
-    submittedId.value = result.id
-    submittedMethod.value = result.method
-    operations.add("bucket_write", bucketName.value.trim(), "success", `Bucket created: ${result.id}`)
-    bucketCreated.value = true
+    operations.add("bucket_write", "Create bucket", "success", `Bucket created: ${result.id}`)
     bucketName.value = ""
     category.value = ""
-  } catch (error) {
-    submitError.value = error instanceof Error ? error.message : "Unable to create bucket"
-    operations.add("bucket_write", "bucket", "error", submitError.value)
-  } finally {
-    submitting.value = false
+  })
+
+  if (submitPhase.value === "error") {
+    operations.add("bucket_write", "Create bucket", "error", submitError.value)
   }
 }
 
@@ -149,27 +153,25 @@ onMounted(async () => {
           <label class="stack" style="gap: 6px">
             <span>Bucket Name</span>
             <input v-model="bucketName" class="input" type="text" name="bucket-name" placeholder="e.g. primary-bucket"
-              :disabled="submitting || (!managersLoading && !isManager)" @input="onBucketNameInput" />
+              :disabled="submitting || (!managersLoading && !isManager)" @input="resetSubmit" />
           </label>
 
           <label class="stack" style="gap: 6px">
             <span>Category (Optional)</span>
             <input v-model="category" class="input" type="text" name="category" placeholder="e.g. communication"
-              :disabled="submitting || (!managersLoading && !isManager)" />
+              :disabled="submitting || (!managersLoading && !isManager)" @input="resetSubmit" />
           </label>
 
           <div class="row" style="justify-content: flex-end; gap: 8px">
-            <button class="btn btn-primary" type="button" :disabled="submitting || managersLoading || !isManager" @click="submitCreateBucket">
-              <span v-if="submitting">Submitting...</span>
-              <span v-else-if="bucketCreated">Bucket successfully created</span>
-              <span v-else>Create Bucket</span>
-            </button>
+            <SubmitButton
+              :phase="submitPhase"
+              :labels="submitLabels"
+              :disabled="managersLoading || !isManager"
+              @click="submitCreateBucket"
+            />
           </div>
 
           <p v-if="submitError" style="margin: 0; color: var(--status-error)">{{ submitError }}</p>
-          <p v-if="submittedId && !bucketCreated" style="margin: 0; color: var(--status-success)">
-            Submitted via {{ submittedMethod }} successfully.
-          </p>
         </section>
       </template>
     </div>
