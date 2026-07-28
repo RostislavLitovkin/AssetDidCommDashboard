@@ -34,19 +34,74 @@ describe("createNamespace", () => {
     expect(requests[0]!.variables).toMatchObject({
       metadata: { name: "my ns", schemaUri: null, properties: [] }
     })
-    expect(updates.map((u) => u.stage)).toEqual(["pending", "success"])
+    expect(updates.map((u) => u.stage)).toEqual(["signing", "submitting", "success"])
   })
 
   it("emits error and rethrows on failure", async () => {
     const { repo } = makeRepo([{ errors: [{ message: "denied" }] }])
     const updates: OperationUpdate[] = []
     await expect(repo.createNamespace("x", "5OWNER", (u) => updates.push(u))).rejects.toThrow("denied")
-    expect(updates.map((u) => u.stage)).toEqual(["pending", "error"])
+    expect(updates.map((u) => u.stage)).toEqual(["signing", "submitting", "error"])
   })
 
   it("rejects without an owner address", async () => {
     const { repo } = makeRepo([])
     await expect(repo.createNamespace("x", "")).rejects.toThrow(/wallet/i)
+  })
+
+  it("emits signing before the signature resolves and submitting after", async () => {
+    const order: string[] = []
+    let releaseSignature: () => void = () => {}
+    const held = new Promise<void>((resolve) => {
+      releaseSignature = resolve
+    })
+
+    const repo = new BucketsRepository({
+      apiUrl: "https://profile-api.example",
+      sign: async (address) => {
+        order.push("sign-start")
+        await held
+        order.push("sign-end")
+        return { "X-SS58-Address": address, "X-Signature": "0xsig", "X-Timestamp": "t" }
+      },
+      fetcher: async () => {
+        order.push("fetch")
+        return new Response(JSON.stringify({ data: { createNamespace: { id: "4", namespaceId: "4" } } }), { status: 200 })
+      }
+    })
+
+    const updates: OperationUpdate[] = []
+    const pending = repo.createNamespace("my ns", "5OWNER", (u) => {
+      order.push(`stage:${u.stage}`)
+      updates.push(u)
+    })
+
+    // The signing update must already be out while the wallet is still open.
+    await Promise.resolve()
+    expect(updates.map((u) => u.stage)).toEqual(["signing"])
+
+    releaseSignature()
+    await pending
+
+    expect(order).toEqual([
+      "stage:signing", "sign-start", "sign-end", "stage:submitting", "fetch", "stage:success"
+    ])
+  })
+
+  it("emits signing then error and never submitting when the signature is rejected", async () => {
+    const repo = new BucketsRepository({
+      apiUrl: "https://profile-api.example",
+      sign: async () => {
+        throw new Error("User rejected the signature")
+      },
+      fetcher: async () => new Response("{}", { status: 200 })
+    })
+
+    const updates: OperationUpdate[] = []
+    await expect(repo.createNamespace("x", "5OWNER", (u) => updates.push(u))).rejects.toThrow(
+      "User rejected the signature"
+    )
+    expect(updates.map((u) => u.stage)).toEqual(["signing", "error"])
   })
 })
 
@@ -70,13 +125,13 @@ describe("member and manager mutations", () => {
     expect(requests[0]!.variables).toMatchObject({ namespaceId: "3", bucketId: "9", admin: "5X" })
   })
 
-  it("removeBucketAdmin rejects and emits pending→error when the API returns false", async () => {
+  it("removeBucketAdmin rejects and emits signing→submitting→error when the API returns false", async () => {
     const { repo } = makeRepo([{ data: { removeAdmin: false } }])
     const updates: OperationUpdate[] = []
     await expect(repo.removeBucketAdmin("3", "9", "5X", "5OWNER", (u) => updates.push(u))).rejects.toThrow(
       "removeAdmin reported no change"
     )
-    expect(updates.map((u) => u.stage)).toEqual(["pending", "error"])
+    expect(updates.map((u) => u.stage)).toEqual(["signing", "submitting", "error"])
   })
 
   it("removeBucketContributor sends string ids and the member address", async () => {
@@ -117,7 +172,7 @@ describe("member and manager mutations", () => {
     await expect(repo.removeNamespaceManager("3", "5X", "5OWNER", (u) => updates.push(u))).rejects.toThrow(
       "removeManager reported no change"
     )
-    expect(updates.map((u) => u.stage)).toEqual(["pending", "error"])
+    expect(updates.map((u) => u.stage)).toEqual(["signing", "submitting", "error"])
   })
 })
 

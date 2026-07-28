@@ -536,6 +536,9 @@ async function encryptOutgoing(plaintext: Uint8Array | string, extraProtectedHea
 }
 
 function logOperationUpdate(update: OperationUpdate): void {
+  // Signing drives the submit button only — logging it would add a notification
+  // popup to every signed operation.
+  if (update.stage === "signing") return
   operations.add(
     "bucket_write",
     `buckets.write:${update.stage}`,

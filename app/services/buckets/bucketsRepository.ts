@@ -368,7 +368,7 @@ export class BucketsRepository {
     return (rawBody) => sign(address, rawBody)
   }
 
-  /** Run one signed mutation with pending/success/error updates. */
+  /** Run one signed mutation with signing/submitting/success/error updates. */
   private async runMutation<T>(
     method: string,
     ownerAddress: string,
@@ -378,9 +378,17 @@ export class BucketsRepository {
     extractId: (data: T) => string
   ): Promise<MutationResult> {
     const sign = this.requireSign(ownerAddress)
-    onUpdate?.({ stage: "pending", message: `Submitting ${method}…` })
+    // The signature is a wallet popup and the request is a network round trip.
+    // They are separate waits, so the UI gets separate stages: the boundary is
+    // the moment `sign` resolves.
+    onUpdate?.({ stage: "signing", message: `Waiting for signature to ${method}…` })
+    const signWithProgress = async (rawBody: string): Promise<HeadersInit> => {
+      const headers = await sign(rawBody)
+      onUpdate?.({ stage: "submitting", message: `Submitting ${method}…` })
+      return headers
+    }
     try {
-      const data = await this.client.mutate<T>(document, variables, sign)
+      const data = await this.client.mutate<T>(document, variables, signWithProgress)
       const id = extractId(data)
       onUpdate?.({ stage: "success", message: `${method} confirmed` })
       return { id, method }

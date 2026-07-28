@@ -33,6 +33,9 @@ const submittedId = ref("")
 const submittedMethod = ref("")
 
 function logOperationUpdate(update: OperationUpdate): void {
+  // Signing drives the submit button only — logging it would add a notification
+  // popup to every signed operation.
+  if (update.stage === "signing") return
   operations.add("namespace_write", `namespace-manager:${update.stage}`, update.stage === "error" ? "error" : "info", update.message)
 }
 
