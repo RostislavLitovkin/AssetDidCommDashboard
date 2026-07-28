@@ -16,6 +16,8 @@
 - **Success is held, not auto-cleared.** It returns to idle only when the user edits a field. The one exception is `profile/edit.vue`, which redirects — see Task 8.
 - **Error stays clickable.** The button is the retry affordance. The detailed message renders below the form as it does today.
 - **The `signing` stage must never reach `operations.add()`.** That store pushes a notification per entry (`app/stores/operations.ts:14`); logging signing would add a popup per submit. All **seven** `logOperationUpdate` functions return early on `signing` — including the two on the chat pages, whose buttons are otherwise out of scope. Task 3 Step 7 does this in one pass.
+- **Loggers drive phases; pages log outcomes.** *(Added after Task 4 review — supersedes the stage-logging in Tasks 4-7's original snippets, and is implemented for every page by Task 11.)* A `logOperationUpdate` must not call `operations.add()` at all. Each page logs exactly one terminal entry per submit — success or failure — in its own plain language. This is what makes one submit produce one notification instead of three.
+- **No user-visible notification may name a GraphQL mutation.** For `bucket_write`, `operations.add()` uses `targetRef` as the notification title (`app/stores/operations.ts:16`), so passing `result.method` or `currentBucketCall.value` puts `createNamespace` / `rotateKey+write` in front of the user. Pass a human label. This is the same transaction-receipt wording the in-page copy changes remove.
 - **Never wire `applyUpdate` into a shared logger.** Three pages route several different operations through one `logOperationUpdate`; feeding the phase machine from there would let an unrelated operation drive a button. Those pages get a dedicated wrapper instead.
 - **No new dependencies.** vitest runs in the `node` environment and the repo has no `@vue/test-utils` or DOM shim. All new logic that needs testing lives in plain `.ts` modules; `.vue` files stay thin enough not to need component tests.
 - **No user-visible string may reference a blockchain**, chain, on-chain storage, transactions, extrinsics, or block numbers. Code comments are exempt.
@@ -847,10 +849,10 @@ const submitting = computed(() => submitPhase.value === "signing" || submitPhase
 Replace lines 65-111 (`logOperationUpdate` and `submitCreateBucket`) with:
 
 ```ts
+// Drives the button only. The page logs one terminal entry per submit below —
+// see the "Loggers drive phases; pages log outcomes" global constraint.
 function logOperationUpdate(update: OperationUpdate): void {
   applySubmitUpdate(update)
-  if (update.stage === "signing") return
-  operations.add("bucket_write", `bucket:${update.stage}`, update.stage === "error" ? "error" : "info", update.message)
 }
 
 async function submitCreateBucket(): Promise<void> {
@@ -880,12 +882,18 @@ async function submitCreateBucket(): Promise<void> {
       logOperationUpdate,
       category.value
     )
-    operations.add("bucket_write", name, "success", `Bucket created: ${result.id}`)
+    operations.add("bucket_write", "Create bucket", "success", `Bucket created: ${result.id}`)
     bucketName.value = ""
     category.value = ""
   })
+
+  if (submitPhase.value === "error") {
+    operations.add("bucket_write", "Create bucket", "error", submitError.value)
+  }
 }
 ```
+
+`runSubmit` has already captured the failure message, so logging after it returns keeps the success and failure entries symmetrical without a second try/catch. The `targetRef` is a human label rather than `result.method` — for `bucket_write`, `operations.add` uses `targetRef` as the notification title.
 
 - [ ] **Step 3: Update the template**
 
@@ -994,10 +1002,10 @@ const submitLabels: SubmitButtonLabels = {
   error: "Add failed — retry"
 }
 
+// Drives the button only. The page logs one terminal entry per submit below —
+// see the "Loggers drive phases; pages log outcomes" global constraint.
 function logOperationUpdate(update: OperationUpdate): void {
   applySubmitUpdate(update)
-  if (update.stage === "signing") return
-  operations.add("namespace_write", `namespace-manager:${update.stage}`, update.stage === "error" ? "error" : "info", update.message)
 }
 
 async function submitAddManager(): Promise<void> {
@@ -1021,9 +1029,13 @@ async function submitAddManager(): Promise<void> {
 
   await runSubmit(async () => {
     const result = await bucketsRepository.addNamespaceManager(namespace, manager, address, logOperationUpdate)
-    operations.add("namespace_write", namespace, "success", `Manager added: ${result.id}`)
+    operations.add("namespace_write", "Add manager", "success", `Manager added: ${result.id}`)
     managerAddress.value = ""
   })
+
+  if (submitPhase.value === "error") {
+    operations.add("namespace_write", "Add manager", "error", submitError.value)
+  }
 }
 </script>
 ```
@@ -1159,10 +1171,10 @@ watch(role, resetSubmit)
 Replace lines 206-264 (`logOperationUpdate` and `submitAddMember`) with:
 
 ```ts
+// Drives the button only. The page logs one terminal entry per submit below —
+// see the "Loggers drive phases; pages log outcomes" global constraint.
 function logOperationUpdate(update: OperationUpdate): void {
   applySubmitUpdate(update)
-  if (update.stage === "signing") return
-  operations.add("bucket_write", `bucket-member:${update.stage}`, update.stage === "error" ? "error" : "info", update.message)
 }
 
 async function submitAddMember(): Promise<void> {
@@ -1206,10 +1218,16 @@ async function submitAddMember(): Promise<void> {
       address,
       logOperationUpdate
     )
-    operations.add("bucket_write", bucket, "success", `Member added (${result.method}): ${result.id}`)
+    operations.add("bucket_write", "Add member", "success", `Member added: ${result.id}`)
   })
+
+  if (submitPhase.value === "error") {
+    operations.add("bucket_write", "Add member", "error", submitError.value)
+  }
 }
 ```
+
+`result.method` is dropped from the message: it is the GraphQL mutation name, and this entry becomes the notification the user reads.
 
 The old code cleared `memberAddress` on success. That is deliberately dropped here: clearing it fires the `memberAddress` watcher from Step 3, which calls `resetSubmit()` and would wipe the success state the moment it was earned. The address stays on screen as part of the confirmation, and the watcher clears the state when the user starts a new entry.
 
@@ -1870,6 +1888,127 @@ For `profile/edit`, confirm the success label is visible for roughly a second be
 ```bash
 git add app/pages/settings.vue
 git commit -m "refactor: drop blockchain wording from settings copy"
+```
+
+---
+
+### Task 11: One submit, one plain-language notification
+
+*(Added after the Task 4 review surfaced this; approved by the user.)*
+
+**Files:**
+- Modify: `app/services/buckets/bucketsRepository.ts` (the three `onUpdate` message strings in `runMutation`)
+- Modify: `app/pages/messages/namespaces/new.vue` (retrofit — Task 4 landed before this rule existed)
+- Modify: `app/pages/messages/bucket/[id]/index.vue` (shared logger + explicit entries)
+- Modify: `app/pages/indexed-bucket/[id]/index.vue` (shared logger + explicit entries)
+- Modify: `app/pages/messages/bucket/[id]/info.vue` (shared logger + explicit entries)
+
+**Interfaces:**
+- Consumes: everything from Tasks 1-10. Changes no exported signature.
+
+**Why this task exists.** Before this plan, a successful create-namespace fired three notifications: `namespace:pending`, `namespace:success`, and the page's own "Namespace created". Two of the three had titles naming a GraphQL mutation. That is the same transaction-receipt wording the in-page copy changes remove, so it gets the same treatment. Verified: every flow that routes through a `logOperationUpdate` already has an explicit terminal `operations.add` on both its success and failure paths, so silencing the stage-driven entries mutes nothing.
+
+- [ ] **Step 1: Drop mutation names from the repository's progress messages**
+
+In `app/services/buckets/bucketsRepository.ts`, the three `onUpdate` calls in `runMutation` interpolate `${method}`. Replace those message strings:
+
+| Stage | Before | After |
+| --- | --- | --- |
+| `signing` | `` `Waiting for signature to ${method}…` `` | `"Waiting for your signature…"` |
+| `submitting` | `` `Submitting ${method}…` `` | `"Submitting…"` |
+| `success` | `` `${method} confirmed` `` | `"Submitted"` |
+
+Leave the `error` branch alone — its message is the API's own text, and its `` `${method} failed` `` fallback is only reached for non-`Error` throws.
+
+These strings no longer reach a notification after Step 2, but they remain the `OperationUpdate.message` any future consumer would read, and they should not name mutations either.
+
+- [ ] **Step 2: Make every logger phase-only**
+
+Seven `logOperationUpdate` functions currently call `operations.add`. Remove that call from all of them.
+
+On the four in-scope form pages (Tasks 4-7), the function keeps its `applySubmitUpdate(update)` body and the `signing` guard becomes unnecessary — delete it, since the function no longer logs anything:
+
+```ts
+// Drives the button only. The page logs one terminal entry per submit —
+// see the "Loggers drive phases; pages log outcomes" global constraint.
+function logOperationUpdate(update: OperationUpdate): void {
+  applySubmitUpdate(update)
+}
+```
+
+On `messages/bucket/[id]/index.vue`, `indexed-bucket/[id]/index.vue`, and `messages/bucket/[id]/info.vue`, `logOperationUpdate` would become an empty function. Delete it entirely and remove it from the argument lists of the repository calls that pass it — those calls take the handler as an optional parameter, so dropping the argument is valid.
+
+Two call sites need care rather than deletion:
+
+- `indexed-bucket/[id]/index.vue:588` — `submitPending` wraps the logger in `onOperationUpdate` to catch `update.stage === "error"` and mark the pending chat bubble failed. Keep that wrapper and its error branch; only remove its inner `logOperationUpdate(update)` call.
+- `messages/bucket/[id]/info.vue` and `indexed-bucket/[id]/index.vue` — Task 9 added `logKeyRotationUpdate` wrappers that call the shared logger. With the shared logger gone, those wrappers reduce to `applyKeyUpdate(update)`; inline them and pass `applyKeyUpdate` directly.
+
+- [ ] **Step 3: Retrofit the create-namespace page**
+
+`app/pages/messages/namespaces/new.vue` was implemented before this rule. Apply Step 2's logger shape, then give it the symmetrical terminal entries the other form pages get:
+
+```ts
+  await runSubmit(async () => {
+    const result = await bucketsRepository.createNamespace(name, address, logOperationUpdate)
+    operations.add("bucket_write", "Create namespace", "success", `Namespace created: ${result.id}`)
+    namespaceName.value = ""
+  })
+
+  if (submitPhase.value === "error") {
+    operations.add("bucket_write", "Create namespace", "error", submitError.value)
+  }
+```
+
+- [ ] **Step 4: Replace mutation-name notification titles**
+
+`operations.add(category, targetRef, status, message)` uses `targetRef` as the notification title when `category === "bucket_write"` (`app/stores/operations.ts:16`). Several explicit calls pass `result.method` or `currentBucketCall.value`, putting `createMessage` or `rotateKey+write` in front of the user. Replace each with a human label describing the action:
+
+| File | Current `targetRef` | Use |
+| --- | --- | --- |
+| `messages/bucket/[id]/index.vue:553` | `result.method` | `"Remove admin"` |
+| `messages/bucket/[id]/index.vue:557` | `currentBucketCall.value` | `"Remove admin"` |
+| `messages/bucket/[id]/index.vue:589` | `result.method` | `"Remove contributor"` |
+| `messages/bucket/[id]/index.vue:593` | `currentBucketCall.value` | `"Remove contributor"` |
+| `messages/bucket/[id]/index.vue:768,779` | `batchResult.method` / `currentBucketCall.value` | `"Encryption key"` |
+| `messages/bucket/[id]/index.vue:1353,1364` | `result.method` / `currentBucketCall.value` | `"Send message"` |
+| `indexed-bucket/[id]/index.vue:613` | `result.method` | `"Send message"` |
+| `indexed-bucket/[id]/index.vue:808,818` | `batchResult.method` / `"rotateKey+write"` | `"Encryption key"` |
+| `messages/bucket/[id]/info.vue:549,553` | `result.method` / `currentBucketCall.value` | `"Remove member"` |
+| `messages/bucket/[id]/info.vue:723,734` | `batchResult.method` / `currentBucketCall.value` | `"Encryption key"` |
+| `messages/bucket/[id]/info.vue:1251` | `result.method` | `"Send message"` |
+
+Line numbers will have drifted from the earlier tasks — locate each by its surrounding `operations.add` call. Also strip `${result.method}` / `keyId=` style internals from the *message* text where it names a mutation; keep ids, which are useful.
+
+- [ ] **Step 5: Verify one notification per submit**
+
+Confirm no user-visible notification path can name a mutation:
+
+```bash
+grep -rn "operations.add" app/pages app/components --include="*.vue"
+```
+
+Expected: every call passes a quoted human label as its second argument — no `result.method`, no `batchResult.method`, no `currentBucketCall.value`.
+
+```bash
+grep -rn "logOperationUpdate\|logKeyRotationUpdate" app/pages --include="*.vue"
+```
+
+Expected: matches only on the four form pages, each a phase-only function with no `operations.add` in its body.
+
+- [ ] **Step 6: Full sweep**
+
+Run: `npm run test && npm run typecheck && npm run lint`
+Expected: all PASS.
+
+- [ ] **Step 7: Manual verification**
+
+With a wallet connected, submit once on each of the five form pages and confirm exactly **one** notification appears per submit, its title is a plain action label, and its text names no GraphQL mutation. Reject a signature and confirm exactly one error notification appears. Send a chat message and confirm it still produces its single "Send message" notification.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add app/services/buckets/bucketsRepository.ts app/pages
+git commit -m "refactor: one plain-language notification per submit"
 ```
 
 ---
