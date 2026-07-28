@@ -208,9 +208,9 @@ clear `submittedId`/`submittedMethod`; they collapse into `reset()` calls.
 `Signing…` is deliberately identical everywhere: it is the same wallet-popup
 moment regardless of the operation.
 
-The two key-rotation flows sign several times in sequence, so they legitimately
-cycle `Signing… → Sharing key… → Signing… → Sharing key… → Key shared`. This is
-accurate rather than a defect.
+The two key-rotation flows sign exactly once: `rotateBucketKeyAndShare` submits
+the key rotation and the key-sharing message as a single mutation, so each
+cycles `Signing… → Sharing key… → Key shared` in one round.
 
 ### 7. Copy changes
 

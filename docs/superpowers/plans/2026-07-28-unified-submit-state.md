@@ -1434,7 +1434,7 @@ git commit -m "feat: unify submit states on profile edit page"
 **Interfaces:**
 - Consumes: `useSubmitState` (Task 1), `SubmitButton` (Task 2).
 
-These flows sign several times in sequence, so they legitimately cycle `Signing… → Sharing key… → Signing… → Sharing key… → Key shared`. That is accurate, not a defect.
+Each flow signs exactly once: `rotateBucketKeyAndShare` submits the key rotation and the key-sharing message as a single mutation, so the button cycles `Signing… → Sharing key… → Key shared` in one round.
 
 `indexed-bucket` has **two** buttons invoking the same `createAndShareEncryptionKey` and sharing one `creatingKey` ref. They keep sharing a single `useSubmitState()` instance — it is one operation — but declare different `idle` labels, because one sits in a "viewers are missing the key" warning and the other in the empty-bucket setup timeline. Both can be on screen at once and both correctly show the same non-idle phase.
 

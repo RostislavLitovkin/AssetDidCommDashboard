@@ -138,9 +138,9 @@ const pendingMessages = ref<PendingOutgoingMessage[]>([])
 const {
   phase: keyPhase,
   errorMessage: createKeyError,
-  isBusy: creatingKey,
   applyUpdate: applyKeyUpdate,
   fail: failKey,
+  reset: resetKey,
   run: runKey
 } = useSubmitState()
 
@@ -876,6 +876,10 @@ async function scrollToBottom() {
 }
 
 watch(() => chatMessages.value.length, () => scrollToBottom())
+// A key rotation is relevant again whenever the viewer set changes (e.g. a
+// member with the viewer role is added or removed) — re-arm the button instead
+// of leaving it stuck on "Key shared" until the page unmounts.
+watch(() => viewerRecipients.value.length, resetKey)
 watch(() => settings.x25519SecretJwk, async () => {
   keySharingMessages.value = await bucketsRepository.fetchMessagesByTag(bucketId.value, KEY_SHARING_MESSAGE_TAG)
   await hydratePayloads(keySharingMessages.value)

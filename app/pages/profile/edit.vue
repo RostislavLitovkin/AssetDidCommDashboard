@@ -41,6 +41,7 @@ const submitAttempted = ref(false)
 const nicknameError = ref("")
 const nicknameChecking = ref(false)
 const nicknameAvailable = ref(false)
+const loadError = ref("")
 const hasConnectedWallet = computed(() => Boolean(wallet.accountAddress.value))
 const x25519Error = computed(() => validateX25519PublicKey(x25519Key.value))
 // The "required" complaint waits for a blur or a save attempt, but a key that is
@@ -75,6 +76,7 @@ const signWithProgress: typeof wallet.signProfileRequest = async (method, path, 
 async function loadProfile(): Promise<void> {
   const address = wallet.accountAddress.value
   resetSubmit()
+  loadError.value = ""
   x25519Touched.value = false
   submitAttempted.value = false
   if (!address) return
@@ -88,8 +90,10 @@ async function loadProfile(): Promise<void> {
     bio.value = profile?.bio || ""
     profilePicture.value = profile?.profilePicture || ""
     x25519Key.value = profile?.x25519Key || activeX25519Key.value
-  } catch (loadError) {
-    failSubmit(loadError instanceof Error ? loadError.message : "Unable to load profile")
+  } catch (caughtError) {
+    // A load failure is not a submit failure — it must not paint the submit
+    // button red before the user has done anything. Render it as plain text.
+    loadError.value = caughtError instanceof Error ? caughtError.message : "Unable to load profile"
   } finally {
     loading.value = false
   }
@@ -162,6 +166,10 @@ async function saveProfile(): Promise<void> {
   if (submitPhase.value !== "success") return
   // Let the confirmation land before leaving the page.
   await new Promise((resolve) => setTimeout(resolve, 900))
+  // A field edit during the pause resets the phase to idle; re-check so a
+  // keystroke during the wait isn't discarded by a navigation that no longer
+  // reflects a successful save.
+  if (submitPhase.value !== "success") return
   await router.push("/profile")
 }
 
@@ -264,7 +272,7 @@ onMounted(() => {
           Use my active key
         </button>
       </div>
-      <p v-if="submitError" class="form-error" aria-live="polite">{{ submitError }}</p>
+      <p v-if="submitError || loadError" class="form-error" aria-live="polite">{{ submitError || loadError }}</p>
       <div class="profile-form-actions">
         <NuxtLink class="btn" to="/profile">Cancel</NuxtLink>
         <SubmitButton

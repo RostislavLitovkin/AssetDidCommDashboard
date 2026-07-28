@@ -112,9 +112,9 @@ const viewerX25519Keys = ref<Record<string, string>>({})
 const {
   phase: keyPhase,
   errorMessage: encryptionKeyError,
-  isBusy: generatingEncryptionKey,
   applyUpdate: applyKeyUpdate,
   fail: failKey,
+  reset: resetKey,
   run: runKey
 } = useSubmitState()
 
@@ -1295,6 +1295,11 @@ watch(
   },
   { deep: true }
 )
+
+// A key rotation is relevant again whenever the viewer set changes (e.g. a
+// member with the viewer role is added or removed) — re-arm the button instead
+// of leaving it stuck on "Key shared" until the page unmounts.
+watch(() => viewerRecipients.value.length, resetKey)
 
 onMounted(async () => {
   settings.initialize()
