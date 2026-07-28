@@ -1440,9 +1440,7 @@ const allMembers = computed<MemberEntry[]>(() => {
           </div>
 
           <p class="muted" style="margin: 0">
-            Generates a fresh X25519 encryption keypair, registers the public key ID, ensures the key-sharing tag
-            exists,
-            then encrypts and shares the new secret key with all viewers using their X25519 keys.
+            Generate a fresh Encryption key secret and share it with everyone in the bucket using their X25519 keys.
           </p>
 
           <ul class="key-rotation-checks"

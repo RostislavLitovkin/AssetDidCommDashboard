@@ -7,14 +7,18 @@ import { useProfileStatus } from "../../composables/useProfileStatus"
 const route = useRoute()
 const profileStatus = useProfileStatus()
 
-// Both banners send the user to the profile editor; showing them on top of that
-// very form would be noise, so the editor is the one page they stay out of.
-const isOnProfileEditor = computed(() => route.path === "/profile/edit")
+// Pages the banners stay out of. The profile editor, because both banners send
+// the user to that very form and sitting on top of it would just be noise. The
+// indexed-bucket chat, because it's a fixed-height page that clips instead of
+// scrolling, so a banner there silently eats the bottom of the conversation.
+const hidesBanners = computed(
+  () => route.path === "/profile/edit" || route.path.startsWith("/indexed-bucket/")
+)
 const showAccountBanner = computed(
-  () => !isOnProfileEditor.value && profileStatus.status.value === "ready" && !profileStatus.hasAccount.value
+  () => !hidesBanners.value && profileStatus.status.value === "ready" && !profileStatus.hasAccount.value
 )
 const showNicknameBanner = computed(
-  () => !isOnProfileEditor.value && profileStatus.hasAccount.value && !profileStatus.hasNickname.value
+  () => !hidesBanners.value && profileStatus.hasAccount.value && !profileStatus.hasNickname.value
 )
 
 watch(() => profileStatus.address.value, () => profileStatus.refresh())
@@ -24,7 +28,7 @@ onMounted(() => profileStatus.refresh())
 <template>
   <div v-if="showAccountBanner || showNicknameBanner" class="profile-setup-banners">
     <section v-if="showAccountBanner" class="setup-banner setup-banner-primary">
-      <div class="setup-banner-inner">
+      <div class="setup-banner-inner container">
         <span class="setup-banner-icon" aria-hidden="true">
           <UserRoundPlus :size="28" />
         </span>
@@ -43,7 +47,7 @@ onMounted(() => profileStatus.refresh())
     </section>
 
     <section v-if="showNicknameBanner" class="setup-banner">
-      <div class="setup-banner-inner">
+      <div class="setup-banner-inner container">
         <span class="setup-banner-icon" aria-hidden="true">
           <Smile :size="22" />
         </span>
@@ -87,13 +91,15 @@ onMounted(() => profileStatus.refresh())
   padding: 26px 24px;
 }
 
-/* Keeps the banner's contents on the same column as the page content below it. */
+/* Keeps the banner's contents on the same column as the page content below it.
+   The shared .container supplies the width, centring and gutter, so the two
+   columns can't drift apart — that only holds while the banner's own horizontal
+   padding matches AppShell's content padding, which the breakpoints below keep
+   in step. */
 .setup-banner-inner {
   display: flex;
   align-items: center;
   gap: 16px;
-  width: min(1100px, 100%);
-  margin: 0 auto;
 }
 
 .setup-banner-primary .setup-banner-inner {
@@ -155,10 +161,20 @@ onMounted(() => profileStatus.refresh())
   white-space: nowrap;
 }
 
+/* The shell drops to 16px of content padding here, so the banner follows it —
+   otherwise the copy sits a few pixels off the page content below. */
 @media (max-width: 960px) {
   .profile-setup-banners {
     width: calc(100% + 32px);
     margin: -16px -16px 16px;
+  }
+
+  .setup-banner {
+    padding: 18px 16px;
+  }
+
+  .setup-banner-primary {
+    padding: 26px 16px;
   }
 }
 
@@ -167,7 +183,7 @@ onMounted(() => profileStatus.refresh())
 @media (max-width: 720px) {
   .setup-banner,
   .setup-banner-primary {
-    padding: 18px;
+    padding: 18px 16px;
   }
 
   .setup-banner-inner {

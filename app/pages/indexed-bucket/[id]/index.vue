@@ -974,8 +974,7 @@ onMounted(async () => {
                   <h5 class="ib-tl-step-title">Create &amp; Share Encryption Key</h5>
                 </div>
                 <p class="muted ib-tl-desc">
-                  Generates a fresh X25519 encryption keypair, registers the public key ID, and shares
-                  the new secret key with all viewers using their X25519 keys.
+                  Generate a fresh Encryption key secret and share it with everyone in the bucket using their X25519 keys.
                 </p>
                 <p v-if="!keyStepActive" class="muted ib-tl-hint">
                   Add at least 2 members to unlock this step.
@@ -1039,8 +1038,8 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- (C) Authorized → Message composer -->
-    <div v-else class="ib-footer-sticky">
+    <!-- (C) Authorized → Message composer (hidden while the setup timeline is guiding the user) -->
+    <div v-else-if="!showSetupTimeline" class="ib-footer-sticky">
       <div class="ib-container">
         <input ref="fileInputRef" type="file" style="display:none" @change="onFileSelected" />
         <form class="ib-composer" @submit.prevent="sendMessage">
