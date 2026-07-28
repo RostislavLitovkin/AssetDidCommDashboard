@@ -9,6 +9,9 @@ import { useOperationsStore } from "../../../../stores/operations"
 import { useSessionStore } from "../../../../stores/session"
 import WalletConnectPrompt from "../../../../components/common/WalletConnectPrompt.vue"
 import PageHeader from "../../../../components/common/PageHeader.vue"
+import SubmitButton from "../../../../components/common/SubmitButton.vue"
+import type { SubmitButtonLabels } from "../../../../components/common/submitButtonView"
+import { useSubmitState } from "../../../../composables/useSubmitState"
 
 const route = useRoute()
 const runtimeConfig = useRuntimeConfig()
@@ -39,10 +42,15 @@ const bucketId = computed(() => {
 const role = ref<BucketMemberRole>("admin")
 const namespaceId = ref("")
 const memberAddress = ref("")
-const submitting = ref(false)
-const submitError = ref("")
-const submittedId = ref("")
-const submittedMethod = ref("")
+const {
+  phase: submitPhase,
+  errorMessage: submitError,
+  isBusy: submitting,
+  applyUpdate: applySubmitUpdate,
+  fail: failSubmit,
+  reset: resetSubmit,
+  run: runSubmit
+} = useSubmitState()
 
 type ProfileStatus = "idle" | "loading" | "found" | "notFound" | "noKey" | "error"
 const profile = ref<Profile | null>(null)
@@ -52,25 +60,20 @@ const profileError = ref("")
 let lookupTimer: ReturnType<typeof setTimeout> | null = null
 let lastQueriedAddress = ""
 
+const submitLabels: SubmitButtonLabels = {
+  idle: "Add member",
+  signing: "Signing…",
+  submitting: "Adding member…",
+  success: "Member added",
+  error: "Add failed — retry"
+}
+
 const canSubmit = computed(() =>
-  !submitting.value &&
   Boolean(memberAddress.value.trim()) &&
   Boolean(namespaceId.value.trim()) &&
   profileStatus.value === "found" &&
   Boolean(profile.value?.x25519Key)
 )
-
-const submitButtonLabel = computed(() => {
-  if (submitting.value) {
-    return "Submitting..."
-  }
-
-  if (submittedId.value) {
-    return "Submitted successfully"
-  }
-
-  return "Submit"
-})
 
 function extractRouteNamespaceId(): string {
   const raw = route.query.namespaceId
@@ -174,23 +177,15 @@ watch(
 )
 
 watch(memberAddress, () => {
-  submittedId.value = ""
-  submittedMethod.value = ""
+  resetSubmit()
   profile.value = null
   profileError.value = ""
   profileStatus.value = "idle"
   scheduleLookup()
 })
 
-watch(namespaceId, () => {
-  submittedId.value = ""
-  submittedMethod.value = ""
-})
-
-watch(role, () => {
-  submittedId.value = ""
-  submittedMethod.value = ""
-})
+watch(namespaceId, resetSubmit)
+watch(role, resetSubmit)
 
 onMounted(async () => {
   namespaceId.value = extractRouteNamespaceId()
@@ -203,66 +198,58 @@ onBeforeUnmount(() => {
   }
 })
 
+// Drives the button only. The page logs one terminal entry per submit below —
+// see the "Loggers drive phases; pages log outcomes" global constraint.
 function logOperationUpdate(update: OperationUpdate): void {
-  // Signing drives the submit button only — logging it would add a notification
-  // popup to every signed operation.
-  if (update.stage === "signing") return
-  operations.add("bucket_write", `bucket-member:${update.stage}`, update.stage === "error" ? "error" : "info", update.message)
+  applySubmitUpdate(update)
 }
 
 async function submitAddMember(): Promise<void> {
-  submitError.value = ""
-  submittedId.value = ""
-  submittedMethod.value = ""
-
-  if (!bucketId.value.trim()) {
-    submitError.value = "Bucket id is required"
+  const bucket = bucketId.value.trim()
+  if (!bucket) {
+    failSubmit("Bucket id is required")
     return
   }
 
-  if (!namespaceId.value.trim()) {
-    submitError.value = "Namespace id is required"
+  const namespace = namespaceId.value.trim()
+  if (!namespace) {
+    failSubmit("Namespace id is required")
     return
   }
 
-  if (!memberAddress.value.trim()) {
-    submitError.value = "Member address is required"
+  const member = memberAddress.value.trim()
+  if (!member) {
+    failSubmit("Member address is required")
     return
   }
 
-  if (!session.accountAddress) {
-    submitError.value = "Connect wallet before adding bucket members"
+  const address = session.accountAddress
+  if (!address) {
+    failSubmit("Connect wallet before adding bucket members")
     return
   }
 
   const x25519Key = profile.value?.x25519Key
   if (profileStatus.value !== "found" || !x25519Key) {
-    submitError.value = "A profile with an X25519 key is required for this address"
+    failSubmit("A profile with an X25519 key is required for this address")
     return
   }
 
-  submitting.value = true
-
-  try {
+  await runSubmit(async () => {
     const result = await bucketsRepository.addBucketMemberWithRole(
       role.value,
-      namespaceId.value,
-      bucketId.value,
-      normalizeApiAddress(memberAddress.value),
+      namespace,
+      bucket,
+      normalizeApiAddress(member),
       x25519Key,
-      session.accountAddress,
+      address,
       logOperationUpdate
     )
+    operations.add("bucket_write", "Add member", "success", `Member added: ${result.id}`)
+  })
 
-    submittedId.value = result.id
-    submittedMethod.value = result.method
-    operations.add("bucket_write", bucketId.value, "success", `Member added (${result.method}): ${result.id}`)
-    memberAddress.value = ""
-  } catch (error) {
-    submitError.value = error instanceof Error ? error.message : "Unable to add bucket member"
-    operations.add("bucket_write", `bucket:${bucketId.value}`, "error", submitError.value)
-  } finally {
-    submitting.value = false
+  if (submitPhase.value === "error") {
+    operations.add("bucket_write", "Add member", "error", submitError.value)
   }
 }
 </script>
@@ -326,9 +313,12 @@ async function submitAddMember(): Promise<void> {
         <p v-if="submitError" style="margin: 0; color: var(--status-error); font-size: 13px;">{{ submitError }}</p>
 
         <div class="row" style="justify-content: flex-end; gap: 12px; margin-top: 8px;">
-          <button class="btn btn-primary" type="button" :disabled="!canSubmit" @click="submitAddMember">
-            {{ submitButtonLabel }}
-          </button>
+          <SubmitButton
+            :phase="submitPhase"
+            :labels="submitLabels"
+            :disabled="!canSubmit"
+            @click="submitAddMember"
+          />
         </div>
       </div>
     </section>
