@@ -13,7 +13,7 @@ withDefaults(defineProps<Props>(), {
 <template>
   <div class="skeleton-list">
     <div v-for="index in count" :key="`skeleton-${index}`" class="skeleton-card">
-      <div v-for="line in lines" :key="`line-${line}`" class="skeleton-bar" :class="`skeleton-line-${line}`" />
+      <div v-for="line in lines" :key="`line-${line}`" class="skeleton-bar skeleton-block" :class="`skeleton-line-${line}`" />
     </div>
   </div>
 </template>
@@ -32,10 +32,10 @@ withDefaults(defineProps<Props>(), {
   padding: 16px;
 }
 
+/* Fill comes from the shared .skeleton-block utility in globals.css */
 .skeleton-bar {
   display: block;
   height: 14px;
-  background: #d0d0d0;
   border-radius: 4px;
   margin-bottom: 8px;
 }

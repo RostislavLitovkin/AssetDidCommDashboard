@@ -20,4 +20,7 @@
   --status-success: #3f7f5f;
   --status-warning: #9a7a2f;
   --status-error: #9f3f3f;
+  /* Skeleton placeholders: flat fill plus the lighter band that sweeps across it */
+  --skeleton-base: var(--color-gray-300);
+  --skeleton-sweep: color-mix(in srgb, var(--color-white) 62%, var(--color-gray-300));
 }

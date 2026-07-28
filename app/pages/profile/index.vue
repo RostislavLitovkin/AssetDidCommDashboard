@@ -11,9 +11,29 @@ const { formatAddress } = useAddress()
 const runtimeConfig = useRuntimeConfig()
 const profileClient = new ProfileClient(String(runtimeConfig.public.profileApiUrl))
 const profile = ref<Profile | null>(null)
-const loading = ref(false)
+// Starts true so a restored session paints the skeleton on the first render
+// instead of flashing the "no profile yet" state until onMounted fires.
+const loading = ref(true)
 const error = ref("")
 const hasConnectedWallet = computed(() => Boolean(wallet.accountAddress.value))
+
+// The skeleton mirrors the three detail rows a fully populated profile renders.
+// Rows only exceed their 58px min-height when a long value wraps, so any row whose
+// final text length is already known is sized with that text (rendered transparent)
+// rather than a proportional bar — it then wraps exactly like the loaded value at
+// every viewport width. `valueWidth` is the fallback when no text is available.
+type SkeletonDetailRow = { label: string; valueText: string; valueWidth: string }
+
+const skeletonDetailRows = computed<SkeletonDetailRow[]>(() => [
+  // Nicknames are free-form but short enough to always sit on one line.
+  { label: "Nickname", valueText: "", valueWidth: "38%" },
+  // The profile being fetched belongs to the connected wallet, so this row's
+  // final value is already known before the response arrives.
+  { label: "Wallet address", valueText: formatAddress(wallet.accountAddress.value), valueWidth: "64%" },
+  // A 32-byte X25519 key is always 43 base64url characters; this sample is never
+  // shown (it renders transparent) and exists only to size the placeholder.
+  { label: "X25519 key", valueText: "kQ8fVz2Rm7pYtLc4XwEjN1oBsHdG9uAiTvZ0nKrMbCe", valueWidth: "86%" }
+])
 
 async function loadProfile(): Promise<void> {
   const address = wallet.accountAddress.value
@@ -49,8 +69,41 @@ onMounted(loadProfile)
       </div>
     </section>
 
-    <section v-else-if="loading" class="card profile-empty stack" aria-live="polite">
-      <span class="muted">Loading profile...</span>
+    <!-- Skeleton reuses the loaded card's layout classes (.profile-cover, .profile-identity,
+         .profile-details …) so its geometry cannot drift from the real card at any width. -->
+    <section v-else-if="loading" class="profile-card" aria-busy="true">
+      <span class="sr-only" aria-live="polite">Loading profile</span>
+      <div class="profile-cover skeleton-block" aria-hidden="true" />
+      <div class="profile-content stack" aria-hidden="true">
+        <div class="profile-identity">
+          <div class="profile-avatar skeleton-avatar">
+            <span class="skeleton-avatar-fill skeleton-block" />
+          </div>
+          <div class="profile-title stack" style="gap: 4px">
+            <div class="profile-name-row" />
+          </div>
+          <!-- Real icon and label, rendered transparent: reserves the button's true box -->
+          <span class="profile-action profile-edit skeleton-button skeleton-block">
+            <Pencil :size="16" />
+            Edit profile
+          </span>
+        </div>
+
+        <div class="profile-bio skeleton-bio">
+          <span class="skeleton-bio-line skeleton-block" style="width: 94%" />
+          <span class="skeleton-bio-line skeleton-block" style="width: 71%" />
+        </div>
+
+        <dl class="profile-details">
+          <div v-for="row in skeletonDetailRows" :key="`skeleton-${row.label}`">
+            <dt><span class="skeleton-label skeleton-block">{{ row.label }}</span></dt>
+            <dd>
+              <span v-if="row.valueText" class="skeleton-text skeleton-block">{{ row.valueText }}</span>
+              <span v-else class="skeleton-value skeleton-block" :style="{ width: row.valueWidth }" />
+            </dd>
+          </div>
+        </dl>
+      </div>
     </section>
 
     <section v-else-if="error" class="card profile-empty stack" aria-live="polite">
@@ -136,6 +189,23 @@ onMounted(loadProfile)
 .profile-details div { display: grid; grid-template-columns: minmax(140px, 0.45fr) minmax(0, 1fr); gap: 18px; align-items: center; min-height: 58px; padding: 12px 16px; border: 1px solid var(--border-default); border-radius: 8px; }
 .profile-details dt { color: var(--text-secondary); font-size: 14px; font-weight: 600; }
 .profile-details dd { margin: 0; font-size: 14px; font-weight: 600; }
+/* --- Loading skeleton ----------------------------------------------------
+   Surface treatment only. Every box above is positioned by the loaded card's
+   own rules, so both states share one source of truth for geometry (including
+   the media queries below). The shimmer fill comes from .skeleton-block. */
+/* Fill sits inside .profile-avatar's content box, leaving its 5px ring intact */
+.skeleton-avatar { overflow: hidden; }
+.skeleton-avatar-fill { display: block; width: 100%; height: 100%; border-radius: 50%; }
+/* Mirrors .btn's box (padding/border/radius) without inheriting .btn's background */
+.skeleton-button { padding: 8px 12px; border: 1px solid transparent; border-radius: 8px; color: transparent; }
+/* Two lines at .profile-bio's 1.55 line-height: 2 x 1.15em + 0.8em gap = 3.1em */
+.skeleton-bio { display: flex; flex-direction: column; gap: 0.8em; }
+.skeleton-bio-line { height: 1.15em; border-radius: 4px; }
+.skeleton-label { display: inline-block; border-radius: 4px; color: transparent; }
+.skeleton-value { display: block; height: 1.2em; border-radius: 4px; }
+/* Inline (not inline-block) so a long value wraps into line fragments exactly as the
+   real text does; `clone` gives each fragment its own bar rather than one sliced run. */
+.skeleton-text { display: inline; border-radius: 4px; color: transparent; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 @media (max-width: 960px) {
   .profile-cover { width: calc(100% + 32px); margin: -16px -16px 0; }
 }
