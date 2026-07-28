@@ -2,7 +2,10 @@
 import type { OperationUpdate } from "../../../services/buckets/types"
 import WalletConnectPrompt from "../../../components/common/WalletConnectPrompt.vue"
 import PageHeader from "../../../components/common/PageHeader.vue"
+import SubmitButton from "../../../components/common/SubmitButton.vue"
+import type { SubmitButtonLabels } from "../../../components/common/submitButtonView"
 import { computed, ref } from "vue"
+import { useSubmitState } from "../../../composables/useSubmitState"
 import { useOperationsStore } from "../../../stores/operations"
 import { useSessionStore } from "../../../stores/session"
 
@@ -10,54 +13,55 @@ const bucketsRepository = useBucketsRepository()
 const session = useSessionStore()
 const operations = useOperationsStore()
 
+const {
+  phase: submitPhase,
+  errorMessage: submitError,
+  applyUpdate: applySubmitUpdate,
+  fail: failSubmit,
+  reset: resetSubmit,
+  run: runSubmit
+} = useSubmitState()
+
 const isWalletConnected = computed(() => session.walletStatus === "connected" && Boolean(session.accountAddress))
 
 const namespaceName = ref("")
-const submitting = ref(false)
-const submitError = ref("")
-const submittedId = ref("")
-const submittedMethod = ref("")
+
+const submitLabels: SubmitButtonLabels = {
+  idle: "Create namespace",
+  signing: "Signing…",
+  submitting: "Creating namespace…",
+  success: "Namespace created",
+  error: "Create failed — retry"
+}
 
 function logOperationUpdate(update: OperationUpdate): void {
-  // Signing drives the submit button only — logging it would add a notification
-  // popup to every signed operation.
+  applySubmitUpdate(update)
+  // Signing drives the button only — logging it would add a notification popup
+  // to every submit.
   if (update.stage === "signing") return
   operations.add("bucket_write", `namespace:${update.stage}`, update.stage === "error" ? "error" : "info", update.message)
 }
 
 async function submitCreateNamespace(): Promise<void> {
-  submitError.value = ""
-  submittedId.value = ""
-  submittedMethod.value = ""
-
-  if (!namespaceName.value.trim()) {
-    submitError.value = "Namespace name is required"
+  const name = namespaceName.value.trim()
+  if (!name) {
+    failSubmit("Namespace name is required")
     return
   }
 
-  if (!session.accountAddress) {
-    submitError.value = "Connect wallet before creating a namespace"
+  const address = session.accountAddress
+  if (!address) {
+    failSubmit("Connect wallet before creating a namespace")
     return
   }
 
-  submitting.value = true
-
-  try {
-    const result = await bucketsRepository.createNamespace(
-      namespaceName.value,
-      session.accountAddress,
-      logOperationUpdate
-    )
-    submittedId.value = result.id
-    submittedMethod.value = result.method
-    operations.add("bucket_write", namespaceName.value.trim(), "success", `Namespace created: ${result.id}`)
+  await runSubmit(async () => {
+    const result = await bucketsRepository.createNamespace(name, address, logOperationUpdate)
+    operations.add("bucket_write", name, "success", `Namespace created: ${result.id}`)
+    // Clearing programmatically does not fire @input, so the success state holds
+    // until the user actually types again.
     namespaceName.value = ""
-  } catch (error) {
-    submitError.value = error instanceof Error ? error.message : "Unable to create namespace"
-    operations.add("bucket_write", "namespace", "error", submitError.value)
-  } finally {
-    submitting.value = false
-  }
+  })
 }
 </script>
 
@@ -79,22 +83,16 @@ async function submitCreateNamespace(): Promise<void> {
           type="text"
           name="namespace-name"
           placeholder="e.g. asset-messages"
-          :disabled="submitting"
+          :disabled="submitPhase === 'signing' || submitPhase === 'submitting'"
+          @input="resetSubmit"
         />
       </label>
 
-
-
       <div class="row" style="justify-content: flex-end">
-        <button class="btn btn-primary" type="button" :disabled="submitting" @click="submitCreateNamespace">
-          {{ submitting ? "Submitting..." : "Create" }}
-        </button>
+        <SubmitButton :phase="submitPhase" :labels="submitLabels" @click="submitCreateNamespace" />
       </div>
 
       <p v-if="submitError" class="error-text">{{ submitError }}</p>
-      <p v-if="submittedId" class="success-text">
-        Submitted via {{ submittedMethod }} successfully.
-      </p>
     </section>
   </main>
 </template>
@@ -115,11 +113,6 @@ async function submitCreateNamespace(): Promise<void> {
 .error-text {
   margin: 0;
   color: var(--status-error);
-}
-
-.success-text {
-  margin: 0;
-  color: var(--status-success);
 }
 
 @media (max-width: 720px) {
