@@ -18,10 +18,11 @@ arbitrary wallets need no bespoke UI beyond their own name/icon.
    registry, no new npm dependency (consistent with the 2026-07-27 design's
    "no new deps" decision). `@wallet-standard/app` and the full
    `@solana/wallet-adapter` stack were rejected.
-2. **Multi-wallet arbitration: wallet picker.** The existing Select Wallet
-   modal lists every discovered wallet; clicking one triggers that wallet's
-   connect popup. Replaces today's behavior where opening the modal
-   immediately pops the first hardcoded wallet.
+2. **Multi-wallet arbitration: wallet picker.** With two or more wallets
+   discovered, the existing Select Wallet modal lists them; clicking one
+   triggers that wallet's connect popup. With exactly one wallet discovered,
+   the modal auto-connects it immediately with no extra click — preserving
+   today's single-wallet behavior.
 3. **Legacy paths preserved.** The tested `window.phantom?.solana` /
    `window.solflare` / `window.backpack` global detection stays and ranks
    first; Wallet Standard wallets are additive and deduped by name.
@@ -112,14 +113,17 @@ Catalog entries (curated install cards, brand icons) are unchanged.
 
 ## Modal flow (Solana only)
 
-- On open: `listWallets()` instead of `listAccounts()` — **no connect popup on
-  open** (behavior change from today, where the first wallet pops
-  immediately).
-- Wallet rows: `WalletBrandIcon` for known brands, else the wallet's own
-  `icon` rendered as an `<img>`; wallet name; "Connected" badge on the row
-  matching the current session's provider name.
-- Click → `connectWith(name)` → on success close the modal; on failure show
-  the existing inline connect error.
+- On open: `listWallets()` instead of `listAccounts()`.
+- **Exactly one wallet discovered → auto-connect it immediately**: the modal
+  calls `connectWith(name)` without any user click, showing the connecting
+  state; on success it closes itself. This matches today's single-wallet
+  behavior (popup right on modal open). On failure the wallet row is shown
+  with the existing inline connect error so the user can retry by clicking.
+- **Two or more wallets discovered → picker**: wallet rows with
+  `WalletBrandIcon` for known brands, else the wallet's own `icon` rendered
+  as an `<img>`; wallet name; "Connected" badge on the row matching the
+  current session's provider name. Click → `connectWith(name)` → on success
+  close the modal; on failure show the existing inline connect error.
 - No wallets discovered → existing "No Solana wallet detected" install-cards
   state, unchanged.
 - The Polkadot account-list flow is untouched.
