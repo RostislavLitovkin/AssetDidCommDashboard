@@ -706,24 +706,40 @@ export class BucketsRepository {
       )
     }
 
-    const roleField = role === "admin" ? "addAdmin" : "addContributor"
-    const roleArg = role === "admin" ? "admin" : "contributor"
     vars.subject = ss58Address.trim()
 
+    // "admin" also grants the contributor role: the API's write check — a
+    // faithful pallet port — accepts only contributors, and the dashboard
+    // expects admins to write messages, key sharing included. Field order
+    // matters: addAdmin runs first so a manager adding themselves passes the
+    // admin-caller check that addContributor and addViewer make.
+    const roleFields: Array<[field: string, arg: string]> =
+      role === "admin"
+        ? [["addAdmin", "admin"], ["addContributor", "contributor"]]
+        : [["addContributor", "contributor"]]
+    const fieldNames = [...roleFields.map(([field]) => field), "addViewer"]
+    const fieldLines = [
+      ...roleFields.map(
+        ([field, arg]) => `${field}(namespaceId: $namespaceId, bucketId: $bucketId, ${arg}: $subject) { id }`
+      ),
+      "addViewer(namespaceId: $namespaceId, bucketId: $bucketId, viewer: $viewerKey) { id }"
+    ]
+
     return this.runMutation<Record<string, { id: string } | undefined>>(
-      `${roleField}+addViewer`,
+      fieldNames.join("+"),
       ownerAddress,
       onUpdate,
       `mutation AddMemberWithViewer($namespaceId: BigInt!, $bucketId: BigInt!, $subject: String!, $viewerKey: String!) {
-        ${roleField}(namespaceId: $namespaceId, bucketId: $bucketId, ${roleArg}: $subject) { id }
-        addViewer(namespaceId: $namespaceId, bucketId: $bucketId, viewer: $viewerKey) { id }
+        ${fieldLines.join("\n        ")}
       }`,
       vars,
       (d) => {
-        if (!d.addViewer?.id) {
-          throw new Error("addViewer reported no result — the viewer key may not have been added")
+        for (const field of fieldNames) {
+          if (!d[field]?.id) {
+            throw new Error(`${field} reported no result — the member may not have been fully added`)
+          }
         }
-        return d[roleField]!.id
+        return d[fieldNames[0]!]!.id
       }
     )
   }

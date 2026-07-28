@@ -120,9 +120,12 @@ describe("rotateBucketKeyAndShare", () => {
 })
 
 describe("addBucketMemberWithRole", () => {
-  it("admin role sends addAdmin and addViewer in one document", async () => {
+  // Admins also get the contributor role: the API's write check (a faithful
+  // pallet port) accepts only contributors, and the dashboard expects admins
+  // to write messages — the key-sharing message included.
+  it("admin role sends addAdmin, addContributor and addViewer in one document", async () => {
     const { repo, requests } = makeRepo([
-      { data: { addAdmin: { id: "x" }, addViewer: { id: "y" } } }
+      { data: { addAdmin: { id: "x" }, addContributor: { id: "c" }, addViewer: { id: "y" } } }
     ])
     const jwkX = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 
@@ -130,10 +133,22 @@ describe("addBucketMemberWithRole", () => {
 
     expect(requests).toHaveLength(1)
     expect(requests[0]!.query).toContain("addAdmin")
+    expect(requests[0]!.query).toContain("addContributor")
     expect(requests[0]!.query).toContain("addViewer")
     const vars = requests[0]!.variables!
     expect(vars.subject).toBe("5NEW")
     expect(String(vars.viewerKey)).toMatch(/^0x[0-9a-f]{64}$/i)
+  })
+
+  it("rejects when one of the admin-role results is missing", async () => {
+    const { repo } = makeRepo([
+      { data: { addAdmin: { id: "x" }, addViewer: { id: "y" } } }
+    ])
+    const jwkX = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+
+    await expect(
+      repo.addBucketMemberWithRole("admin", "3", "9", "5NEW", jwkX, "5OWNER")
+    ).rejects.toThrow(/addContributor reported no result/)
   })
 
   it("viewer role sends only addViewer", async () => {

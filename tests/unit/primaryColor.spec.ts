@@ -10,17 +10,17 @@ import {
 describe("PRIMARY_COLOR_OPTIONS", () => {
   it("lists the three selectable colors in display order", () => {
     expect(PRIMARY_COLOR_OPTIONS.map((option) => option.value)).toEqual([
+      "#f7cb4d",
       "#57a0c5",
-      "#3B4F74",
-      "#f7cb4d"
+      "#3B4F74"
     ])
   })
 
   it("gives each color its display name", () => {
     expect(PRIMARY_COLOR_OPTIONS.map((option) => option.name)).toEqual([
+      "Gold",
       "Light blue",
-      "Xcavate blue",
-      "Gold"
+      "Xcavate blue"
     ])
   })
 })
