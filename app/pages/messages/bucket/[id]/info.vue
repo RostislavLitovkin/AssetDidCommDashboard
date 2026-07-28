@@ -5,7 +5,10 @@ import { ProfileClient } from "../../../../services/profile/profileClient"
 import type { Profile } from "../../../../types/profile"
 import SkeletonCard from "../../../../components/common/SkeletonCard.vue"
 import PageHeader from "../../../../components/common/PageHeader.vue"
+import SubmitButton from "../../../../components/common/SubmitButton.vue"
+import type { SubmitButtonLabels } from "../../../../components/common/submitButtonView"
 import { useAddress } from "../../../../composables/useAddress"
+import { useSubmitState } from "../../../../composables/useSubmitState"
 import { Trash2, File } from "lucide-vue-next"
 import { normalizeApiAddress } from "../../../../services/wallet/addressUtils"
 import * as jose from "jose"
@@ -107,8 +110,22 @@ const profilesLoading = ref(false)
 const contributorX25519Keys = ref<Record<string, string>>({})
 const viewerX25519Keys = ref<Record<string, string>>({})
 const currentBucketCall = ref("write")
-const generatingEncryptionKey = ref(false)
-const encryptionKeyError = ref("")
+const {
+  phase: keyPhase,
+  errorMessage: encryptionKeyError,
+  isBusy: generatingEncryptionKey,
+  applyUpdate: applyKeyUpdate,
+  fail: failKey,
+  run: runKey
+} = useSubmitState()
+
+const keyLabels: SubmitButtonLabels = {
+  idle: "Create & share key",
+  signing: "Signing…",
+  submitting: "Sharing key…",
+  success: "Key shared",
+  error: "Key sharing failed — retry"
+}
 const encryptionKeySuccess = ref("")
 const latestGeneratedKeyId = ref("")
 const latestGeneratedPublicJwk = ref("")
@@ -637,106 +654,109 @@ async function encryptJweForMultipleRecipients(plaintextBytes: Uint8Array, recip
 }
 
 async function generateAndShareEncryptionKey(): Promise<void> {
-  encryptionKeyError.value = ""
-  encryptionKeySuccess.value = ""
-
   if (!session.accountAddress) {
-    encryptionKeyError.value = "Connect wallet before generating encryption keys"
+    failKey("Connect wallet before generating encryption keys")
     return
   }
 
   if (!connectedAdmin.value) {
-    encryptionKeyError.value = "Only bucket admins can generate and distribute encryption keys"
+    failKey("Only bucket admins can generate and distribute encryption keys")
     return
   }
 
   const namespaceId = resolveNamespaceIdFromBucket(bucket.value)
   if (!namespaceId) {
-    encryptionKeyError.value = "Namespace id is required to rotate bucket encryption keys"
+    failKey("Namespace id is required to rotate bucket encryption keys")
     return
   }
 
-  generatingEncryptionKey.value = true
+  // Captured before the closure: the guard above narrows `session.accountAddress`
+  // for this function body, but that narrowing does not survive into runKey's callback.
+  const ownerAddress = session.accountAddress
+  encryptionKeySuccess.value = ""
   console.groupCollapsed(`[Bucket Key Rotation] bucket=${bucketId.value}`)
 
-  try {
-    console.log("--- [ADMIN] 4a. Generating Bucket Keys ---")
-    const { publicKey, privateKey } = await jose.generateKeyPair("ECDH-ES+A256KW", {
-      crv: "X25519",
-      extractable: true
-    })
+  await runKey(async () => {
+    try {
+      console.log("--- [ADMIN] 4a. Generating Bucket Keys ---")
+      const { publicKey, privateKey } = await jose.generateKeyPair("ECDH-ES+A256KW", {
+        crv: "X25519",
+        extractable: true
+      })
 
-    const bucketPkJwk = await jose.exportJWK(publicKey)
-    const bucketSkJwk = await jose.exportJWK(privateKey)
+      const bucketPkJwk = await jose.exportJWK(publicKey)
+      const bucketSkJwk = await jose.exportJWK(privateKey)
 
-    const numericKeyId = randomNumericKeyId()
-    const keyId = numericKeyId.toString()
+      const numericKeyId = randomNumericKeyId()
+      const keyId = numericKeyId.toString()
 
-    bucketPkJwk.use = "enc"
-    bucketSkJwk.use = "enc"
-    bucketPkJwk.kid = keyId
-    bucketSkJwk.kid = keyId
+      bucketPkJwk.use = "enc"
+      bucketSkJwk.use = "enc"
+      bucketPkJwk.kid = keyId
+      bucketSkJwk.kid = keyId
 
-    console.log("Generated bucketPkJwk:", bucketPkJwk)
-    console.log("Generated bucketSkJwk:", bucketSkJwk)
+      console.log("Generated bucketPkJwk:", bucketPkJwk)
+      console.log("Generated bucketSkJwk:", bucketSkJwk)
 
-    const bucketEncryptionKey = typeof bucketPkJwk.x === "string" ? bucketPkJwk.x.trim() : ""
-    if (!bucketEncryptionKey) {
-      throw new Error("Generated public key is missing JWK.x and cannot be used for on-chain key rotation")
+      const bucketEncryptionKey = typeof bucketPkJwk.x === "string" ? bucketPkJwk.x.trim() : ""
+      if (!bucketEncryptionKey) {
+        throw new Error("Generated public key is missing JWK.x and cannot be used for key rotation")
+      }
+
+      console.log(`🔑 Bucket Public Key generated. keyId: ${numericKeyId}`)
+
+      console.log("--- [ADMIN] 4b. Preparing recipients and encrypting key-sharing payload ---")
+      const { recipientJwks, readerAddresses } = buildRecipientJwks(bucketPkJwk)
+      console.log(`Using ${readerAddresses.length} viewer reader(s):`, readerAddresses)
+
+      const keySharingMessage = buildKeySharingMessage(bucketSkJwk, readerAddresses)
+      console.log("Constructed Key-Sharing Message:", JSON.parse(keySharingMessage) as unknown)
+
+      const plaintextBytes = new TextEncoder().encode(keySharingMessage)
+      const jweObject = await encryptJweForMultipleRecipients(plaintextBytes, recipientJwks)
+      const jweString = JSON.stringify(jweObject)
+      console.log(`Encrypted key-sharing JWE length: ${jweString.length}`)
+      console.log(`Encrypted key-sharing JWE: ${jweString}`)
+
+      const jweDigestBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(jweString))
+      const jweDigest = Array.from(new Uint8Array(jweDigestBuffer)).map((value) => value.toString(16).padStart(2, "0")).join("")
+      console.log(`Key-sharing JWE digest (sha256): 0x${jweDigest}`)
+      console.log("--- [ADMIN] 4c. Submitting rotateKey + write mutation ---")
+      currentBucketCall.value = "rotateKey+write"
+      const batchResult = await bucketsRepository.rotateBucketKeyAndShare(
+        namespaceId,
+        bucketId.value,
+        bucketEncryptionKey,
+        keySharingTag,
+        jweString,
+        ownerAddress,
+        logKeyRotationUpdate
+      )
+      console.log(`✅ Bucket key rotation + tag + key-sharing message finalized. Result id: ${batchResult.id}`)
+
+      latestGeneratedKeyId.value = keyId
+      latestGeneratedPublicJwk.value = JSON.stringify(bucketPkJwk, null, 2)
+      encryptionKeySuccess.value = `New encryption key generated and shared. keyId=${keyId}`
+
+      operations.add(
+        "bucket_write",
+        batchResult.method,
+        "success",
+        `Bucket key rotated and shared. keyId=${keyId}, id=${batchResult.id}`
+      )
+
+      await loadMessages()
+    } catch (error) {
+      // runKey records the message for the button; this inner catch keeps the
+      // operation-log entry and console trace the page already had.
+      const message = error instanceof Error ? error.message : "Unable to rotate bucket encryption key"
+      operations.add("bucket_write", currentBucketCall.value, "error", message)
+      console.error("❌ Error rotating bucket key", error)
+      throw error instanceof Error ? error : new Error(message)
+    } finally {
+      console.groupEnd()
     }
-
-    console.log(`🔑 Bucket Public Key generated. keyId: ${numericKeyId}`)
-
-    console.log("--- [ADMIN] 4b. Preparing recipients and encrypting key-sharing payload ---")
-    const { recipientJwks, readerAddresses } = buildRecipientJwks(bucketPkJwk)
-    console.log(`Using ${readerAddresses.length} viewer reader(s):`, readerAddresses)
-
-    const keySharingMessage = buildKeySharingMessage(bucketSkJwk, readerAddresses)
-    console.log("Constructed Key-Sharing Message:", JSON.parse(keySharingMessage) as unknown)
-
-    const plaintextBytes = new TextEncoder().encode(keySharingMessage)
-    const jweObject = await encryptJweForMultipleRecipients(plaintextBytes, recipientJwks)
-    const jweString = JSON.stringify(jweObject)
-    console.log(`Encrypted key-sharing JWE length: ${jweString.length}`)
-    console.log(`Encrypted key-sharing JWE: ${jweString}`)
-
-    const jweDigestBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(jweString))
-    const jweDigest = Array.from(new Uint8Array(jweDigestBuffer)).map((value) => value.toString(16).padStart(2, "0")).join("")
-    console.log(`Key-sharing JWE digest (sha256): 0x${jweDigest}`)
-    console.log("--- [ADMIN] 4c. Submitting rotateKey + write mutation ---")
-    currentBucketCall.value = "rotateKey+write"
-    const batchResult = await bucketsRepository.rotateBucketKeyAndShare(
-      namespaceId,
-      bucketId.value,
-      bucketEncryptionKey,
-      keySharingTag,
-      jweString,
-      session.accountAddress,
-      logOperationUpdate
-    )
-    console.log(`✅ Bucket key rotation + tag + key-sharing message finalized. Result id: ${batchResult.id}`)
-
-    latestGeneratedKeyId.value = keyId
-    latestGeneratedPublicJwk.value = JSON.stringify(bucketPkJwk, null, 2)
-    encryptionKeySuccess.value = `New encryption key generated and shared. keyId=${keyId}`
-
-    operations.add(
-      "bucket_write",
-      batchResult.method,
-      "success",
-      `Bucket key rotated and shared. keyId=${keyId}, id=${batchResult.id}`
-    )
-
-    await loadMessages()
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to rotate bucket encryption key"
-    encryptionKeyError.value = message
-    operations.add("bucket_write", currentBucketCall.value, "error", message)
-    console.error("❌ Error rotating bucket key", error)
-  } finally {
-    generatingEncryptionKey.value = false
-    console.groupEnd()
-  }
+  })
 }
 
 function toRecord(value: unknown): Record<string, unknown> | undefined {
@@ -1208,6 +1228,13 @@ function logOperationUpdate(update: OperationUpdate): void {
   )
 }
 
+/** Key rotation only. The shared logOperationUpdate also serves the member
+ *  operations on this page, which must not drive this button's phase. */
+function logKeyRotationUpdate(update: OperationUpdate): void {
+  applyKeyUpdate(update)
+  logOperationUpdate(update)
+}
+
 async function sendMessage() {
   sendError.value = ""
   const payload = sendText.value.trim()
@@ -1423,17 +1450,16 @@ const allMembers = computed<MemberEntry[]>(() => {
         <div class="card stack" style="gap: 16px;">
           <div class="row" style="justify-content: space-between; align-items: center">
             <h4 style="margin: 0; font-size: 16px;">Communication Encryption Key</h4>
-            <button class="btn btn-primary" type="button" :disabled="generatingEncryptionKey ||
-              !session.accountAddress ||
-              !connectedAdmin ||
-              !viewerRecipients.length
-              " @click="generateAndShareEncryptionKey">
-              {{ generatingEncryptionKey ? "Creating & Sharing..." : "Create & Share Key" }}
-            </button>
+            <SubmitButton
+              :phase="keyPhase"
+              :labels="keyLabels"
+              :disabled="!session.accountAddress || !connectedAdmin || !viewerRecipients.length"
+              @click="generateAndShareEncryptionKey"
+            />
           </div>
 
           <p class="muted" style="margin: 0">
-            Generates a fresh X25519 encryption keypair, stores the public key ID on-chain, ensures the key-sharing tag
+            Generates a fresh X25519 encryption keypair, registers the public key ID, ensures the key-sharing tag
             exists,
             then encrypts and shares the new secret key with all viewers using their X25519 keys.
           </p>

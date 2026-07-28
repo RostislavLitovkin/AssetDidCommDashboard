@@ -7,10 +7,13 @@ import { resolveAvatarUrls } from "../../../services/profile/avatarResolver"
 import { normalizeApiAddress } from "../../../services/wallet/addressUtils"
 import ParticleLoader from "../../../components/common/ParticleLoader.vue"
 import PageHeader from "../../../components/common/PageHeader.vue"
+import SubmitButton from "../../../components/common/SubmitButton.vue"
+import type { SubmitButtonLabels } from "../../../components/common/submitButtonView"
 import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } from "../../../components/common/ChatMessageEntry.vue"
 import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, Check } from "lucide-vue-next"
 import { useAddress } from "../../../composables/useAddress"
 import { useWallet } from "../../../composables/useWallet"
+import { useSubmitState } from "../../../composables/useSubmitState"
 import * as jose from "jose"
 import { computed, nextTick, onMounted, ref, shallowRef, watch } from "vue"
 import { useRoute, useRuntimeConfig } from "nuxt/app"
@@ -132,8 +135,29 @@ interface PendingOutgoingMessage {
 }
 
 const pendingMessages = ref<PendingOutgoingMessage[]>([])
-const creatingKey = ref(false)
-const createKeyError = ref("")
+const {
+  phase: keyPhase,
+  errorMessage: createKeyError,
+  isBusy: creatingKey,
+  applyUpdate: applyKeyUpdate,
+  fail: failKey,
+  run: runKey
+} = useSubmitState()
+
+// Two buttons drive this one operation: the "viewers are missing the key"
+// warning and step 2 of the empty-bucket setup timeline. Same phase, different
+// idle wording.
+const keyWarningLabels: SubmitButtonLabels = {
+  idle: "Regenerate encryption key",
+  signing: "Signing…",
+  submitting: "Sharing key…",
+  success: "Key shared",
+  error: "Key sharing failed — retry"
+}
+const keyTimelineLabels: SubmitButtonLabels = {
+  ...keyWarningLabels,
+  idle: "Create & share encryption key"
+}
 const pendingAttachment = ref<{ file: File; dataUrl: string } | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
@@ -547,6 +571,13 @@ function logOperationUpdate(update: OperationUpdate): void {
   )
 }
 
+/** Key rotation only. The shared logOperationUpdate also serves chat sends,
+ *  which must not drive this button's phase. */
+function logKeyRotationUpdate(update: OperationUpdate): void {
+  applyKeyUpdate(update)
+  logOperationUpdate(update)
+}
+
 function openFilePicker() {
   fileInputRef.value?.click()
 }
@@ -751,74 +782,78 @@ async function encryptJweForMultipleRecipients(plaintextBytes: Uint8Array, recip
 }
 
 async function createAndShareEncryptionKey(): Promise<void> {
-  createKeyError.value = ""
-
   if (!session.accountAddress) {
-    createKeyError.value = "Connect wallet before generating encryption keys"
+    failKey("Connect wallet before generating encryption keys")
     return
   }
 
   if (!canManageBucket.value) {
-    createKeyError.value = "Only bucket admins and namespace managers can generate and distribute encryption keys"
+    failKey("Only bucket admins and namespace managers can generate and distribute encryption keys")
     return
   }
 
   const namespaceId = bucket.value?.namespaceId != null ? String(bucket.value.namespaceId) : ""
   if (!namespaceId) {
-    createKeyError.value = "Namespace id is required to rotate bucket encryption keys"
+    failKey("Namespace id is required to rotate bucket encryption keys")
     return
   }
 
-  creatingKey.value = true
-  try {
-    const { publicKey, privateKey } = await jose.generateKeyPair("ECDH-ES+A256KW", {
-      crv: "X25519",
-      extractable: true
-    })
+  // Captured before the closure: the guard above narrows `session.accountAddress`
+  // for this function body, but that narrowing does not survive into runKey's callback.
+  const ownerAddress = session.accountAddress
 
-    const bucketPkJwk = await jose.exportJWK(publicKey)
-    const bucketSkJwk = await jose.exportJWK(privateKey)
+  await runKey(async () => {
+    try {
+      const { publicKey, privateKey } = await jose.generateKeyPair("ECDH-ES+A256KW", {
+        crv: "X25519",
+        extractable: true
+      })
 
-    const keyId = randomNumericKeyId().toString()
-    bucketPkJwk.use = "enc"
-    bucketSkJwk.use = "enc"
-    bucketPkJwk.kid = keyId
-    bucketSkJwk.kid = keyId
+      const bucketPkJwk = await jose.exportJWK(publicKey)
+      const bucketSkJwk = await jose.exportJWK(privateKey)
 
-    const bucketEncryptionKey = typeof bucketPkJwk.x === "string" ? bucketPkJwk.x.trim() : ""
-    if (!bucketEncryptionKey) {
-      throw new Error("Generated public key is missing JWK.x and cannot be used for on-chain key rotation")
+      const keyId = randomNumericKeyId().toString()
+      bucketPkJwk.use = "enc"
+      bucketSkJwk.use = "enc"
+      bucketPkJwk.kid = keyId
+      bucketSkJwk.kid = keyId
+
+      const bucketEncryptionKey = typeof bucketPkJwk.x === "string" ? bucketPkJwk.x.trim() : ""
+      if (!bucketEncryptionKey) {
+        throw new Error("Generated public key is missing JWK.x and cannot be used for key rotation")
+      }
+
+      const { recipientJwks, readerAddresses } = buildRecipientJwks(bucketPkJwk)
+      const keySharingMessage = buildKeySharingMessage(bucketSkJwk, readerAddresses)
+      const plaintextBytes = new TextEncoder().encode(keySharingMessage)
+      const jweObject = await encryptJweForMultipleRecipients(plaintextBytes, recipientJwks)
+
+      const batchResult = await bucketsRepository.rotateBucketKeyAndShare(
+        namespaceId,
+        bucketId.value,
+        bucketEncryptionKey,
+        KEY_SHARING_MESSAGE_TAG,
+        JSON.stringify(jweObject),
+        ownerAddress,
+        logKeyRotationUpdate
+      )
+
+      operations.add(
+        "bucket_write",
+        batchResult.method,
+        "success",
+        `Bucket key rotated and shared. keyId=${keyId}, id=${batchResult.id}`
+      )
+
+      await loadAll()
+    } catch (e) {
+      // runKey records the message for the button; this inner catch keeps the
+      // operation-log entry the page already had.
+      const message = e instanceof Error ? e.message : "Unable to rotate bucket encryption key"
+      operations.add("bucket_write", "rotateKey+write", "error", message)
+      throw e instanceof Error ? e : new Error(message)
     }
-
-    const { recipientJwks, readerAddresses } = buildRecipientJwks(bucketPkJwk)
-    const keySharingMessage = buildKeySharingMessage(bucketSkJwk, readerAddresses)
-    const plaintextBytes = new TextEncoder().encode(keySharingMessage)
-    const jweObject = await encryptJweForMultipleRecipients(plaintextBytes, recipientJwks)
-
-    const batchResult = await bucketsRepository.rotateBucketKeyAndShare(
-      namespaceId,
-      bucketId.value,
-      bucketEncryptionKey,
-      KEY_SHARING_MESSAGE_TAG,
-      JSON.stringify(jweObject),
-      session.accountAddress,
-      logOperationUpdate
-    )
-
-    operations.add(
-      "bucket_write",
-      batchResult.method,
-      "success",
-      `Bucket key rotated and shared. keyId=${keyId}, id=${batchResult.id}`
-    )
-
-    await loadAll()
-  } catch (e) {
-    createKeyError.value = e instanceof Error ? e.message : "Unable to rotate bucket encryption key"
-    operations.add("bucket_write", "rotateKey+write", "error", createKeyError.value)
-  } finally {
-    creatingKey.value = false
-  }
+  })
 }
 
 // ── Viewer key-access check (lazy, admins only) ────────────────────
@@ -895,12 +930,14 @@ onMounted(async () => {
           {{ viewersMissingKeyCount }} {{ viewersMissingKeyCount === 1 ? "viewer does" : "viewers do" }}
           not have access to the encryption key.
         </span>
-        <button class="btn btn-primary ib-key-warning-btn" type="button" :disabled="creatingKey"
-          @click="createAndShareEncryptionKey">
-          <span v-if="creatingKey" class="ib-tl-btn-spinner" aria-hidden="true"></span>
-          <KeyRound v-else :size="14" />
-          {{ creatingKey ? "Regenerating..." : "Regenerate Encryption Key" }}
-        </button>
+        <SubmitButton
+          class="ib-key-warning-btn"
+          :phase="keyPhase"
+          :labels="keyWarningLabels"
+          @click="createAndShareEncryptionKey"
+        >
+          <template #icon><KeyRound :size="14" /></template>
+        </SubmitButton>
       </div>
       <p v-if="createKeyError && viewersMissingKeyCount" class="ib-error">{{ createKeyError }}</p>
     </div>
@@ -951,7 +988,7 @@ onMounted(async () => {
                   <h5 class="ib-tl-step-title">Create &amp; Share Encryption Key</h5>
                 </div>
                 <p class="muted ib-tl-desc">
-                  Generates a fresh X25519 encryption keypair, stores the public key ID on-chain, and shares
+                  Generates a fresh X25519 encryption keypair, registers the public key ID, and shares
                   the new secret key with all viewers using their X25519 keys.
                 </p>
                 <p v-if="!keyStepActive" class="muted ib-tl-hint">
@@ -961,13 +998,15 @@ onMounted(async () => {
                   No viewer X25519 keys are available yet. Members must be added with the viewer role before
                   the key can be shared.
                 </p>
-                <button class="btn btn-primary ib-tl-btn" type="button"
-                  :disabled="!keyStepActive || creatingKey || loading || !session.accountAddress || !viewerRecipients.length"
-                  @click="createAndShareEncryptionKey">
-                  <span v-if="creatingKey" class="ib-tl-btn-spinner" aria-hidden="true"></span>
-                  <KeyRound v-else :size="16" />
-                  {{ creatingKey ? "Creating & Sharing..." : "Create & Share Encryption Key" }}
-                </button>
+                <SubmitButton
+                  class="ib-tl-btn"
+                  :phase="keyPhase"
+                  :labels="keyTimelineLabels"
+                  :disabled="!keyStepActive || loading || !session.accountAddress || !viewerRecipients.length"
+                  @click="createAndShareEncryptionKey"
+                >
+                  <template #icon><KeyRound :size="16" /></template>
+                </SubmitButton>
                 <p v-if="createKeyError" class="ib-tl-error">{{ createKeyError }}</p>
               </div>
             </li>
@@ -1712,21 +1751,6 @@ onMounted(async () => {
   font-weight: 600;
   text-decoration: none;
   white-space: nowrap;
-}
-
-.ib-tl-btn-spinner {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  border: 2px solid color-mix(in srgb, var(--color-white) 40%, transparent);
-  border-top-color: var(--color-white);
-  animation: ib-tl-spin 700ms linear infinite;
-}
-
-@keyframes ib-tl-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 /* ── Wallet popup overlay ───────────────────────────────────────── */
