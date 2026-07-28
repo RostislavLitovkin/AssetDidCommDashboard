@@ -654,6 +654,8 @@ async function encryptJweForMultipleRecipients(plaintextBytes: Uint8Array, recip
 }
 
 async function generateAndShareEncryptionKey(): Promise<void> {
+  encryptionKeySuccess.value = ""
+
   if (!session.accountAddress) {
     failKey("Connect wallet before generating encryption keys")
     return
@@ -673,7 +675,6 @@ async function generateAndShareEncryptionKey(): Promise<void> {
   // Captured before the closure: the guard above narrows `session.accountAddress`
   // for this function body, but that narrowing does not survive into runKey's callback.
   const ownerAddress = session.accountAddress
-  encryptionKeySuccess.value = ""
   console.groupCollapsed(`[Bucket Key Rotation] bucket=${bucketId.value}`)
 
   await runKey(async () => {
