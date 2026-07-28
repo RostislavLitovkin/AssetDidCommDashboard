@@ -4,14 +4,25 @@ import { useRoute } from "nuxt/app"
 import type { OperationUpdate } from "../../../../services/buckets/types"
 import { useOperationsStore } from "../../../../stores/operations"
 import { useSessionStore } from "../../../../stores/session"
+import { useSubmitState } from "../../../../composables/useSubmitState"
 import WalletConnectPrompt from "../../../../components/common/WalletConnectPrompt.vue"
 import PageHeader from "../../../../components/common/PageHeader.vue"
-import { ShieldCheck, UserPlus } from "lucide-vue-next"
+import SubmitButton from "../../../../components/common/SubmitButton.vue"
+import type { SubmitButtonLabels } from "../../../../components/common/submitButtonView"
 
 const route = useRoute()
 const session = useSessionStore()
 const operations = useOperationsStore()
 const bucketsRepository = useBucketsRepository()
+
+const {
+  phase: submitPhase,
+  errorMessage: submitError,
+  applyUpdate: applySubmitUpdate,
+  fail: failSubmit,
+  reset: resetSubmit,
+  run: runSubmit
+} = useSubmitState()
 
 const namespaceId = computed(() => {
   const rawId = route.params.namespaceId
@@ -27,57 +38,48 @@ const namespaceId = computed(() => {
 const namespaceRoutePath = computed(() => `/messages/namespace/${encodeURIComponent(namespaceId.value)}`)
 
 const managerAddress = ref("")
-const submitting = ref(false)
-const submitError = ref("")
-const submittedId = ref("")
-const submittedMethod = ref("")
 
+const submitLabels: SubmitButtonLabels = {
+  idle: "Add manager",
+  signing: "Signing…",
+  submitting: "Adding manager…",
+  success: "Manager added",
+  error: "Add failed — retry"
+}
+
+// Drives the button only. The page logs one terminal entry per submit below —
+// see the "Loggers drive phases; pages log outcomes" global constraint.
 function logOperationUpdate(update: OperationUpdate): void {
-  // Signing drives the submit button only — logging it would add a notification
-  // popup to every signed operation.
-  if (update.stage === "signing") return
-  operations.add("namespace_write", `namespace-manager:${update.stage}`, update.stage === "error" ? "error" : "info", update.message)
+  applySubmitUpdate(update)
 }
 
 async function submitAddManager(): Promise<void> {
-  submitError.value = ""
-  submittedId.value = ""
-  submittedMethod.value = ""
-
-  if (!namespaceId.value.trim()) {
-    submitError.value = "Namespace id is required"
+  const namespace = namespaceId.value.trim()
+  if (!namespace) {
+    failSubmit("Namespace id is required")
     return
   }
 
-  if (!managerAddress.value.trim()) {
-    submitError.value = "Manager address is required"
+  const manager = managerAddress.value.trim()
+  if (!manager) {
+    failSubmit("Manager address is required")
     return
   }
 
-  if (!session.accountAddress) {
-    submitError.value = "Connect wallet before submitting namespace manager mutations"
+  const address = session.accountAddress
+  if (!address) {
+    failSubmit("Connect wallet before adding a namespace manager")
     return
   }
 
-  submitting.value = true
-
-  try {
-    const result = await bucketsRepository.addNamespaceManager(
-      namespaceId.value,
-      managerAddress.value,
-      session.accountAddress,
-      logOperationUpdate
-    )
-
-    submittedId.value = result.id
-    submittedMethod.value = result.method
-    operations.add("namespace_write", namespaceId.value, "success", `Manager added: ${result.id}`)
+  await runSubmit(async () => {
+    const result = await bucketsRepository.addNamespaceManager(namespace, manager, address, logOperationUpdate)
+    operations.add("namespace_write", "Add manager", "success", `Manager added: ${result.id}`)
     managerAddress.value = ""
-  } catch (error) {
-    submitError.value = error instanceof Error ? error.message : "Unable to add namespace manager"
-    operations.add("namespace_write", `namespace:${namespaceId.value}`, "error", submitError.value)
-  } finally {
-    submitting.value = false
+  })
+
+  if (submitPhase.value === "error") {
+    operations.add("namespace_write", "Add manager", "error", submitError.value)
   }
 }
 </script>
@@ -95,7 +97,8 @@ async function submitAddManager(): Promise<void> {
           <label class="stack" style="gap: 8px">
             <span style="font-weight: 600; font-size: 14px;">Manager Address</span>
             <input v-model="managerAddress" class="input" type="text" name="manager-address"
-              placeholder="Enter SS58 address" :disabled="submitting" />
+              placeholder="Enter SS58 address"
+              :disabled="submitPhase === 'signing' || submitPhase === 'submitting'" @input="resetSubmit" />
           </label>
 
           <label class="stack" style="gap: 8px">
@@ -104,16 +107,15 @@ async function submitAddManager(): Promise<void> {
           </label>
 
           <p v-if="submitError" style="margin: 0; color: var(--status-error); font-size: 13px;">{{ submitError }}</p>
-          <p v-if="submittedId" style="margin: 0; color: var(--status-success); font-size: 13px;">
-            Submitted via {{ submittedMethod }} with id {{ submittedId }}
-          </p>
 
           <div class="row" style="justify-content: flex-end; gap: 12px; margin-top: 8px;">
             <NuxtLink class="btn" :to="namespaceRoutePath">Cancel</NuxtLink>
-            <button class="btn btn-primary" type="button" :disabled="submitting || !managerAddress"
-              @click="submitAddManager">
-              {{ submitting ? "Submitting..." : "Add Manager" }}
-            </button>
+            <SubmitButton
+              :phase="submitPhase"
+              :labels="submitLabels"
+              :disabled="!managerAddress"
+              @click="submitAddManager"
+            />
           </div>
         </div>
       </section>
