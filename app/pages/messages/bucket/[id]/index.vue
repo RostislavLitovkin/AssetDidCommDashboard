@@ -722,7 +722,7 @@ async function generateAndShareEncryptionKey(): Promise<void> {
 
     const bucketEncryptionKey = typeof bucketPkJwk.x === "string" ? bucketPkJwk.x.trim() : ""
     if (!bucketEncryptionKey) {
-      throw new Error("Generated public key is missing JWK.x and cannot be used for on-chain key rotation")
+      throw new Error("Generated public key is missing JWK.x and cannot be used for key rotation")
     }
 
     console.log(`🔑 Bucket Public Key generated. keyId: ${numericKeyId}`)

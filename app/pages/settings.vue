@@ -172,7 +172,7 @@ function selectPrimaryColor(color: string): void {
     </section>
 
     <section class="card stack" style="gap: 10px" aria-live="polite">
-      <h4 style="margin: 0; font-size: 16px;">Chain Configuration</h4>
+      <h4 style="margin: 0; font-size: 16px;">Address Format</h4>
       <label class="stack" style="gap: 6px">
         <span style="font-weight: 600; font-size: 14px;">SS58 Prefix</span>
         <div style="display: flex; gap: 8px; align-items: flex-end">
@@ -235,7 +235,7 @@ function selectPrimaryColor(color: string): void {
         <input v-model="showMessageDebug" type="checkbox" />
         <span>Show debug data</span>
       </label>
-      <span class="muted" style="font-size: 13px;">This will display extra data like on-chain ids, block numbers and extra debugging windows. Keep disabled if you are unsure what this does.</span>
+      <span class="muted" style="font-size: 13px;">This will display extra data like internal record ids and extra debugging windows. Keep disabled if you are unsure what this does.</span>
     </section>
   </main>
 </template>
