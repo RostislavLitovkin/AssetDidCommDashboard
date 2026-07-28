@@ -189,13 +189,7 @@ onMounted(() => {
   <main class="profile-edit-page stack">
     <PageHeader
       :title="profileExists ? 'Edit profile' : 'Create profile'"
-      subtitle="Manage the public profile for your connected wallet."
     >
-      <template #actions>
-        <NuxtLink class="btn icon-button" to="/profile" aria-label="Back to profile" title="Back to profile">
-          <ArrowLeft :size="18" />
-        </NuxtLink>
-      </template>
     </PageHeader>
 
     <section v-if="!hasConnectedWallet" class="card profile-edit-empty stack">
@@ -220,12 +214,9 @@ onMounted(() => {
           aria-label="Wallet address"
           tabindex="-1"
         />
-        <small class="muted">
-          Always the wallet you have connected. Connect a different wallet to edit its profile instead.
-        </small>
       </div>
       <label class="stack field">
-        <span class="field-label">Nickname <span class="field-optional">optional</span></span>
+        <span class="field-label">Nickname <span class="field-optional">recommended</span></span>
         <input
           v-model="nickname"
           class="input"
@@ -240,11 +231,11 @@ onMounted(() => {
         <small v-else class="muted">Shown to other people in place of your wallet address.</small>
       </label>
       <label class="stack field">
-        <span class="field-label">Bio</span>
+        <span class="field-label">Bio <span class="field-optional">optional</span></span>
         <textarea v-model="bio" class="input" rows="5" maxlength="1000" @input="resetSubmit" />
       </label>
       <label class="stack field">
-        <span class="field-label">Profile picture</span>
+        <span class="field-label">Profile picture <span class="field-optional">optional</span></span>
         <span class="image-input-row">
           <ImageUp :size="18" aria-hidden="true" />
           <input class="input" type="file" accept="image/*" @change="selectImage($event); resetSubmit()" />
@@ -253,8 +244,8 @@ onMounted(() => {
         <small v-else-if="profilePicture" class="muted">Keep the current image unless you select a replacement.</small>
       </label>
       <div class="stack field">
-        <label class="field-label" for="x25519-key">X25519 public key <strong>*</strong></label>
-        <textarea
+        <label class="field-label" for="x25519-key">X25519 encryption public key <span class="field-optional">required</span></label>
+        <input
           id="x25519-key"
           v-model="x25519Key"
           class="input"
@@ -266,7 +257,6 @@ onMounted(() => {
           @input="resetSubmit"
         />
         <small v-if="showX25519Error" class="field-error" aria-live="polite">{{ x25519Error }}</small>
-        <small v-else class="muted">Required. The base64 public key other people encrypt their messages to.</small>
         <button v-if="canAdoptActiveX25519Key" class="btn field-action" type="button" @click="adoptActiveX25519Key">
           <WandSparkles :size="14" aria-hidden="true" />
           Use my active key
@@ -274,7 +264,6 @@ onMounted(() => {
       </div>
       <p v-if="submitError || loadError" class="form-error" aria-live="polite">{{ submitError || loadError }}</p>
       <div class="profile-form-actions">
-        <NuxtLink class="btn" to="/profile">Cancel</NuxtLink>
         <SubmitButton
           class="profile-save"
           type="submit"
