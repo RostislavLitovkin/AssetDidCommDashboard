@@ -9,6 +9,9 @@ import { resizeProfileImage } from "../../services/profile/imageResize"
 import { validateX25519PublicKey } from "../../services/profile/x25519KeyValidation"
 import { useSettingsStore } from "../../stores/settings"
 import PageHeader from "../../components/common/PageHeader.vue"
+import SubmitButton from "../../components/common/SubmitButton.vue"
+import type { SubmitButtonLabels } from "../../components/common/submitButtonView"
+import { useSubmitState } from "../../composables/useSubmitState"
 
 const wallet = useWallet()
 const profileStatus = useProfileStatus()
@@ -17,7 +20,16 @@ const router = useRouter()
 const runtimeConfig = useRuntimeConfig()
 const profileClient = new ProfileClient(String(runtimeConfig.public.profileApiUrl))
 const loading = ref(false)
-const saving = ref(false)
+const {
+  phase: submitPhase,
+  errorMessage: submitError,
+  isBusy: saving,
+  markSigning,
+  markSubmitting,
+  fail: failSubmit,
+  reset: resetSubmit,
+  run: runSubmit
+} = useSubmitState()
 const profileExists = ref(false)
 const originalNickname = ref("")
 const nickname = ref("")
@@ -27,7 +39,6 @@ const selectedImage = ref<File | null>(null)
 const x25519Key = ref("")
 const x25519Touched = ref(false)
 const submitAttempted = ref(false)
-const error = ref("")
 const nicknameError = ref("")
 const nicknameChecking = ref(false)
 const nicknameAvailable = ref(false)
@@ -45,9 +56,26 @@ const canAdoptActiveX25519Key = computed(
 // The nickname is optional; the X25519 key is not.
 const isFormValid = computed(() => !x25519Error.value && !nicknameError.value)
 
+const submitLabels = computed<SubmitButtonLabels>(() => ({
+  idle: profileExists.value ? "Save changes" : "Create profile",
+  signing: "Signing…",
+  submitting: profileExists.value ? "Saving changes…" : "Creating profile…",
+  success: profileExists.value ? "Changes saved" : "Profile created",
+  error: profileExists.value ? "Save failed — retry" : "Create failed — retry"
+}))
+
+/** Marks signing on entry and submitting on exit, so a save that also uploads an
+ *  image (two signatures) reports both rounds honestly. */
+const signWithProgress: typeof wallet.signProfileRequest = async (method, path, body) => {
+  markSigning()
+  const headers = await wallet.signProfileRequest(method, path, body)
+  markSubmitting()
+  return headers
+}
+
 async function loadProfile(): Promise<void> {
   const address = wallet.accountAddress.value
-  error.value = ""
+  resetSubmit()
   x25519Touched.value = false
   submitAttempted.value = false
   if (!address) return
@@ -62,7 +90,7 @@ async function loadProfile(): Promise<void> {
     profilePicture.value = profile?.profilePicture || ""
     x25519Key.value = profile?.x25519Key || activeX25519Key.value
   } catch (loadError) {
-    error.value = loadError instanceof Error ? loadError.message : "Unable to load profile"
+    failSubmit(loadError instanceof Error ? loadError.message : "Unable to load profile")
   } finally {
     loading.value = false
   }
@@ -95,7 +123,7 @@ async function validateNickname(): Promise<void> {
 }
 
 async function saveProfile(): Promise<void> {
-  error.value = ""
+  resetSubmit()
   submitAttempted.value = true
   await validateNickname()
 
@@ -103,19 +131,18 @@ async function saveProfile(): Promise<void> {
   // address field is display-only and never feeds this call.
   const address = wallet.accountAddress.value
   if (!address) {
-    error.value = "Connect a wallet before saving your profile."
+    failSubmit("Connect a wallet before saving your profile.")
     return
   }
   if (!isFormValid.value) return
 
-  saving.value = true
-  try {
+  await runSubmit(async () => {
     const saved = await profileClient.saveProfile(address, {
       nickname: nickname.value,
       bio: bio.value,
       profilePicture: profilePicture.value,
       x25519Key: x25519Key.value
-    }, wallet.signProfileRequest)
+    }, signWithProgress)
     let savedProfile = saved
     if (selectedImage.value) {
       // The profile must exist before the image endpoint accepts an upload, so
@@ -124,18 +151,18 @@ async function saveProfile(): Promise<void> {
       profilePicture.value = await profileClient.uploadProfileImage(
         address,
         resized,
-        wallet.signProfileRequest
+        signWithProgress
       )
       savedProfile = { ...saved, profilePicture: profilePicture.value }
     }
     // Keeps the account-setup banners in step without a second round trip.
     profileStatus.setProfile(savedProfile)
-    await router.push("/profile")
-  } catch (saveError) {
-    error.value = saveError instanceof Error ? saveError.message : "Unable to save profile"
-  } finally {
-    saving.value = false
-  }
+  })
+
+  if (submitPhase.value !== "success") return
+  // Let the confirmation land before leaving the page.
+  await new Promise((resolve) => setTimeout(resolve, 900))
+  await router.push("/profile")
 }
 
 function selectImage(event: Event): void {
@@ -191,7 +218,14 @@ onMounted(() => {
       </div>
       <label class="stack field">
         <span class="field-label">Nickname <span class="field-optional">optional</span></span>
-        <input v-model="nickname" class="input" maxlength="64" autocomplete="nickname" @blur="validateNickname" />
+        <input
+          v-model="nickname"
+          class="input"
+          maxlength="64"
+          autocomplete="nickname"
+          @blur="validateNickname"
+          @input="resetSubmit"
+        />
         <small v-if="nicknameChecking" class="muted">Checking nickname...</small>
         <small v-else-if="nicknameError" class="field-error">{{ nicknameError }}</small>
         <small v-else-if="nicknameAvailable" class="field-success">This nickname is available.</small>
@@ -199,13 +233,13 @@ onMounted(() => {
       </label>
       <label class="stack field">
         <span class="field-label">Bio</span>
-        <textarea v-model="bio" class="input" rows="5" maxlength="1000" />
+        <textarea v-model="bio" class="input" rows="5" maxlength="1000" @input="resetSubmit" />
       </label>
       <label class="stack field">
         <span class="field-label">Profile picture</span>
         <span class="image-input-row">
           <ImageUp :size="18" aria-hidden="true" />
-          <input class="input" type="file" accept="image/*" @change="selectImage" />
+          <input class="input" type="file" accept="image/*" @change="selectImage($event); resetSubmit()" />
         </span>
         <small v-if="selectedImage" class="muted">{{ selectedImage.name }}</small>
         <small v-else-if="profilePicture" class="muted">Keep the current image unless you select a replacement.</small>
@@ -221,6 +255,7 @@ onMounted(() => {
           aria-required="true"
           :aria-invalid="showX25519Error"
           @blur="x25519Touched = true"
+          @input="resetSubmit"
         />
         <small v-if="showX25519Error" class="field-error" aria-live="polite">{{ x25519Error }}</small>
         <small v-else class="muted">Required. The base64 public key other people encrypt their messages to.</small>
@@ -229,13 +264,18 @@ onMounted(() => {
           Use my active key
         </button>
       </div>
-      <p v-if="error" class="form-error" aria-live="polite">{{ error }}</p>
+      <p v-if="submitError" class="form-error" aria-live="polite">{{ submitError }}</p>
       <div class="profile-form-actions">
         <NuxtLink class="btn" to="/profile">Cancel</NuxtLink>
-        <button class="btn btn-primary profile-save" type="submit" :disabled="saving || nicknameChecking || !isFormValid">
-          <Save :size="16" />
-          {{ saving ? "Saving..." : profileExists ? "Save changes" : "Create profile" }}
-        </button>
+        <SubmitButton
+          class="profile-save"
+          type="submit"
+          :phase="submitPhase"
+          :labels="submitLabels"
+          :disabled="nicknameChecking || !isFormValid"
+        >
+          <template #icon><Save :size="16" /></template>
+        </SubmitButton>
       </div>
     </form>
   </main>
