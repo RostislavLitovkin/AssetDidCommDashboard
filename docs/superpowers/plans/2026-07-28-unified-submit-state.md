@@ -1979,6 +1979,21 @@ Two call sites need care rather than deletion:
 
 Line numbers will have drifted from the earlier tasks — locate each by its surrounding `operations.add` call. Also strip `${result.method}` / `keyId=` style internals from the *message* text where it names a mutation; keep ids, which are useful.
 
+- [ ] **Step 4b: Two loose ends from the Task 8 review**
+
+In `app/pages/profile/edit.vue`:
+
+- The destructure includes `isBusy: saving`, but nothing reads `saving` any more — `SubmitButton` computes its own disabled state from the phase. Drop `isBusy: saving,` from the destructure.
+- `adoptActiveX25519Key` (the "Use my active key" button) assigns `x25519Key.value` programmatically, which does not fire the textarea's `@input` and so does not reset the phase. If someone uses it to fix a key right after a failed save, the button keeps its stale `Save failed — retry` label until the next real keystroke. Add `resetSubmit()` to that function:
+
+```ts
+function adoptActiveX25519Key(): void {
+  x25519Key.value = activeX25519Key.value
+  x25519Touched.value = true
+  resetSubmit()
+}
+```
+
 - [ ] **Step 5: Verify one notification per submit**
 
 Confirm no user-visible notification path can name a mutation:
