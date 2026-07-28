@@ -34,12 +34,10 @@ const submitLabels: SubmitButtonLabels = {
   error: "Create failed — retry"
 }
 
+// Drives the button only. The page logs one terminal entry per submit below —
+// see the "Loggers drive phases; pages log outcomes" global constraint.
 function logOperationUpdate(update: OperationUpdate): void {
   applySubmitUpdate(update)
-  // Signing drives the button only — logging it would add a notification popup
-  // to every submit.
-  if (update.stage === "signing") return
-  operations.add("bucket_write", `namespace:${update.stage}`, update.stage === "error" ? "error" : "info", update.message)
 }
 
 async function submitCreateNamespace(): Promise<void> {
@@ -57,11 +55,15 @@ async function submitCreateNamespace(): Promise<void> {
 
   await runSubmit(async () => {
     const result = await bucketsRepository.createNamespace(name, address, logOperationUpdate)
-    operations.add("bucket_write", name, "success", `Namespace created: ${result.id}`)
+    operations.add("bucket_write", "Create namespace", "success", `Namespace created: ${result.id}`)
     // Clearing programmatically does not fire @input, so the success state holds
     // until the user actually types again.
     namespaceName.value = ""
   })
+
+  if (submitPhase.value === "error") {
+    operations.add("bucket_write", "Create namespace", "error", submitError.value)
+  }
 }
 </script>
 

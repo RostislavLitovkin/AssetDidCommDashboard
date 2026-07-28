@@ -559,25 +559,6 @@ async function encryptOutgoing(plaintext: Uint8Array | string, extraProtectedHea
     .encrypt(publicKey)
 }
 
-function logOperationUpdate(update: OperationUpdate): void {
-  // Signing drives the submit button only — logging it would add a notification
-  // popup to every signed operation.
-  if (update.stage === "signing") return
-  operations.add(
-    "bucket_write",
-    `buckets.write:${update.stage}`,
-    update.stage === "error" ? "error" : "info",
-    update.message
-  )
-}
-
-/** Key rotation only. The shared logOperationUpdate also serves chat sends,
- *  which must not drive this button's phase. */
-function logKeyRotationUpdate(update: OperationUpdate): void {
-  applyKeyUpdate(update)
-  logOperationUpdate(update)
-}
-
 function openFilePicker() {
   fileInputRef.value?.click()
 }
@@ -620,7 +601,6 @@ async function submitPending(pending: PendingOutgoingMessage): Promise<void> {
   sending.value = true
 
   const onOperationUpdate = (update: OperationUpdate): void => {
-    logOperationUpdate(update)
     if (update.stage === "error") updatePendingStatus(pending.id, "failed")
   }
 
@@ -641,7 +621,7 @@ async function submitPending(pending: PendingOutgoingMessage): Promise<void> {
         bucketId.value, encrypted, pending.senderAddress, onOperationUpdate
       )
     }
-    operations.add("bucket_write", result.method, "success", `Message submitted: ${result.id}`)
+    operations.add("bucket_write", "Send message", "success", `Message submitted: ${result.id}`)
     // The API is synchronous: once the call resolves the message is already
     // readable, so advance straight to "indexing", reload, and drop the bubble.
     updatePendingStatus(pending.id, "indexing")
@@ -835,14 +815,14 @@ async function createAndShareEncryptionKey(): Promise<void> {
         KEY_SHARING_MESSAGE_TAG,
         JSON.stringify(jweObject),
         ownerAddress,
-        logKeyRotationUpdate
+        applyKeyUpdate
       )
 
       operations.add(
         "bucket_write",
-        batchResult.method,
+        "Encryption key",
         "success",
-        `Bucket key rotated and shared. keyId=${keyId}, id=${batchResult.id}`
+        `Bucket key rotated and shared: key ${keyId}, message ${batchResult.id}`
       )
 
       await loadAll()
@@ -850,7 +830,7 @@ async function createAndShareEncryptionKey(): Promise<void> {
       // runKey records the message for the button; this inner catch keeps the
       // operation-log entry the page already had.
       const message = e instanceof Error ? e.message : "Unable to rotate bucket encryption key"
-      operations.add("bucket_write", "rotateKey+write", "error", message)
+      operations.add("bucket_write", "Encryption key", "error", message)
       throw e instanceof Error ? e : new Error(message)
     }
   })

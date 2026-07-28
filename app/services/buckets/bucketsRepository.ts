@@ -381,16 +381,16 @@ export class BucketsRepository {
     // The signature is a wallet popup and the request is a network round trip.
     // They are separate waits, so the UI gets separate stages: the boundary is
     // the moment `sign` resolves.
-    onUpdate?.({ stage: "signing", message: `Waiting for signature to ${method}…` })
+    onUpdate?.({ stage: "signing", message: "Waiting for your signature…" })
     const signWithProgress = async (rawBody: string): Promise<HeadersInit> => {
       const headers = await sign(rawBody)
-      onUpdate?.({ stage: "submitting", message: `Submitting ${method}…` })
+      onUpdate?.({ stage: "submitting", message: "Submitting…" })
       return headers
     }
     try {
       const data = await this.client.mutate<T>(document, variables, signWithProgress)
       const id = extractId(data)
-      onUpdate?.({ stage: "success", message: `${method} confirmed` })
+      onUpdate?.({ stage: "success", message: "Submitted" })
       return { id, method }
     } catch (error) {
       const message = error instanceof Error ? error.message : `${method} failed`

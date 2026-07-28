@@ -23,7 +23,6 @@ const loading = ref(false)
 const {
   phase: submitPhase,
   errorMessage: submitError,
-  isBusy: saving,
   markSigning,
   markSubmitting,
   fail: failSubmit,
@@ -99,6 +98,7 @@ async function loadProfile(): Promise<void> {
 function adoptActiveX25519Key(): void {
   x25519Key.value = activeX25519Key.value
   x25519Touched.value = true
+  resetSubmit()
 }
 
 async function validateNickname(): Promise<void> {

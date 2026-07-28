@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ApiBucket, ApiMessage, BucketMemberRole, OperationUpdate } from "../../../../services/buckets/types"
+import type { ApiBucket, ApiMessage, BucketMemberRole } from "../../../../services/buckets/types"
 import { normalizeX25519ToJwkX } from "../../../../services/buckets/valueCodecs"
 import { ProfileClient } from "../../../../services/profile/profileClient"
 import type { Profile } from "../../../../types/profile"
@@ -109,7 +109,6 @@ const memberProfiles = ref<Record<string, Profile | null>>({})
 const profilesLoading = ref(false)
 const contributorX25519Keys = ref<Record<string, string>>({})
 const viewerX25519Keys = ref<Record<string, string>>({})
-const currentBucketCall = ref("write")
 const {
   phase: keyPhase,
   errorMessage: encryptionKeyError,
@@ -550,7 +549,6 @@ async function removeAllRoles(member: MemberEntry): Promise<void> {
   }
 
   removingMemberAddress.value = member.address
-  currentBucketCall.value = "removeBucketMemberRoles"
 
   try {
     const result = await bucketsRepository.removeBucketMemberRoles(
@@ -559,15 +557,14 @@ async function removeAllRoles(member: MemberEntry): Promise<void> {
       member.address,
       member.roles,
       member.viewerKey,
-      session.accountAddress,
-      logOperationUpdate
+      session.accountAddress
     )
 
-    operations.add("bucket_write", result.method, "success", `Member removed (${member.roles.join(", ")}): ${result.id}`)
+    operations.add("bucket_write", "Remove member", "success", `Member removed (${member.roles.join(", ")}): ${result.id}`)
     await loadBucketMembers()
   } catch (error) {
     membersError.value = error instanceof Error ? error.message : "Unable to remove member"
-    operations.add("bucket_write", currentBucketCall.value, "error", membersError.value)
+    operations.add("bucket_write", "Remove member", "error", membersError.value)
   } finally {
     removingMemberAddress.value = ""
   }
@@ -723,7 +720,6 @@ async function generateAndShareEncryptionKey(): Promise<void> {
       const jweDigest = Array.from(new Uint8Array(jweDigestBuffer)).map((value) => value.toString(16).padStart(2, "0")).join("")
       console.log(`Key-sharing JWE digest (sha256): 0x${jweDigest}`)
       console.log("--- [ADMIN] 4c. Submitting rotateKey + write mutation ---")
-      currentBucketCall.value = "rotateKey+write"
       const batchResult = await bucketsRepository.rotateBucketKeyAndShare(
         namespaceId,
         bucketId.value,
@@ -731,7 +727,7 @@ async function generateAndShareEncryptionKey(): Promise<void> {
         keySharingTag,
         jweString,
         ownerAddress,
-        logKeyRotationUpdate
+        applyKeyUpdate
       )
       console.log(`✅ Bucket key rotation + tag + key-sharing message finalized. Result id: ${batchResult.id}`)
 
@@ -741,9 +737,9 @@ async function generateAndShareEncryptionKey(): Promise<void> {
 
       operations.add(
         "bucket_write",
-        batchResult.method,
+        "Encryption key",
         "success",
-        `Bucket key rotated and shared. keyId=${keyId}, id=${batchResult.id}`
+        `Bucket key rotated and shared: key ${keyId}, message ${batchResult.id}`
       )
 
       await loadMessages()
@@ -751,7 +747,7 @@ async function generateAndShareEncryptionKey(): Promise<void> {
       // runKey records the message for the button; this inner catch keeps the
       // operation-log entry and console trace the page already had.
       const message = error instanceof Error ? error.message : "Unable to rotate bucket encryption key"
-      operations.add("bucket_write", currentBucketCall.value, "error", message)
+      operations.add("bucket_write", "Encryption key", "error", message)
       console.error("❌ Error rotating bucket key", error)
       throw error instanceof Error ? error : new Error(message)
     } finally {
@@ -1217,25 +1213,6 @@ function formatTimestamp(value: Date): string {
   })
 }
 
-function logOperationUpdate(update: OperationUpdate): void {
-  // Signing drives the submit button only — logging it would add a notification
-  // popup to every signed operation.
-  if (update.stage === "signing") return
-  operations.add(
-    "bucket_write",
-    `${currentBucketCall.value}:${update.stage}`,
-    update.stage === "error" ? "error" : "info",
-    update.message
-  )
-}
-
-/** Key rotation only. The shared logOperationUpdate also serves the member
- *  operations on this page, which must not drive this button's phase. */
-function logKeyRotationUpdate(update: OperationUpdate): void {
-  applyKeyUpdate(update)
-  logOperationUpdate(update)
-}
-
 async function sendMessage() {
   sendError.value = ""
   const payload = sendText.value.trim()
@@ -1261,22 +1238,20 @@ async function sendMessage() {
 
   sendText.value = ""
   sending.value = true
-  currentBucketCall.value = "write"
 
   try {
     const encryptedPayload = await encryptOutgoingBucketMessage(payload)
     const result = await bucketsRepository.createMessage(
       bucketId.value,
       encryptedPayload,
-      session.accountAddress,
-      logOperationUpdate
+      session.accountAddress
     )
     const pending = pendingMessages.value.find((entry) => entry.id === pendingId)
     if (pending) {
       pending.deliveryState = "sent"
     }
 
-    operations.add("bucket_write", result.method, "success", `Message submitted: ${result.id}`)
+    operations.add("bucket_write", "Send message", "success", `Message submitted: ${result.id}`)
     await loadMessages()
     pendingMessages.value = pendingMessages.value.filter((entry) => entry.deliveryState === "failed")
   } catch (error) {
@@ -1287,7 +1262,7 @@ async function sendMessage() {
       pending.deliveryState = "failed"
     }
 
-    operations.add("bucket_write", currentBucketCall.value, "error", message)
+    operations.add("bucket_write", "Send message", "error", message)
     if (!sendText.value) {
       sendText.value = payload
     }
