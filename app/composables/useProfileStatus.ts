@@ -2,6 +2,7 @@ import { computed } from "vue"
 import { useWallet } from "./useWallet"
 import { ProfileClient } from "../services/profile/profileClient"
 import { useProfileStore } from "../stores/profile"
+import { normalizeApiAddress } from "../services/wallet/addressUtils"
 import type { Profile } from "../types/profile"
 
 /**
@@ -15,9 +16,13 @@ export function useProfileStatus() {
   const runtimeConfig = useRuntimeConfig()
   const profileClient = new ProfileClient(String(runtimeConfig.public.profileApiUrl))
 
+  // The API stores prefix-42 addresses, so a wallet reporting some other prefix
+  // must be normalized before lookup or its own profile 404s.
+  const apiAddress = computed(() => normalizeApiAddress(wallet.accountAddress.value || ""))
+
   async function refresh(options: { force?: boolean } = {}): Promise<void> {
     await store.load(
-      wallet.accountAddress.value || "",
+      apiAddress.value,
       (address) => profileClient.getProfile(address),
       options
     )
@@ -25,7 +30,7 @@ export function useProfileStatus() {
 
   /** Adopts a profile the caller just wrote, skipping the round trip. */
   function setProfile(profile: Profile | null): void {
-    store.setProfile(wallet.accountAddress.value || "", profile)
+    store.setProfile(apiAddress.value, profile)
   }
 
   return {
