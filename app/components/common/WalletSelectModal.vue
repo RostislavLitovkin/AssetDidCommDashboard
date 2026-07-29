@@ -8,6 +8,7 @@ import { useWallet } from "../../composables/useWallet"
 import { useSettingsStore } from "../../stores/settings"
 import { detectInstalledWallets, walletsForKind, hasInstalledWallet } from "../../services/wallet/walletCatalog"
 import type { WalletBrandId } from "../../services/wallet/walletCatalog"
+import type { WalletInfo } from "../../services/wallet/types"
 
 const props = withDefaults(defineProps<{ title?: string }>(), { title: "Select Wallet" })
 
@@ -20,9 +21,11 @@ const { formatAddress } = useAddress()
 
 const dialogRef = ref<HTMLElement | null>(null)
 const accounts = ref<Array<{ address: string; name: string; source: string }>>([])
+const walletChoices = ref<WalletInfo[] | null>(null)
 const isLoading = ref(true)
 const isSelecting = ref(false)
 const selectingAddress = ref("")
+const selectingWallet = ref("")
 const connectError = ref("")
 const walletInstalled = ref(false)
 const installedIds = ref<Set<WalletBrandId>>(new Set())
@@ -37,12 +40,21 @@ const unlockHint = computed(() =>
     : "No accounts available. Unlock your extension, allow access for this site, then check again."
 )
 
+const connectedProviderName = computed(() =>
+  wallet.walletStatus.value === "connected" ? wallet.providerName.value || "" : ""
+)
+
 function brandForSource(source: string): WalletBrandId | null {
   const normalized = source.toLowerCase()
   const entry = catalogEntries.value.find(
     (candidate) => candidate.id === normalized || candidate.name.toLowerCase() === normalized
   )
   return entry?.id ?? null
+}
+
+/** Wallet-provided icons are untrusted strings; only data: image URIs render. */
+function safeIcon(choice: WalletInfo): string | null {
+  return choice.icon?.startsWith("data:image/") ? choice.icon : null
 }
 
 function downloadHost(url: string): string {
@@ -56,11 +68,44 @@ async function loadAccounts(): Promise<void> {
   installedIds.value = detectInstalledWallets(settings.walletType)
 
   try {
-    accounts.value = await wallet.listAccounts()
+    const choices = await wallet.listWallets()
+    if (choices) {
+      // Picker flow (Solana): discovery only — no connect popup on open.
+      walletChoices.value = choices
+      accounts.value = []
+    } else {
+      walletChoices.value = null
+      accounts.value = await wallet.listAccounts()
+    }
   } catch {
     accounts.value = []
   } finally {
     isLoading.value = false
+  }
+
+  // Exactly one wallet: connect it immediately, no extra click. On failure
+  // the single row stays visible with the inline error for a manual retry.
+  if (walletChoices.value?.length === 1 && !isSelecting.value) {
+    await connectWallet(walletChoices.value[0]!.name)
+  }
+}
+
+async function connectWallet(name: string): Promise<void> {
+  connectError.value = ""
+  isSelecting.value = true
+  selectingWallet.value = name
+
+  try {
+    await wallet.connectWith(name)
+  } finally {
+    isSelecting.value = false
+    selectingWallet.value = ""
+  }
+
+  if (wallet.walletStatus.value === "connected") {
+    emit("close")
+  } else {
+    connectError.value = "Connection failed — the wallet declined or the account is no longer available."
   }
 }
 
@@ -124,6 +169,47 @@ onBeforeUnmount(() => {
       </div>
 
       <ParticleLoader v-if="isLoading" label="Looking for wallets..." />
+
+      <template v-else-if="walletChoices && walletChoices.length">
+        <p class="muted" style="margin: 0; font-size: 13px">Choose a wallet to connect.</p>
+        <div class="stack" style="max-height: 300px; overflow: auto; gap: 8px">
+          <button
+            v-for="choice in walletChoices"
+            :key="choice.name"
+            class="btn wallet-account-btn"
+            type="button"
+            :disabled="isSelecting"
+            @click="connectWallet(choice.name)"
+          >
+            <ParticleLoader
+              v-if="isSelecting && selectingWallet === choice.name"
+              size="inline"
+              label="Connecting wallet"
+              style="min-width: 0"
+            />
+            <template v-else>
+              <WalletBrandIcon
+                v-if="brandForSource(choice.name)"
+                :brand="brandForSource(choice.name)!"
+                :size="26"
+                class="wallet-account-icon"
+              />
+              <img
+                v-else-if="safeIcon(choice)"
+                :src="safeIcon(choice)!"
+                alt=""
+                width="26"
+                height="26"
+                class="wallet-account-icon wallet-choice-icon"
+              />
+              <span class="stack" style="gap: 2px; min-width: 0; flex: 1; text-align: left">
+                <strong>{{ choice.name }}</strong>
+              </span>
+              <span v-if="choice.name === connectedProviderName" class="wallet-connected-badge">Connected</span>
+            </template>
+          </button>
+        </div>
+      </template>
 
       <template v-else-if="accounts.length">
         <p class="muted" style="margin: 0; font-size: 13px">Choose an account to connect.</p>
@@ -266,6 +352,11 @@ onBeforeUnmount(() => {
 
 .wallet-account-icon {
   flex-shrink: 0;
+}
+
+.wallet-choice-icon {
+  border-radius: 6px;
+  object-fit: contain;
 }
 
 .wallet-connected-badge {

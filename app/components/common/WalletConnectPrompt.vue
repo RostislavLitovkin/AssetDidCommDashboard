@@ -26,7 +26,7 @@ const effectiveDescription = computed(() =>
   props.description !== DEFAULT_DESCRIPTION
     ? props.description
     : settings.walletType === "solana"
-      ? "Connect a Solana wallet (Phantom, Solflare, or Backpack) to continue."
+      ? "Connect a Solana wallet to continue."
       : "Connect the Polkadot browser extension to continue."
 )
 
