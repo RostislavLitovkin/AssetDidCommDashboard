@@ -79,6 +79,9 @@ const membersFailed = ref(false)
 
 let lookupTimer: ReturnType<typeof setTimeout> | null = null
 let lastQueriedValue = ""
+// Set only for the programmatic clear that follows a successful add, so the
+// entry empties without the watcher wiping the success the button is showing.
+let keepSubmitPhaseOnNextChange = false
 
 const submitLabels: SubmitButtonLabels = {
   idle: "Add member",
@@ -327,7 +330,11 @@ watch(
 )
 
 watch(memberAddress, () => {
-  resetSubmit()
+  if (keepSubmitPhaseOnNextChange) {
+    keepSubmitPhaseOnNextChange = false
+  } else {
+    resetSubmit()
+  }
   profile.value = null
   profileError.value = ""
   profileStatus.value = "idle"
@@ -416,6 +423,12 @@ async function submitAddMember(): Promise<void> {
     operations.add("bucket_write", "Add member", "error", submitError.value)
     return
   }
+
+  // Empty the entry so the next address can be typed straight away. The button
+  // keeps reading "Member added" until that next entry resets it.
+  keepSubmitPhaseOnNextChange = true
+  memberAddress.value = ""
+  lastQueriedValue = ""
 
   // Keep the membership state honest: self-adding must retire the "Add me"
   // button, and re-adding the same member must be blocked from here on.
