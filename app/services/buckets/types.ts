@@ -3,7 +3,7 @@ export interface ApiNamespace {
   properties: string | null; creator: string | null; createdAt: string
 }
 export interface ApiBucket {
-  id: string; bucketId: string; namespaceId: string; creator: string | null
+  id: string; bucketId: string; namespaceId: string | null; creator: string | null
   name: string | null; category: string | null; isWritable: boolean
   encryptionKey: string | null; createdAt: string; updatedAt: string
 }
@@ -22,8 +22,8 @@ export interface BucketDetail {
 }
 export interface MessagePage { nodes: ApiMessage[]; hasNextPage: boolean; endCursor: string | null }
 export interface MyBucketSummary {
-  id: string; bucketId: string; namespaceId: string; name: string | null
-  isAdmin: boolean; isContributor: boolean; isViewer: boolean
+  id: string; bucketId: string; namespaceId: string | null; name: string | null
+  isAdmin: boolean; isContributor: boolean; isViewer: boolean; isCreator: boolean
 }
 export interface OperationUpdate { stage: "signing" | "submitting" | "success" | "error"; message: string }
 export type OperationUpdateHandler = (update: OperationUpdate) => void

@@ -185,7 +185,16 @@ const connectedNamespaceManager = computed(() => {
   if (!session.accountAddress) return false
   return namespaceManagers.value.some(m => addressesEqual(m, session.accountAddress!))
 })
-const canManageBucket = computed(() => connectedAdmin.value || connectedNamespaceManager.value)
+// A standalone bucket has no namespace, so the API lets its creator stand in
+// for the namespace manager.
+const connectedStandaloneCreator = computed(() => {
+  if (!session.accountAddress || !bucket.value) return false
+  return bucket.value.namespaceId == null && Boolean(bucket.value.creator)
+    && addressesEqual(bucket.value.creator!, session.accountAddress!)
+})
+const canManageBucket = computed(() =>
+  connectedAdmin.value || connectedNamespaceManager.value || connectedStandaloneCreator.value
+)
 
 // ── Empty-bucket setup timeline ────────────────────────────────────
 const memberCount = computed(() => {
@@ -803,11 +812,8 @@ async function createAndShareEncryptionKey(): Promise<void> {
     return
   }
 
-  const namespaceId = bucket.value?.namespaceId != null ? String(bucket.value.namespaceId) : ""
-  if (!namespaceId) {
-    failKey("Namespace id is required to rotate bucket encryption keys")
-    return
-  }
+  // Null for standalone buckets — the API accepts a null namespace id there.
+  const namespaceId = bucket.value?.namespaceId != null ? String(bucket.value.namespaceId) : null
 
   // Captured before the closure: the guard above narrows `session.accountAddress`
   // for this function body, but that narrowing does not survive into runKey's callback.

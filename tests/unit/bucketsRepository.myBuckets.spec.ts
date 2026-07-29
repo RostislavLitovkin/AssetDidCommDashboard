@@ -43,4 +43,31 @@ describe("fetchMyBuckets", () => {
     expect(requests[0]!.query).toContain("or: [")
     expect(requests[0]!.variables).toMatchObject({ address: "5ME", viewerKey: "0xmykey", first: 20 })
   })
+
+  it("includes standalone buckets the caller created and flags them isCreator", async () => {
+    const { repo, requests } = makeRepo([
+      {
+        data: {
+          buckets: {
+            totalCount: 1,
+            nodes: [{
+              id: "20", bucketId: "20", namespaceId: null, name: "solo", creator: "5ME",
+              admins: [], contributors: [], viewers: []
+            }],
+            pageInfo: { hasNextPage: false, endCursor: null }
+          }
+        }
+      }
+    ])
+
+    const page = await repo.fetchMyBuckets("5ME", "0xmykey")
+
+    expect(page.nodes[0]).toMatchObject({
+      bucketId: "20", namespaceId: null,
+      isAdmin: false, isContributor: false, isViewer: false, isCreator: true
+    })
+    // Creator-owned standalone buckets are matched by a dedicated or-branch.
+    expect(requests[0]!.query).toContain("creator: { eq: $address }")
+    expect(requests[0]!.query).toContain("namespaceId: { eq: null }")
+  })
 })

@@ -41,6 +41,9 @@ const bucketId = computed(() => {
 
 const role = ref<BucketMemberRole>("admin")
 const namespaceId = ref("")
+// Standalone buckets have no namespace — members are added with a null
+// namespace id, so an empty namespace field must not block the submit.
+const isStandalone = ref(false)
 const memberAddress = ref("")
 const {
   phase: submitPhase,
@@ -70,7 +73,7 @@ const submitLabels: SubmitButtonLabels = {
 
 const canSubmit = computed(() =>
   Boolean(memberAddress.value.trim()) &&
-  Boolean(namespaceId.value.trim()) &&
+  (Boolean(namespaceId.value.trim()) || isStandalone.value) &&
   profileStatus.value === "found" &&
   Boolean(profile.value?.x25519Key)
 )
@@ -93,7 +96,11 @@ async function loadNamespaceFromBucket(): Promise<void> {
 
   try {
     const bucket = await bucketsRepository.fetchBucket(bucketId.value)
-    namespaceId.value = bucket?.namespaceId?.trim() ?? ""
+    if (!bucket) {
+      return
+    }
+    namespaceId.value = bucket.namespaceId?.trim() ?? ""
+    isStandalone.value = bucket.namespaceId == null
   } catch {
   }
 }
@@ -212,7 +219,7 @@ async function submitAddMember(): Promise<void> {
   }
 
   const namespace = namespaceId.value.trim()
-  if (!namespace) {
+  if (!namespace && !isStandalone.value) {
     failSubmit("Namespace id is required")
     return
   }
@@ -238,7 +245,7 @@ async function submitAddMember(): Promise<void> {
   await runSubmit(async () => {
     const result = await bucketsRepository.addBucketMemberWithRole(
       role.value,
-      namespace,
+      namespace || null,
       bucket,
       normalizeApiAddress(member),
       x25519Key,

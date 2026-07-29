@@ -115,6 +115,17 @@ describe("createBucket", () => {
       metadata: { name: "chat", category: "", properties: [] }
     })
   })
+
+  it("sends a null namespaceId for standalone buckets via a nullable variable", async () => {
+    const { repo, requests } = makeRepo([{ data: { createBucket: { id: "9", bucketId: "9" } } }])
+    const result = await repo.createBucket(null, "chat", "5OWNER", undefined, "comms")
+    expect(result).toEqual({ id: "9", method: "createBucket" })
+    expect(requests[0]!.query).toContain("$namespaceId: BigInt,")
+    expect(requests[0]!.variables).toMatchObject({
+      namespaceId: null,
+      metadata: { name: "chat", category: "comms", properties: [] }
+    })
+  })
 })
 
 describe("member and manager mutations", () => {
