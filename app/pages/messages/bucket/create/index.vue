@@ -52,13 +52,6 @@ async function submitCreateBucket(): Promise<void> {
     return
   }
 
-  // The API's input validator rejects a blank category, so it is required here.
-  const trimmedCategory = category.value.trim()
-  if (!trimmedCategory) {
-    failSubmit("Category is required")
-    return
-  }
-
   const address = session.accountAddress
   if (!address) {
     failSubmit("Connect wallet before creating a bucket")
@@ -72,7 +65,7 @@ async function submitCreateBucket(): Promise<void> {
       name,
       address,
       logOperationUpdate,
-      trimmedCategory
+      category.value
     )
     operations.add("bucket_write", "Create bucket", "success", `Bucket created: ${result.id}`)
     createdId = result.id
@@ -101,11 +94,6 @@ async function submitCreateBucket(): Promise<void> {
 
       <template v-else>
         <section class="card stack" aria-live="polite">
-          <p class="muted" style="margin: 0">
-            This bucket is created outside any namespace. As its creator, you decide who
-            becomes a bucket admin.
-          </p>
-
           <label class="stack" style="gap: 6px">
             <span>Bucket Name</span>
             <input v-model="bucketName" class="input" type="text" name="bucket-name" placeholder="e.g. primary-bucket"
@@ -113,7 +101,7 @@ async function submitCreateBucket(): Promise<void> {
           </label>
 
           <label class="stack" style="gap: 6px">
-            <span>Category</span>
+            <span>Category (Optional)</span>
             <input v-model="category" class="input" type="text" name="category" placeholder="e.g. communication"
               :disabled="submitting" @input="resetSubmit" />
           </label>

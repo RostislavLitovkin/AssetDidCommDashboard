@@ -427,7 +427,11 @@ export class BucketsRepository {
     )
   }
 
-  /** A null `namespaceId` creates a standalone bucket — any signed caller may. */
+  /**
+   * A null `namespaceId` creates a standalone bucket — any signed caller may.
+   * The API rejects a blank category, so an omitted one falls back to
+   * "uncategorized" — category stays optional in the UI.
+   */
   async createBucket(
     namespaceId: string | null,
     name: string,
@@ -446,7 +450,7 @@ export class BucketsRepository {
       }`,
       {
         namespaceId: namespaceId?.trim() || null,
-        metadata: { name: trimmedName, category: category?.trim() ?? "", properties: [] }
+        metadata: { name: trimmedName, category: category?.trim() || "uncategorized", properties: [] }
       },
       (d) => d.createBucket.id
     )

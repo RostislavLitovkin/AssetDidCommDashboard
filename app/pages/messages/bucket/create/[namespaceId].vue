@@ -93,13 +93,6 @@ async function submitCreateBucket(): Promise<void> {
     return
   }
 
-  // The API's input validator rejects a blank category, so it is required here.
-  const trimmedCategory = category.value.trim()
-  if (!trimmedCategory) {
-    failSubmit("Category is required")
-    return
-  }
-
   const address = session.accountAddress
   if (!address) {
     failSubmit("Connect wallet before creating a bucket")
@@ -164,7 +157,7 @@ onMounted(async () => {
           </label>
 
           <label class="stack" style="gap: 6px">
-            <span>Category</span>
+            <span>Category (Optional)</span>
             <input v-model="category" class="input" type="text" name="category" placeholder="e.g. communication"
               :disabled="submitting || (!managersLoading && !isManager)" @input="resetSubmit" />
           </label>

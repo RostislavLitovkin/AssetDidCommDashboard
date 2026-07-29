@@ -48,8 +48,9 @@ chips, and the debug line renders `standalone` when `namespaceId` is null.
 A sibling of the namespaced `create/[namespaceId].vue` route: same
 PageHeader / WalletConnectPrompt / SubmitButton / useSubmitState skeleton,
 minus the namespace field and minus the manager gate (any signed caller may
-create). Name and Category are both required (category because the API's
-validator rejects blank). On success the page navigates to
+create). Name is required; Category is optional — the repository substitutes
+"uncategorized" for a blank one, because the API's validator rejects blank
+categories. On success the page navigates to
 `/indexed-bucket/{id}` so the setup timeline (add members → generate key)
 takes over; a standalone bucket is otherwise only reachable via My messages.
 
@@ -82,11 +83,11 @@ Types: `ApiBucket.namespaceId` and `MyBucketSummary.namespaceId` become
 - The `messages/bucket/[id]` pages keep their namespace guards — they are
   only reached from namespace listings, never for standalone buckets.
 
-### 5. Targeted fix in `create/[namespaceId].vue`
+### 5. Targeted fix for the blank-category rejection
 
-Category is currently labeled "(Optional)" and submitted as `""`, which the
-API rejects (`Required` validator). The field becomes required with a submit
-guard — same mutation, same fix as the new page.
+Category stays "(Optional)" on both create pages, but the API rejects a
+blank category (`Required` validator), so `createBucket` in the repository
+falls back to "uncategorized" when the field is left empty.
 
 ## Error handling
 

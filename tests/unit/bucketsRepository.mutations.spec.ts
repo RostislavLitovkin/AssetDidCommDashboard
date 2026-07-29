@@ -106,13 +106,14 @@ describe("createNamespace", () => {
 })
 
 describe("createBucket", () => {
-  it("sends namespaceId as a BigInt string and defaults category to empty string", async () => {
+  it("sends namespaceId as a BigInt string and defaults a blank category to uncategorized", async () => {
     const { repo, requests } = makeRepo([{ data: { createBucket: { id: "9", bucketId: "9" } } }])
     const result = await repo.createBucket("3", "chat", "5OWNER")
     expect(result).toEqual({ id: "9", method: "createBucket" })
     expect(requests[0]!.variables).toMatchObject({
       namespaceId: "3",
-      metadata: { name: "chat", category: "", properties: [] }
+      // The API rejects a blank category, so the repository substitutes a default.
+      metadata: { name: "chat", category: "uncategorized", properties: [] }
     })
   })
 
