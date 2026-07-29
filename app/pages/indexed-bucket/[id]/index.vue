@@ -3,6 +3,7 @@ import type { ApiBucket, ApiMessage, OperationUpdate } from "../../../services/b
 import { isFileMessage, KEY_SHARING_MESSAGE_TAG, normalizeX25519ToJwkX } from "../../../services/buckets/valueCodecs"
 import { ProfileClient } from "../../../services/profile/profileClient"
 import { findViewersWithoutKeyAccess } from "../../../services/messages/keySharingCoverage"
+import { withoutClaimedMessages } from "../../../services/messages/pendingMessageReconciliation"
 import { resolveAvatarUrls } from "../../../services/profile/avatarResolver"
 import { normalizeApiAddress } from "../../../services/wallet/addressUtils"
 import ParticleLoader from "../../../components/common/ParticleLoader.vue"
@@ -14,6 +15,7 @@ import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, 
 import { useAddress } from "../../../composables/useAddress"
 import { useWallet } from "../../../composables/useWallet"
 import { useSubmitState } from "../../../composables/useSubmitState"
+import { useAutoGrowTextarea } from "../../../composables/useAutoGrowTextarea"
 import * as jose from "jose"
 import { computed, nextTick, onMounted, ref, shallowRef, watch } from "vue"
 import { useRoute, useRuntimeConfig } from "nuxt/app"
@@ -112,6 +114,12 @@ const viewersMissingKeyCount = ref<number | null>(null)
 const sendText = ref("")
 const sendError = ref("")
 const sending = ref(false)
+const composerInputRef = ref<HTMLTextAreaElement | null>(null)
+const chatViewportRef = ref<HTMLElement | null>(null)
+
+// Grows the composer with the message up to the three-line cap in
+// .ib-composer-input's max-height, after which it scrolls.
+useAutoGrowTextarea(composerInputRef, () => sendText.value)
 
 // ── Optimistic outgoing messages ───────────────────────────────────
 // A pending message is rendered as a normal outgoing bubble whose timestamp
@@ -132,6 +140,8 @@ interface PendingOutgoingMessage {
   status: PendingStatus
   errorMessage?: string
   senderAddress: string
+  /** Set once the write resolves — hides the server copy until this bubble goes. */
+  serverId?: string
 }
 
 const pendingMessages = ref<PendingOutgoingMessage[]>([])
@@ -175,7 +185,16 @@ const connectedNamespaceManager = computed(() => {
   if (!session.accountAddress) return false
   return namespaceManagers.value.some(m => addressesEqual(m, session.accountAddress!))
 })
-const canManageBucket = computed(() => connectedAdmin.value || connectedNamespaceManager.value)
+// A standalone bucket has no namespace, so the API lets its creator stand in
+// for the namespace manager.
+const connectedStandaloneCreator = computed(() => {
+  if (!session.accountAddress || !bucket.value) return false
+  return bucket.value.namespaceId == null && Boolean(bucket.value.creator)
+    && addressesEqual(bucket.value.creator!, session.accountAddress!)
+})
+const canManageBucket = computed(() =>
+  connectedAdmin.value || connectedNamespaceManager.value || connectedStandaloneCreator.value
+)
 
 // ── Empty-bucket setup timeline ────────────────────────────────────
 const memberCount = computed(() => {
@@ -204,9 +223,18 @@ const addMemberUrl = computed(() => {
 })
 
 // ── Chat message rendering ─────────────────────────────────────────
+// While loadAll is hydrating and decrypting payloads the chat area shows a
+// full-height loader instead of messages — otherwise bubbles render with raw
+// JWE bodies until decryption catches up. Suppressed while optimistic pending
+// bubbles are on screen: the post-send reload must not blank the conversation.
+const showChatLoading = computed(() => loading.value && !pendingMessages.value.length)
+
 const chatMessages = computed<ChatMessageProps[]>(() => {
-  // Sort messages chronologically so oldest is at the top, newest at the bottom
-  const sortedMessages = [...messages.value].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+  // Sort messages chronologically so oldest is at the top, newest at the bottom.
+  // Messages an in-flight pending bubble already stands in for are held back so
+  // the two never render side by side (see pendingMessageReconciliation).
+  const visibleMessages = withoutClaimedMessages(messages.value, pendingMessages.value)
+  const sortedMessages = visibleMessages.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
 
   const entries = sortedMessages.map(m => {
     const payload = decryptedById.value[m.id] ?? payloadById.value[m.id]
@@ -251,8 +279,8 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
   })
 
   // Optimistic in-flight messages sit at the bottom, newest last. They stay in
-  // `pendingMessages` only until their submit call resolves and the page has
-  // reloaded to include them, so there is never a duplicate bubble to hide.
+  // `pendingMessages` until the reload that follows their submit call has
+  // hydrated the real message; the server copy is suppressed until then.
   for (const p of pendingMessages.value) {
     entries.push({
       id: p.id,
@@ -624,7 +652,13 @@ async function submitPending(pending: PendingOutgoingMessage): Promise<void> {
     operations.add("bucket_write", "Send message", "success", `Message submitted: ${result.id}`)
     // The API is synchronous: once the call resolves the message is already
     // readable, so advance straight to "indexing", reload, and drop the bubble.
-    updatePendingStatus(pending.id, "indexing")
+    // Claiming the returned id keeps the reloaded server copy hidden until this
+    // bubble goes away, so the message never appears twice.
+    const entry = pendingMessages.value.find(p => p.id === pending.id)
+    if (entry) {
+      entry.serverId = result.id
+      entry.status = "indexing"
+    }
     await loadAll()
     pendingMessages.value = pendingMessages.value.filter(p => p.id !== pending.id)
   } catch (e) {
@@ -633,6 +667,9 @@ async function submitPending(pending: PendingOutgoingMessage): Promise<void> {
     if (entry) {
       entry.status = "failed"
       entry.errorMessage = message
+      // Failed bubbles stay on screen until retried or discarded — never let
+      // one keep suppressing a server message.
+      entry.serverId = undefined
     }
     operations.add("bucket_write", "Send message", "error", message)
   } finally {
@@ -675,6 +712,7 @@ async function retryFailedMessage(id: string): Promise<void> {
   if (!entry || entry.status !== "failed" || sending.value) return
   entry.status = "signing"
   entry.errorMessage = undefined
+  entry.serverId = undefined
   await submitPending(entry)
 }
 
@@ -774,11 +812,8 @@ async function createAndShareEncryptionKey(): Promise<void> {
     return
   }
 
-  const namespaceId = bucket.value?.namespaceId != null ? String(bucket.value.namespaceId) : ""
-  if (!namespaceId) {
-    failKey("Namespace id is required to rotate bucket encryption keys")
-    return
-  }
+  // Null for standalone buckets — the API accepts a null namespace id there.
+  const namespaceId = bucket.value?.namespaceId != null ? String(bucket.value.namespaceId) : null
 
   // Captured before the closure: the guard above narrows `session.accountAddress`
   // for this function body, but that narrowing does not survive into runKey's callback.
@@ -869,13 +904,53 @@ function summarize(payload: string): string | undefined {
 }
 
 // ── Lifecycle ──────────────────────────────────────────────────────
+// Pins the chat viewport to the newest message, then keeps it pinned briefly
+// while layout settles: attachment images reserve no height, so each decode
+// after the first scroll grows the content and a single scroll would leave the
+// view stranded mid-history. Re-pinning stops once the height has been stable
+// for ~15 frames (hard cap 2s), when the user scrolls up, or when a newer
+// scrollToBottom call supersedes this one.
+let scrollPass = 0
 async function scrollToBottom() {
+  const pass = ++scrollPass
   await nextTick()
-  const el = document.getElementById("chat-bottom-anchor")
-  if (el) el.scrollIntoView({ behavior: "auto", block: "end" })
+  const viewport = chatViewportRef.value
+  if (!viewport) return
+
+  const pin = () => {
+    viewport.scrollTop = viewport.scrollHeight
+    return viewport.scrollTop
+  }
+
+  let lastHeight = viewport.scrollHeight
+  let lastTop = pin()
+  let stableFrames = 0
+  const deadline = performance.now() + 2000
+
+  while (stableFrames < 15 && performance.now() < deadline) {
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+    if (pass !== scrollPass) return
+    // scrollTop only ever decreases when the user scrolls up — content growth
+    // and scroll anchoring can only push it down. Hands off from then on.
+    if (viewport.scrollTop < lastTop - 1) return
+    if (viewport.scrollHeight === lastHeight) {
+      lastTop = viewport.scrollTop
+      stableFrames += 1
+      continue
+    }
+    lastHeight = viewport.scrollHeight
+    lastTop = pin()
+    stableFrames = 0
+  }
 }
 
 watch(() => chatMessages.value.length, () => scrollToBottom())
+// The loader replaces the message list wholesale, so when it clears the list
+// mounts fresh with scrollTop 0 and no length change to re-trigger the watch
+// above — scroll explicitly.
+watch(showChatLoading, isLoading => {
+  if (!isLoading) void scrollToBottom()
+})
 // A key rotation is relevant again whenever the viewer set changes (e.g. a
 // member with the viewer role is added or removed) — re-arm the button instead
 // of leaving it stuck on "Key shared" until the page unmounts.
@@ -890,8 +965,9 @@ watch(() => settings.x25519SecretJwk, async () => {
 
 onMounted(async () => {
   settings.initialize()
+  // No explicit scroll here: loadAll's completion flips showChatLoading off,
+  // and that watch scrolls once the message list has actually mounted.
   await loadAll()
-  await scrollToBottom()
 })
 </script>
 
@@ -929,8 +1005,10 @@ onMounted(async () => {
     </div>
 
     <!-- Chat viewport -->
-    <div class="ib-chat-viewport chat-viewport" role="log" aria-live="polite" aria-label="Indexed bucket messages">
-      <div class="ib-container ib-chat-inner">
+    <div ref="chatViewportRef" class="ib-chat-viewport chat-viewport" role="log" aria-live="polite"
+      aria-label="Indexed bucket messages">
+      <ParticleLoader v-if="showChatLoading" size="page" label="Loading messages..." class="ib-chat-loading" />
+      <div v-else class="ib-container ib-chat-inner">
         <ChatMessageEntry v-for="msg in chatMessages" :key="msg.id" :message="msg" :show-avatars="true"
           @retry="retryFailedMessage(msg.id)" @discard="discardFailedMessage(msg.id)" />
 
@@ -1001,8 +1079,6 @@ onMounted(async () => {
         <p v-else-if="!chatMessages.length && !loading" class="muted" style="text-align:center">
           No messages found for this bucket.
         </p>
-
-        <div id="chat-bottom-anchor"></div>
       </div>
     </div>
 
@@ -1059,8 +1135,8 @@ onMounted(async () => {
               :disabled="sending || !activeSecretJwk" title="Attach file">
               <Paperclip :size="18" />
             </button>
-            <textarea v-model="sendText" class="input ib-composer-input" name="message-text"
-              placeholder="Write a message" rows="1" :disabled="sending" />
+            <textarea ref="composerInputRef" v-model="sendText" class="input ib-composer-input composer-scroll"
+              name="message-text" placeholder="Write a message" rows="1" :disabled="sending" />
           </template>
           <button class="btn btn-primary ib-composer-send" type="submit"
             :disabled="sending || loading || !activeSecretJwk">
@@ -1364,6 +1440,12 @@ onMounted(async () => {
   overscroll-behavior: contain;
   min-height: 0;
   -webkit-overflow-scrolling: touch;
+  padding-top: 10px;
+}
+
+/* Fills the whole viewport while payloads hydrate and decrypt. */
+.ib-chat-loading {
+  flex: 1;
 }
 
 .ib-chat-inner {
@@ -1457,8 +1539,15 @@ onMounted(async () => {
 .ib-composer-input {
   flex: 1;
   min-height: 40px;
-  max-height: 120px;
-  border-radius: 999px;
+  /* Three lines, border-box: 3 × 22px line + 16px padding + 4px border. Keep in
+     sync with the line-height and padding below — useAutoGrowTextarea only ever
+     asks to fit the content, and this is what stops it. */
+  max-height: 86px;
+  /* Exactly half the 42px single-line height, so the composer is an identical
+     pill at rest and relaxes into a rounded rectangle as it grows. A 999px
+     radius would resolve to a 43px curve at three lines — a stadium, with the
+     text hugging the bends. */
+  border-radius: 21px;
   padding: 8px 14px;
   background: var(--surface-bg);
   border: 1px solid var(--border-default);

@@ -1,6 +1,7 @@
 import { resolveWalletProvider } from "../services/wallet/resolveWalletProvider"
 import { hashApiBody } from "../services/wallet/signingCore"
 import type { ProfilePayloadBody } from "../services/profile/profileSigning"
+import type { WalletInfo } from "../services/wallet/types"
 import { useSettingsStore } from "../stores/settings"
 
 export function useWallet() {
@@ -30,6 +31,29 @@ export function useWallet() {
 
   async function listAccounts(): Promise<Array<{ address: string; name: string; source: string }>> {
     return provider().listAccounts()
+  }
+
+  /** Null when the active provider has no wallet picker (Polkadot) — callers
+   *  fall back to the account-list flow. */
+  async function listWallets(): Promise<WalletInfo[] | null> {
+    const active = provider()
+    return active.listWallets ? active.listWallets() : null
+  }
+
+  async function connectWith(name: string): Promise<void> {
+    try {
+      store.setConnecting()
+      const active = provider()
+      if (!active.connectWith) {
+        throw new Error("WALLET_EXTENSION_UNAVAILABLE")
+      }
+      const session = await active.connectWith(name)
+      store.setConnected(session.address, session.provider, session.kind)
+      operations.add("wallet", session.address, "success", "Wallet connected")
+    } catch (error) {
+      store.setRejected()
+      operations.add("wallet", "connect", "error", error instanceof Error ? error.message : "Wallet connection failed")
+    }
   }
 
   async function connectToAddress(address: string): Promise<void> {
@@ -70,6 +94,8 @@ export function useWallet() {
     providerName: computed(() => store.providerName),
     connect,
     listAccounts,
+    listWallets,
+    connectWith,
     connectToAddress,
     signProfileRequest,
     disconnect

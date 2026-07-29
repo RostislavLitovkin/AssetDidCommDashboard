@@ -390,10 +390,19 @@ function formatFileSize(base64: string): string {
   margin-left: -12px;
 }
 
-.chat-attachment-img {
+/* One box for every inline medium: image and video are framed identically, so
+   the two can't drift apart. Margin rather than padding so the radius rounds
+   the medium itself, not the transparent padding box around it. */
+.chat-attachment-img,
+.chat-attachment-video {
   display: block;
-  width: 100%;
+  width: calc(100% - 24px);
+  margin: 0 12px;
   max-height: 420px;
+  border-radius: 10px;
+}
+
+.chat-attachment-img {
   object-fit: cover;
   cursor: pointer;
 }
@@ -402,10 +411,16 @@ function formatFileSize(base64: string): string {
   opacity: 0.92;
 }
 
+/* Contain, not cover: a portrait clip keeps every frame instead of being
+   cropped mid-playback. The leftover space is tinted to the bubble rather than
+   left as the browser's black slab. */
 .chat-attachment-video {
-  display: block;
-  width: 100%;
-  max-height: 420px;
+  object-fit: contain;
+  background: color-mix(in srgb, var(--color-primary) 10%, var(--color-white));
+}
+
+.chat-bubble-outgoing .chat-attachment-video {
+  background: rgba(0, 0, 0, 0.14);
 }
 
 .chat-attachment-audio {

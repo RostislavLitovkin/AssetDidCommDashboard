@@ -1,38 +1,8 @@
-import { hexToU8a, u8aToHex } from "@polkadot/util"
-import { decodeAddress, encodeAddress } from "@polkadot/util-crypto"
+import { encodeAddress } from "@polkadot/util-crypto"
 import { computed } from "vue"
 import { useSettingsStore } from "../stores/settings"
-import { isSolanaAddress } from "../services/wallet/addressUtils"
-
-function toAddressBytes(value: string): Uint8Array | undefined {
-  const trimmed = value.trim()
-  if (!trimmed) {
-    return undefined
-  }
-
-  if (/^0x[0-9a-fA-F]{64}$/.test(trimmed)) {
-    try {
-      return hexToU8a(trimmed)
-    } catch {
-      return undefined
-    }
-  }
-
-  try {
-    return decodeAddress(trimmed)
-  } catch {
-    return undefined
-  }
-}
-
-function toPublicKeyHex(value: string): string | undefined {
-  const bytes = toAddressBytes(value)
-  if (!bytes || bytes.length !== 32) {
-    return undefined
-  }
-
-  return u8aToHex(bytes).toLowerCase()
-}
+import { addressesEqual, toPublicKeyHex } from "../services/wallet/addressUtils"
+import { hexToU8a } from "@polkadot/util"
 
 export function useAddress() {
   const settings = useSettingsStore()
@@ -42,37 +12,23 @@ export function useAddress() {
 
   function formatAddress(value: string): string {
     const trimmed = value.trim()
-    const bytes = toAddressBytes(trimmed)
-    if (!bytes || bytes.length !== 32) {
+    const publicKeyHex = toPublicKeyHex(trimmed)
+    if (!publicKeyHex) {
       return trimmed
     }
 
     try {
-      return encodeAddress(bytes, ss58Prefix.value)
+      return encodeAddress(hexToU8a(publicKeyHex), ss58Prefix.value)
     } catch {
       return trimmed
     }
   }
 
-  function addressesEqual(left: string, right: string): boolean {
-    const leftHex = toPublicKeyHex(left)
-    const rightHex = toPublicKeyHex(right)
-
-    if (leftHex && rightHex) {
-      return leftHex === rightHex
-    }
-
-    // base58 is case-sensitive — never lowercase Solana addresses.
-    if (isSolanaAddress(left) || isSolanaAddress(right)) {
-      return left.trim() === right.trim()
-    }
-
-    return left.trim().toLowerCase() === right.trim().toLowerCase()
-  }
-
   return {
     ss58Prefix,
     formatAddress,
+    // Pure identity comparison — lives in addressUtils so non-Vue modules
+    // (e.g. bucket membership) can use it too.
     addressesEqual
   }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { base58Encode, encodeAddress } from "@polkadot/util-crypto"
-import { isSolanaAddress, normalizeApiAddress } from "../../app/services/wallet/addressUtils"
+import { addressesEqual, isAddressLike, isSolanaAddress, normalizeApiAddress } from "../../app/services/wallet/addressUtils"
 
 // 32 known bytes -> valid ss58 in several prefixes, and a base58 "Solana" form.
 const KEY = new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 1))
@@ -32,6 +32,29 @@ describe("normalizeApiAddress", () => {
   })
   it("passes unparseable input through trimmed", () => {
     expect(normalizeApiAddress("  not-an-address ")).toBe("not-an-address")
+  })
+})
+
+describe("isAddressLike", () => {
+  it("accepts SS58 and Solana addresses", () => {
+    expect(isAddressLike(SS58_PREFIX0)).toBe(true)
+    expect(isAddressLike(SOLANA)).toBe(true)
+  })
+  it("rejects nicknames and blanks so they can be looked up by nickname", () => {
+    expect(isAddressLike("alice")).toBe(false)
+    expect(isAddressLike("")).toBe(false)
+  })
+})
+
+describe("addressesEqual", () => {
+  it("ignores the SS58 prefix", () => {
+    expect(addressesEqual(SS58_PREFIX0, SS58_PREFIX42)).toBe(true)
+  })
+  it("matches an SS58 address against its 0x public key", () => {
+    expect(addressesEqual(SS58_PREFIX42, `0x${Buffer.from(KEY).toString("hex")}`)).toBe(true)
+  })
+  it("separates distinct identities", () => {
+    expect(addressesEqual(SS58_PREFIX42, encodeAddress(new Uint8Array(32).fill(9), 42))).toBe(false)
   })
 })
 

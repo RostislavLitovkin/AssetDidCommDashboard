@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { base58Encode } from "@polkadot/util-crypto"
 import { SolanaWalletProvider } from "../../app/services/wallet/solanaProvider"
+import {
+  initSolanaWalletRegistry,
+  resetSolanaWalletRegistry
+} from "../../app/services/wallet/solanaWalletRegistry"
+import {
+  STANDARD_ADDRESS,
+  STANDARD_SIGNATURE,
+  announceWallet,
+  fakeStandardWallet,
+  stubWalletStandardWindow
+} from "./helpers/walletStandard"
 
 const SIGNATURE = new Uint8Array(Array.from({ length: 64 }, (_, i) => i + 1))
 const ADDRESS = "SoLAddr111111111111111111111111111111111111"
@@ -15,9 +26,20 @@ function fakeInjected(overrides: Record<string, unknown> = {}) {
 }
 
 afterEach(() => {
+  resetSolanaWalletRegistry()
   vi.unstubAllGlobals()
   vi.useRealTimers()
 })
+
+/** Stubs window with the given legacy globals AND registers the given standard wallets. */
+function stubMixedWindow(extras: Record<string, unknown>, ...standard: ReturnType<typeof fakeStandardWallet>[]) {
+  const win = stubWalletStandardWindow(extras)
+  initSolanaWalletRegistry()
+  for (const wallet of standard) {
+    announceWallet(win, wallet)
+  }
+  return win
+}
 
 describe("SolanaWalletProvider discovery", () => {
   it("prefers Phantom, then Solflare, then Backpack", async () => {
@@ -140,5 +162,143 @@ describe("SolanaWalletProvider.signApiRequest", () => {
       new SolanaWalletProvider().signApiRequest(ADDRESS, "POST", "/graphql", "0xB")
     ).rejects.toThrow("WALLET_ACCOUNT_NOT_FOUND")
     expect(injected.signMessage).not.toHaveBeenCalled()
+  })
+})
+
+describe("SolanaWalletProvider Wallet Standard discovery", () => {
+  it("lists legacy wallets first, then registry wallets, without connecting", async () => {
+    const phantom = fakeInjected()
+    const nightly = fakeStandardWallet()
+    stubMixedWindow({ phantom: { solana: phantom } }, nightly)
+
+    const wallets = await new SolanaWalletProvider().listWallets()
+    expect(wallets).toEqual([
+      { name: "Phantom", icon: undefined },
+      { name: "Nightly", icon: nightly.icon }
+    ])
+    expect(phantom.connect).not.toHaveBeenCalled()
+    const connectFeature = nightly.features["standard:connect"] as { connect: ReturnType<typeof vi.fn> }
+    expect(connectFeature.connect).not.toHaveBeenCalled()
+  })
+
+  it("dedupes a registry wallet whose name matches a legacy global", async () => {
+    stubMixedWindow({ phantom: { solana: fakeInjected() } }, fakeStandardWallet({ name: "phantom" }))
+    const wallets = await new SolanaWalletProvider().listWallets()
+    expect(wallets.map((w) => w.name)).toEqual(["Phantom"])
+  })
+
+  it("listWallets is empty when nothing is installed", async () => {
+    stubMixedWindow({})
+    expect(await new SolanaWalletProvider().listWallets()).toEqual([])
+  })
+})
+
+describe("SolanaWalletProvider.connectWith", () => {
+  it("connects the named standard wallet", async () => {
+    stubMixedWindow({ phantom: { solana: fakeInjected() } }, fakeStandardWallet())
+    const session = await new SolanaWalletProvider().connectWith("Nightly")
+    expect(session).toEqual({ address: STANDARD_ADDRESS, provider: "Nightly", kind: "solana" })
+  })
+
+  it("connects the named legacy wallet", async () => {
+    const solflare = fakeInjected()
+    stubMixedWindow({ solflare })
+    const session = await new SolanaWalletProvider().connectWith("Solflare")
+    expect(session.provider).toBe("Solflare")
+    expect(solflare.connect).toHaveBeenCalled()
+  })
+
+  it("rejects an unknown wallet name with WALLET_EXTENSION_UNAVAILABLE", async () => {
+    stubMixedWindow({ phantom: { solana: fakeInjected() } })
+    await expect(new SolanaWalletProvider().connectWith("Nightly")).rejects.toThrow("WALLET_EXTENSION_UNAVAILABLE")
+  })
+
+  it("rejects with WALLET_CONNECTION_REJECTED when the standard wallet returns no accounts", async () => {
+    const nightly = fakeStandardWallet()
+    ;(nightly.features["standard:connect"] as { connect: ReturnType<typeof vi.fn> }).connect =
+      vi.fn().mockResolvedValue({ accounts: [] })
+    stubMixedWindow({}, nightly)
+    await expect(new SolanaWalletProvider().connectWith("Nightly")).rejects.toThrow("WALLET_CONNECTION_REJECTED")
+  })
+})
+
+describe("SolanaWalletProvider standard-wallet signing", () => {
+  it("signs raw payload bytes via solana:signMessage with the cached account (ed25519 contract)", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-07-11T22:58:41.735Z"))
+    const nightly = fakeStandardWallet()
+    stubMixedWindow({}, nightly)
+
+    const provider = new SolanaWalletProvider()
+    await provider.connectWith("Nightly")
+    const headers = await provider.signApiRequest(STANDARD_ADDRESS, "POST", "/graphql", "0xBODYHASH")
+
+    const signFeature = nightly.features["solana:signMessage"] as { signMessage: ReturnType<typeof vi.fn> }
+    expect(signFeature.signMessage).toHaveBeenCalledTimes(1)
+    const [input] = signFeature.signMessage.mock.calls[0]!
+    expect(input.account.address).toBe(STANDARD_ADDRESS)
+    expect(new TextDecoder().decode(input.message)).toBe("POST:/graphql:0xBODYHASH:2026-07-11T22:58:41.7350000Z")
+    expect(headers).toEqual({
+      "X-SS58-Address": STANDARD_ADDRESS,
+      "X-Signature": base58Encode(STANDARD_SIGNATURE),
+      "X-Timestamp": "2026-07-11T22:58:41.7350000Z"
+    })
+  })
+
+  it("connects first when asked to sign without a cached account", async () => {
+    const nightly = fakeStandardWallet()
+    stubMixedWindow({}, nightly)
+
+    const headers = await new SolanaWalletProvider().signApiRequest(STANDARD_ADDRESS, "POST", "/graphql", "0xB")
+    const connectFeature = nightly.features["standard:connect"] as { connect: ReturnType<typeof vi.fn> }
+    expect(connectFeature.connect).toHaveBeenCalled()
+    expect((headers as Record<string, string>)["X-Signature"]).toBe(base58Encode(STANDARD_SIGNATURE))
+  })
+
+  it("still rejects WALLET_ACCOUNT_NOT_FOUND when the cached account differs from the requested address", async () => {
+    const nightly = fakeStandardWallet()
+    stubMixedWindow({}, nightly)
+    const provider = new SolanaWalletProvider()
+    await provider.connectWith("Nightly")
+
+    await expect(provider.signApiRequest(ADDRESS, "POST", "/graphql", "0xB")).rejects.toThrow("WALLET_ACCOUNT_NOT_FOUND")
+  })
+
+  it("picks the wallet whose active address matches when several are connected", async () => {
+    const phantom = fakeInjected()
+    const nightly = fakeStandardWallet()
+    stubMixedWindow({ phantom: { solana: phantom } }, nightly)
+    const provider = new SolanaWalletProvider()
+    await provider.connectWith("Nightly")
+
+    await provider.signApiRequest(STANDARD_ADDRESS, "POST", "/graphql", "0xB")
+    const signFeature = nightly.features["solana:signMessage"] as { signMessage: ReturnType<typeof vi.fn> }
+    expect(signFeature.signMessage).toHaveBeenCalledTimes(1)
+    expect(phantom.signMessage).not.toHaveBeenCalled()
+  })
+})
+
+describe("SolanaWalletProvider.autoConnect across wallets", () => {
+  it("prefers the stored provider name for the silent reconnect", async () => {
+    const phantom = fakeInjected()
+    const nightly = fakeStandardWallet()
+    stubMixedWindow({ phantom: { solana: phantom } }, nightly)
+
+    const stored = { address: STANDARD_ADDRESS, provider: "Nightly", kind: "solana" as const }
+    const session = await new SolanaWalletProvider().autoConnect(stored, 0)
+
+    const connectFeature = nightly.features["standard:connect"] as { connect: ReturnType<typeof vi.fn> }
+    expect(connectFeature.connect).toHaveBeenCalledWith({ silent: true })
+    expect(phantom.connect).not.toHaveBeenCalled()
+    expect(session).toEqual({ address: STANDARD_ADDRESS, provider: "Nightly", kind: "solana" })
+  })
+
+  it("falls through failing wallets to the next silent candidate", async () => {
+    const phantom = fakeInjected({ connect: vi.fn().mockRejectedValue(new Error("not trusted")) })
+    const nightly = fakeStandardWallet()
+    stubMixedWindow({ phantom: { solana: phantom } }, nightly)
+
+    const session = await new SolanaWalletProvider().autoConnect(null, 0)
+    expect(session).toEqual({ address: STANDARD_ADDRESS, provider: "Nightly", kind: "solana" })
   })
 })

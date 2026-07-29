@@ -221,12 +221,13 @@ function download() {
   background: var(--color-white);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 150ms ease, color 150ms ease;
+  transition: border-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
 }
-.file-download:hover {
-  background: var(--color-primary);
-  color: var(--color-white);
+.file-download:hover,
+.file-download:focus-visible {
   border-color: var(--color-primary);
+  color: var(--color-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 20%, transparent);
 }
 
 @media (max-width: 640px) {

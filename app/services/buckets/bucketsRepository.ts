@@ -26,10 +26,17 @@ const BUCKET_FIELDS =
 const MESSAGE_FIELDS =
   "id messageId contributor reference tag description contentType contentHash ipfsContent createdAt"
 
+/**
+ * The API caps `MessageInput.ipfsContent` at 1 MiB of characters and rejects
+ * the whole write above it. A file message carries the entire encrypted file
+ * as its content, so anything past ~750 KB of file blows the cap.
+ */
+const MAX_IPFS_CONTENT_CHARS = 1_048_576
+
 export class BucketsRepository {
   protected readonly client: BucketsGraphqlClient
   protected readonly options: BucketsRepositoryOptions
-  private namespaceIdByBucket = new Map<string, string>()
+  private namespaceIdByBucket = new Map<string, string | null>()
 
   constructor(options: BucketsRepositoryOptions) {
     this.options = options
@@ -305,7 +312,7 @@ export class BucketsRepository {
     opts?: { first?: number; after?: string | null }
   ): Promise<{ nodes: MyBucketSummary[]; totalCount: number; hasNextPage: boolean; endCursor: string | null }> {
     type Node = {
-      id: string; bucketId: string; namespaceId: string; name: string | null
+      id: string; bucketId: string; namespaceId: string | null; name: string | null; creator: string | null
       admins: Array<{ subjectId: string }>
       contributors: Array<{ subjectId: string }>
       viewers: Array<{ viewerId: string }>
@@ -328,12 +335,13 @@ export class BucketsRepository {
               { admins: { some: { subjectId: { eq: $address } } } }
               { contributors: { some: { subjectId: { eq: $address } } } }
               { viewers: { some: { viewerId: { eq: $viewerKey } } } }
+              { and: [{ creator: { eq: $address } }, { namespaceId: { eq: null } }] }
             ]
           }
         ) {
           totalCount
           nodes {
-            id bucketId namespaceId name
+            id bucketId namespaceId name creator
             admins { subjectId }
             contributors { subjectId }
             viewers { viewerId }
@@ -355,7 +363,8 @@ export class BucketsRepository {
         name: n.name,
         isAdmin: n.admins.some((a) => a.subjectId === address),
         isContributor: n.contributors.some((c) => c.subjectId === address),
-        isViewer: Boolean(viewerKeyHex) && n.viewers.some((v) => v.viewerId === viewerKeyHex)
+        isViewer: Boolean(viewerKeyHex) && n.viewers.some((v) => v.viewerId === viewerKeyHex),
+        isCreator: n.creator === address
       }))
     }
   }
@@ -418,8 +427,13 @@ export class BucketsRepository {
     )
   }
 
+  /**
+   * A null `namespaceId` creates a standalone bucket — any signed caller may.
+   * The API rejects a blank category, so an omitted one falls back to
+   * "uncategorized" — category stays optional in the UI.
+   */
   async createBucket(
-    namespaceId: string,
+    namespaceId: string | null,
     name: string,
     ownerAddress: string,
     onUpdate?: OperationUpdateHandler,
@@ -431,12 +445,12 @@ export class BucketsRepository {
       "createBucket",
       ownerAddress,
       onUpdate,
-      `mutation CreateBucket($namespaceId: BigInt!, $metadata: BucketMetadataInput!) {
+      `mutation CreateBucket($namespaceId: BigInt, $metadata: BucketMetadataInput!) {
         createBucket(namespaceId: $namespaceId, metadata: $metadata) { id bucketId }
       }`,
       {
-        namespaceId: namespaceId.trim(),
-        metadata: { name: trimmedName, category: category?.trim() ?? "", properties: [] }
+        namespaceId: namespaceId?.trim() || null,
+        metadata: { name: trimmedName, category: category?.trim() || "uncategorized", properties: [] }
       },
       (d) => d.createBucket.id
     )
@@ -506,7 +520,7 @@ export class BucketsRepository {
   private async removeMember(
     field: "removeAdmin" | "removeContributor" | "removeViewer",
     argName: "admin" | "contributor" | "viewer",
-    namespaceId: string,
+    namespaceId: string | null,
     bucketId: string,
     member: string,
     ownerAddress: string,
@@ -516,10 +530,10 @@ export class BucketsRepository {
       field,
       ownerAddress,
       onUpdate,
-      `mutation RemoveMember($namespaceId: BigInt!, $bucketId: BigInt!, $${argName}: String!) {
+      `mutation RemoveMember($namespaceId: BigInt, $bucketId: BigInt!, $${argName}: String!) {
         ${field}(namespaceId: $namespaceId, bucketId: $bucketId, ${argName}: $${argName})
       }`,
-      { namespaceId: namespaceId.trim(), bucketId: bucketId.trim(), [argName]: member.trim() },
+      { namespaceId: namespaceId?.trim() || null, bucketId: bucketId.trim(), [argName]: member.trim() },
       (d) => {
         if (d[field] !== true) {
           throw new Error(`${field} reported no change — the member may not have had that role`)
@@ -529,20 +543,20 @@ export class BucketsRepository {
     )
   }
 
-  async removeBucketAdmin(namespaceId: string, bucketId: string, memberAddress: string, ownerAddress: string, onUpdate?: OperationUpdateHandler): Promise<MutationResult> {
+  async removeBucketAdmin(namespaceId: string | null, bucketId: string, memberAddress: string, ownerAddress: string, onUpdate?: OperationUpdateHandler): Promise<MutationResult> {
     return this.removeMember("removeAdmin", "admin", namespaceId, bucketId, memberAddress, ownerAddress, onUpdate)
   }
 
-  async removeBucketContributor(namespaceId: string, bucketId: string, memberAddress: string, ownerAddress: string, onUpdate?: OperationUpdateHandler): Promise<MutationResult> {
+  async removeBucketContributor(namespaceId: string | null, bucketId: string, memberAddress: string, ownerAddress: string, onUpdate?: OperationUpdateHandler): Promise<MutationResult> {
     return this.removeMember("removeContributor", "contributor", namespaceId, bucketId, memberAddress, ownerAddress, onUpdate)
   }
 
-  async removeBucketViewer(namespaceId: string, bucketId: string, viewerKey: string, ownerAddress: string, onUpdate?: OperationUpdateHandler): Promise<MutationResult> {
+  async removeBucketViewer(namespaceId: string | null, bucketId: string, viewerKey: string, ownerAddress: string, onUpdate?: OperationUpdateHandler): Promise<MutationResult> {
     return this.removeMember("removeViewer", "viewer", namespaceId, bucketId, normalizeFixed32ByteKey(viewerKey), ownerAddress, onUpdate)
   }
 
   async setBucketPublicKey(
-    namespaceId: string,
+    namespaceId: string | null,
     bucketId: string,
     newEncryptionKey: string,
     ownerAddress: string,
@@ -553,18 +567,20 @@ export class BucketsRepository {
       "resumeWriting",
       ownerAddress,
       onUpdate,
-      `mutation ResumeWriting($namespaceId: BigInt!, $bucketId: BigInt!, $newEncryptionKey: String!) {
+      `mutation ResumeWriting($namespaceId: BigInt, $bucketId: BigInt!, $newEncryptionKey: String!) {
         resumeWriting(namespaceId: $namespaceId, bucketId: $bucketId, newEncryptionKey: $newEncryptionKey) { id }
       }`,
-      { namespaceId: namespaceId.trim(), bucketId: bucketId.trim(), newEncryptionKey: key },
+      { namespaceId: namespaceId?.trim() || null, bucketId: bucketId.trim(), newEncryptionKey: key },
       (d) => d.resumeWriting.id
     )
   }
 
-  /** Resolve (and cache) the namespace that owns `bucketId` — `write` needs both ids. */
-  private async resolveNamespaceId(bucketId: string): Promise<string> {
-    const cached = this.namespaceIdByBucket.get(bucketId)
-    if (cached) return cached
+  /**
+   * Resolve (and cache) the namespace that owns `bucketId` — `write` needs both
+   * ids. Standalone buckets resolve to null, which the API accepts as-is.
+   */
+  private async resolveNamespaceId(bucketId: string): Promise<string | null> {
+    if (this.namespaceIdByBucket.has(bucketId)) return this.namespaceIdByBucket.get(bucketId)!
     const bucket = await this.fetchBucket(bucketId)
     if (!bucket) throw new Error(`Bucket ${bucketId} was not found`)
     this.namespaceIdByBucket.set(bucketId, bucket.namespaceId)
@@ -584,10 +600,14 @@ export class BucketsRepository {
     const pinata = new PinataStorageAdapter(this.options.pinataConfig)
     const cid = await pinata.upload(content)
 
+    // `ipfsContent` only mirrors the payload so readers can skip the gateway
+    // round-trip; the payload itself lives on IPFS under `reference`. When it
+    // is too large for the API, drop the mirror rather than fail the write —
+    // every read path already falls back to fetching from `reference`.
     return {
       reference: cid,
       tag: normalizedTag ?? null,
-      ipfsContent: content,
+      ipfsContent: content.length <= MAX_IPFS_CONTENT_CHARS ? content : null,
       metadata: {
         description: "",
         contentType,
@@ -617,7 +637,7 @@ export class BucketsRepository {
       "write",
       ownerAddress,
       onUpdate,
-      `mutation WriteMessage($namespaceId: BigInt!, $bucketId: BigInt!, $message: MessageInput!) {
+      `mutation WriteMessage($namespaceId: BigInt, $bucketId: BigInt!, $message: MessageInput!) {
         write(namespaceId: $namespaceId, bucketId: $bucketId, message: $message) { id messageId }
       }`,
       { namespaceId, bucketId: trimmedBucketId, message: messageInput },
@@ -639,7 +659,7 @@ export class BucketsRepository {
   }
 
   async rotateBucketKeyAndShare(
-    namespaceId: string,
+    namespaceId: string | null,
     bucketId: string,
     newEncryptionKey: string,
     tag: string,
@@ -654,23 +674,30 @@ export class BucketsRepository {
     // rotateKey refuses locked buckets, so the first key must be set with
     // resumeWriting. It behaves identically on an already-writable bucket
     // (sets the key, keeps it writable), so it covers key regeneration too.
-    return this.runMutation<{ resumeWriting?: { id: string }; write: { id: string } }>(
-      "resumeWriting+write",
+    // createTag precedes write because the API rejects messages whose tag was
+    // never created; it is idempotent, so repeating it on every rotation is safe.
+    return this.runMutation<{ resumeWriting?: { id: string }; createTag?: { id: string }; write: { id: string } }>(
+      "resumeWriting+createTag+write",
       ownerAddress,
       onUpdate,
-      `mutation RotateKeyAndShare($namespaceId: BigInt!, $bucketId: BigInt!, $newEncryptionKey: String!, $message: MessageInput!) {
+      `mutation RotateKeyAndShare($namespaceId: BigInt, $bucketId: BigInt!, $newEncryptionKey: String!, $newTag: String!, $message: MessageInput!) {
         resumeWriting(namespaceId: $namespaceId, bucketId: $bucketId, newEncryptionKey: $newEncryptionKey) { id }
+        createTag(bucketId: $bucketId, newTag: $newTag) { id }
         write(namespaceId: $namespaceId, bucketId: $bucketId, message: $message) { id messageId }
       }`,
       {
-        namespaceId: namespaceId.trim(),
+        namespaceId: namespaceId?.trim() || null,
         bucketId: bucketId.trim(),
         newEncryptionKey: key,
+        newTag: tag.trim(),
         message: messageInput
       },
       (d) => {
         if (!d.resumeWriting?.id) {
           throw new Error("resumeWriting reported no result — the key may not have been set")
+        }
+        if (!d.createTag?.id) {
+          throw new Error("createTag reported no result — the key-sharing tag may not exist")
         }
         return d.write.id
       }
@@ -679,7 +706,7 @@ export class BucketsRepository {
 
   async addBucketMemberWithRole(
     role: BucketMemberRole,
-    namespaceId: string,
+    namespaceId: string | null,
     bucketId: string,
     ss58Address: string,
     x25519Key: string,
@@ -688,7 +715,7 @@ export class BucketsRepository {
   ): Promise<MutationResult> {
     const viewerKey = normalizeFixed32ByteKey(x25519Key.trim())
     const vars: Record<string, unknown> = {
-      namespaceId: namespaceId.trim(),
+      namespaceId: namespaceId?.trim() || null,
       bucketId: bucketId.trim(),
       viewerKey
     }
@@ -698,7 +725,7 @@ export class BucketsRepository {
         "addViewer",
         ownerAddress,
         onUpdate,
-        `mutation AddViewer($namespaceId: BigInt!, $bucketId: BigInt!, $viewerKey: String!) {
+        `mutation AddViewer($namespaceId: BigInt, $bucketId: BigInt!, $viewerKey: String!) {
           addViewer(namespaceId: $namespaceId, bucketId: $bucketId, viewer: $viewerKey) { id }
         }`,
         vars,
@@ -729,7 +756,7 @@ export class BucketsRepository {
       fieldNames.join("+"),
       ownerAddress,
       onUpdate,
-      `mutation AddMemberWithViewer($namespaceId: BigInt!, $bucketId: BigInt!, $subject: String!, $viewerKey: String!) {
+      `mutation AddMemberWithViewer($namespaceId: BigInt, $bucketId: BigInt!, $subject: String!, $viewerKey: String!) {
         ${fieldLines.join("\n        ")}
       }`,
       vars,
@@ -745,7 +772,7 @@ export class BucketsRepository {
   }
 
   async removeBucketMemberRoles(
-    namespaceId: string,
+    namespaceId: string | null,
     bucketId: string,
     memberAddress: string,
     roles: BucketMemberRole[],
@@ -763,9 +790,9 @@ export class BucketsRepository {
 
     const fields: string[] = []
     const fieldNames: string[] = []
-    const varDefs: string[] = ["$namespaceId: BigInt!", "$bucketId: BigInt!"]
+    const varDefs: string[] = ["$namespaceId: BigInt", "$bucketId: BigInt!"]
     const vars: Record<string, unknown> = {
-      namespaceId: namespaceId.trim(),
+      namespaceId: namespaceId?.trim() || null,
       bucketId: bucketId.trim()
     }
     if (orderedRoles.includes("admin") || orderedRoles.includes("contributor")) {

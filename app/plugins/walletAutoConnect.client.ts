@@ -1,4 +1,5 @@
 import { resolveWalletProvider } from "../services/wallet/resolveWalletProvider"
+import { initSolanaWalletRegistry } from "../services/wallet/solanaWalletRegistry"
 import { useSessionStore } from "../stores/session"
 import { useSettingsStore } from "../stores/settings"
 import { useOperationsStore } from "../stores/operations"
@@ -8,6 +9,10 @@ export default defineNuxtPlugin(() => {
   if (!import.meta.client) {
     return
   }
+
+  // Attach the Wallet Standard listener before wallet scripts finish loading
+  // so autoConnect's retry loop can discover late-registering wallets.
+  initSolanaWalletRegistry()
 
   const session = useSessionStore()
   const settings = useSettingsStore()

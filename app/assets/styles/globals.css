@@ -148,6 +148,15 @@ select {
      shell — which is the second scrollbar we're avoiding. */
   flex: 1 1 0;
   min-height: 0;
+  /* Such a page scrolls inside itself, so the column can't also be the thing
+     that caps its width: the scrollbar belongs to .info-content-scroll, and a
+     capped, centred column would leave it floating in the middle of the screen.
+     Hand the full width over and let .info-content-scroll rebuild the reading
+     column out of its own gutters instead. */
+  width: 100%;
+  max-width: none;
+  margin-inline: 0;
+  padding-inline: 0;
 }
 
 .chat-custom-page {
@@ -164,7 +173,13 @@ select {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 24px;
+  /* Spans the shell edge to edge — that is what keeps the scrollbar against the
+     window — and recreates .container's reading column out of its own gutters:
+     the shell's 24px plus .container's 4px, widening past that once the column
+     would outgrow .container's 1100px cap (1100px less those two 4px gutters is
+     the 1092px below). Both halves of that sum have to keep matching .container,
+     or the page drifts off the column the setup banners above it still use. */
+  padding: 24px max(28px, (100% - 1092px) / 2);
   overscroll-behavior: contain;
 }
 
@@ -181,7 +196,9 @@ select {
   }
 
   .info-content-scroll {
-    padding: 16px;
+    /* Same sum as above against the shell's smaller padding here: 16px + 4px.
+       The column never reaches its cap at these widths, so it stays flat. */
+    padding: 16px 20px;
   }
 }
 
@@ -331,6 +348,52 @@ summary:focus-visible {
   border-radius: 8px;
   padding: 8px;
   width: 100%;
+}
+
+/* Grow-then-scroll behavior for the chat composers; their scrollbar comes from
+   the app-wide rules below like everywhere else. */
+.composer-scroll {
+  overflow-y: auto;
+}
+
+/* App-wide scrollbar: nothing but the handle. Arrow buttons are removed and the
+   track/corner are painted transparent, so the rounded primary pill is the only
+   visible part everywhere — the window scrollbar included. The transparent
+   border plus content-box clip insets the pill so it floats clear of rounded
+   container edges instead of jamming into the curve. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+  background: transparent;
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-track-piece,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-primary);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+/* Chrome ignores ::-webkit-scrollbar entirely once scrollbar-width is set, so the
+   standard properties stay behind a guard: Firefox draws its thin thumb-only bar
+   in the primary color, Chromium keeps the pill above. */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-primary) transparent;
+  }
 }
 
 .input:focus-visible,

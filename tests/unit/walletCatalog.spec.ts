@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   WALLET_CATALOG,
@@ -6,6 +6,11 @@ import {
   hasInstalledWallet,
   walletsForKind
 } from "../../app/services/wallet/walletCatalog"
+import {
+  initSolanaWalletRegistry,
+  resetSolanaWalletRegistry
+} from "../../app/services/wallet/solanaWalletRegistry"
+import { announceWallet, fakeStandardWallet, stubWalletStandardWindow } from "./helpers/walletStandard"
 
 describe("walletCatalog", () => {
   it("lists three wallets per kind", () => {
@@ -47,5 +52,26 @@ describe("walletCatalog", () => {
     expect(hasInstalledWallet("polkadot", { injectedWeb3: {} })).toBe(false)
     expect(hasInstalledWallet("solana", { solflare: {} })).toBe(true)
     expect(hasInstalledWallet("solana", {})).toBe(false)
+  })
+})
+
+describe("walletCatalog with Wallet Standard registry", () => {
+  afterEach(() => {
+    resetSolanaWalletRegistry()
+    vi.unstubAllGlobals()
+  })
+
+  it("hasInstalledWallet counts registered standard wallets for solana", () => {
+    const win = stubWalletStandardWindow()
+    initSolanaWalletRegistry()
+    announceWallet(win, fakeStandardWallet())
+    expect(hasInstalledWallet("solana", {})).toBe(true)
+  })
+
+  it("registry wallets do not count for polkadot", () => {
+    const win = stubWalletStandardWindow()
+    initSolanaWalletRegistry()
+    announceWallet(win, fakeStandardWallet())
+    expect(hasInstalledWallet("polkadot", {})).toBe(false)
   })
 })

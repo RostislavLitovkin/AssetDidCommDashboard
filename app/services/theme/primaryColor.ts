@@ -27,7 +27,7 @@ export const PRIMARY_COLORS: readonly string[] = PRIMARY_COLOR_OPTIONS.map(
 )
 
 /** The default accent color (matches the CSS `--color-primary` default). */
-export const DEFAULT_PRIMARY_COLOR = "#57a0c5"
+export const DEFAULT_PRIMARY_COLOR = "#f7cb4d"
 
 /**
  * Returns the canonical allowlisted color for `value` (case-insensitive), or

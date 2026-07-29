@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import type { ApiBucket, ApiMessage } from "../../../../services/buckets/types"
 import { isFileMessage, normalizeX25519ToJwkX } from "../../../../services/buckets/valueCodecs"
+import { withoutClaimedMessages } from "../../../../services/messages/pendingMessageReconciliation"
 import ParticleLoader from "../../../../components/common/ParticleLoader.vue"
 import PageHeader from "../../../../components/common/PageHeader.vue"
 import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } from "../../../../components/common/ChatMessageEntry.vue"
 import { Paperclip, X as XIcon, SendHorizontal } from "lucide-vue-next"
 import { useAddress } from "../../../../composables/useAddress"
+import { useAutoGrowTextarea } from "../../../../composables/useAutoGrowTextarea"
 import { ProfileClient } from "../../../../services/profile/profileClient"
 import { normalizeApiAddress } from "../../../../services/wallet/addressUtils"
 import * as jose from "jose"
@@ -37,6 +39,8 @@ interface PendingChatMessage {
   createdAt: Date
   sender?: string
   deliveryState: DeliveryState
+  /** Set once the write resolves — hides the server copy until this bubble goes. */
+  serverId?: string
 }
 
 interface ChatMessage {
@@ -92,6 +96,11 @@ const membersError = ref("")
 const sendText = ref("")
 const sendError = ref("")
 const sending = ref(false)
+const composerInputRef = ref<HTMLTextAreaElement | null>(null)
+
+// Grows the composer with the message up to the three-line cap in .chat-input's
+// max-height, after which it scrolls.
+useAutoGrowTextarea(composerInputRef, () => sendText.value)
 const pendingAttachment = ref<{ file: File; dataUrl: string } | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const pendingMessages = ref<PendingChatMessage[]>([])
@@ -147,7 +156,10 @@ const contributorsMissingEncryptionKey = computed(() => {
 const bucketMetadata = computed<MetadataEntry[]>(() => extractBucketMetadataEntries(bucket.value))
 
 const chatMessages = computed<ChatMessageProps[]>(() => {
-  const chainMessages = messages.value.map((message) => {
+  // Messages an in-flight pending bubble already stands in for are held back so
+  // the two never render side by side (see pendingMessageReconciliation).
+  const visibleMessages = withoutClaimedMessages(messages.value, pendingMessages.value)
+  const chainMessages = visibleMessages.map((message) => {
     const cm = toChatMessage(message)
     return toChatMessageProps(cm)
   })
@@ -1326,6 +1338,9 @@ async function sendMessage() {
     const pending = pendingMessages.value.find((entry) => entry.id === pendingId)
     if (pending) {
       pending.deliveryState = "sent"
+      // Claiming the returned id keeps the reloaded server copy hidden until
+      // this bubble goes away, so the message never appears twice.
+      pending.serverId = result.id
     }
 
     operations.add("bucket_write", "Send message", "success", `Message submitted: ${result.id}`)
@@ -1337,6 +1352,9 @@ async function sendMessage() {
     const pending = pendingMessages.value.find((entry) => entry.id === pendingId)
     if (pending) {
       pending.deliveryState = "failed"
+      // Failed bubbles stay on screen indefinitely — never let one keep
+      // suppressing a server message.
+      pending.serverId = undefined
     }
 
     operations.add("bucket_write", "Send message", "error", message)
@@ -1426,8 +1444,8 @@ onMounted(async () => {
             :disabled="sending" title="Attach file">
             <Paperclip :size="18" />
           </button>
-          <textarea v-model="sendText" class="input chat-input" name="message-text" placeholder="Write a message" rows="1"
-            :disabled="sending" style="flex: 1; min-height: 44px; max-height: 120px; border-radius: 999px; padding: 10px 16px; background: #f0f2f5;" />
+          <textarea ref="composerInputRef" v-model="sendText" class="input chat-input composer-scroll"
+            name="message-text" placeholder="Write a message" rows="1" :disabled="sending" />
         </template>
         <button class="btn btn-primary chat-send-btn" type="submit" :disabled="sending || messagesLoading"
           style="border-radius: 50%; width: 44px; height: 44px; padding: 0; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
@@ -1794,13 +1812,21 @@ onMounted(async () => {
   background: var(--color-white);
 }
 
+/* The geometry here used to be split between this rule and an inline style on the
+   textarea that overrode most of it, leaving a stale `height: 48px` showing
+   through beside a 44px send button. Values are the ones that were actually
+   rendering, minus that pinned height — useAutoGrowTextarea owns the height now. */
 .chat-input {
   resize: none;
-  min-height: 48px;
-  height: 48px;
-  border-radius: 999px;
-  padding: 12px 16px;
-  background: #f6f7f9;
+  min-height: 44px;
+  /* Three lines, border-box: 3 × 24px line + 20px padding, no border. Keep in
+     sync with the line-height and padding below. */
+  max-height: 92px;
+  /* Half the 44px single-line height: an identical pill at rest, a rounded
+     rectangle once it grows. */
+  border-radius: 22px;
+  padding: 10px 16px;
+  background: #f0f2f5;
   border: none;
   box-shadow: none;
   flex: 1;

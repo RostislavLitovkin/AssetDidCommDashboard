@@ -188,6 +188,9 @@ onMounted(() => {
     <div class="info-content-scroll stack">
     <section class="stack" aria-live="polite">
       <PageHeader title="My messages">
+        <template #actions>
+          <NuxtLink v-if="isWalletConnected" class="btn" to="/messages/bucket/create">Add Bucket</NuxtLink>
+        </template>
       </PageHeader>
 
       <WalletConnectPrompt
@@ -213,7 +216,7 @@ onMounted(() => {
           <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap">
             <div class="stack" style="gap: 6px">
               <strong style="font-size: 16px">{{ resolveDisplayName(bucket) }}</strong>
-              <p v-if="showDebug" class="muted" style="margin: 0">Bucket ID: {{ bucket.bucketId }} · Namespace: {{ bucket.namespaceId }}</p>
+              <p v-if="showDebug" class="muted" style="margin: 0">Bucket ID: {{ bucket.bucketId }} · Namespace: {{ bucket.namespaceId ?? "standalone" }}</p>
               <p class="muted" style="margin: 0">Last message: {{ formatLastMessage(bucket) }}</p>
             </div>
 
@@ -229,6 +232,10 @@ onMounted(() => {
               <span v-if="bucket.isViewer"
                 style="padding: 6px 12px; border-radius: 999px; font-size: 12px; background: var(--color-primary); color: white; font-weight: 500">
                 Viewer
+              </span>
+              <span v-if="bucket.isCreator"
+                style="padding: 6px 12px; border-radius: 999px; font-size: 12px; background: var(--color-primary); color: white; font-weight: 500">
+                Creator
               </span>
             </div>
           </div>

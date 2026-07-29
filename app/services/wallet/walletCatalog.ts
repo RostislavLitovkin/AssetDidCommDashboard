@@ -1,3 +1,4 @@
+import { registeredSolanaWallets } from "./solanaWalletRegistry"
 import type { WalletKind } from "./types"
 
 export type WalletBrandId =
@@ -92,11 +93,14 @@ export function detectInstalledWallets(kind: WalletKind, host: WalletDetectionHo
 
 /**
  * True when at least one known wallet of the kind is injected. For Polkadot
- * any `injectedWeb3` entry counts — unknown polkadot.js-compatible
- * extensions still work with the provider.
+ * any `injectedWeb3` entry counts; for Solana any Wallet Standard
+ * registration counts — unknown wallets still work with the provider.
  */
 export function hasInstalledWallet(kind: WalletKind, host: WalletDetectionHost = detectionHost()): boolean {
   if (kind === "polkadot" && Object.keys(host.injectedWeb3 ?? {}).length > 0) {
+    return true
+  }
+  if (kind === "solana" && registeredSolanaWallets().length > 0) {
     return true
   }
   return detectInstalledWallets(kind, host).size > 0
