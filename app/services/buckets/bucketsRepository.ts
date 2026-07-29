@@ -26,6 +26,13 @@ const BUCKET_FIELDS =
 const MESSAGE_FIELDS =
   "id messageId contributor reference tag description contentType contentHash ipfsContent createdAt"
 
+/**
+ * The API caps `MessageInput.ipfsContent` at 1 MiB of characters and rejects
+ * the whole write above it. A file message carries the entire encrypted file
+ * as its content, so anything past ~750 KB of file blows the cap.
+ */
+const MAX_IPFS_CONTENT_CHARS = 1_048_576
+
 export class BucketsRepository {
   protected readonly client: BucketsGraphqlClient
   protected readonly options: BucketsRepositoryOptions
@@ -584,10 +591,14 @@ export class BucketsRepository {
     const pinata = new PinataStorageAdapter(this.options.pinataConfig)
     const cid = await pinata.upload(content)
 
+    // `ipfsContent` only mirrors the payload so readers can skip the gateway
+    // round-trip; the payload itself lives on IPFS under `reference`. When it
+    // is too large for the API, drop the mirror rather than fail the write —
+    // every read path already falls back to fetching from `reference`.
     return {
       reference: cid,
       tag: normalizedTag ?? null,
-      ipfsContent: content,
+      ipfsContent: content.length <= MAX_IPFS_CONTENT_CHARS ? content : null,
       metadata: {
         description: "",
         contentType,
@@ -654,23 +665,30 @@ export class BucketsRepository {
     // rotateKey refuses locked buckets, so the first key must be set with
     // resumeWriting. It behaves identically on an already-writable bucket
     // (sets the key, keeps it writable), so it covers key regeneration too.
-    return this.runMutation<{ resumeWriting?: { id: string }; write: { id: string } }>(
-      "resumeWriting+write",
+    // createTag precedes write because the API rejects messages whose tag was
+    // never created; it is idempotent, so repeating it on every rotation is safe.
+    return this.runMutation<{ resumeWriting?: { id: string }; createTag?: { id: string }; write: { id: string } }>(
+      "resumeWriting+createTag+write",
       ownerAddress,
       onUpdate,
-      `mutation RotateKeyAndShare($namespaceId: BigInt!, $bucketId: BigInt!, $newEncryptionKey: String!, $message: MessageInput!) {
+      `mutation RotateKeyAndShare($namespaceId: BigInt!, $bucketId: BigInt!, $newEncryptionKey: String!, $newTag: String!, $message: MessageInput!) {
         resumeWriting(namespaceId: $namespaceId, bucketId: $bucketId, newEncryptionKey: $newEncryptionKey) { id }
+        createTag(bucketId: $bucketId, newTag: $newTag) { id }
         write(namespaceId: $namespaceId, bucketId: $bucketId, message: $message) { id messageId }
       }`,
       {
         namespaceId: namespaceId.trim(),
         bucketId: bucketId.trim(),
         newEncryptionKey: key,
+        newTag: tag.trim(),
         message: messageInput
       },
       (d) => {
         if (!d.resumeWriting?.id) {
           throw new Error("resumeWriting reported no result — the key may not have been set")
+        }
+        if (!d.createTag?.id) {
+          throw new Error("createTag reported no result — the key-sharing tag may not exist")
         }
         return d.write.id
       }

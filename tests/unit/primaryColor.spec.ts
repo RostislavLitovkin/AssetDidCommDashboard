@@ -26,8 +26,8 @@ describe("PRIMARY_COLOR_OPTIONS", () => {
 })
 
 describe("DEFAULT_PRIMARY_COLOR", () => {
-  it("is the light blue that matches the CSS token default", () => {
-    expect(DEFAULT_PRIMARY_COLOR).toBe("#57a0c5")
+  it("is the gold that matches the CSS token default", () => {
+    expect(DEFAULT_PRIMARY_COLOR).toBe("#f7cb4d")
     expect(PRIMARY_COLORS).toContain(DEFAULT_PRIMARY_COLOR)
   })
 })

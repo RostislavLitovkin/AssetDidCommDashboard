@@ -10,8 +10,10 @@ import { expect, test, type Page } from "@playwright/test"
  * (override the target with PLAYWRIGHT_BASE_URL when it is not on :3000).
  */
 
-const GOLD = "#f7cb4d"
-const DEFAULT_BLUE = "#57a0c5"
+// Injected color is deliberately *not* the default, so a passing assertion
+// proves the query parameter was applied rather than the default surviving.
+const XCAVATE_BLUE = "#3B4F74"
+const DEFAULT_GOLD = "#f7cb4d"
 const BOOT_TIMEOUT = 60_000
 
 // A dev server compiles each route on first visit, which can outlast the
@@ -35,18 +37,18 @@ async function waitForAppBoot(page: Page): Promise<void> {
 }
 
 test("applies the query color on a page other than settings", async ({ page }) => {
-  await page.goto(`/profile?primaryColor=${encodeURIComponent(GOLD)}`)
+  await page.goto(`/profile?primaryColor=${encodeURIComponent(XCAVATE_BLUE)}`)
 
-  await expect.poll(() => readPrimaryColor(page), { timeout: BOOT_TIMEOUT }).toBe(GOLD)
+  await expect.poll(() => readPrimaryColor(page), { timeout: BOOT_TIMEOUT }).toBe(XCAVATE_BLUE)
 })
 
 test("keeps the query color after navigating and reloading without the parameter", async ({ page }) => {
-  await page.goto(`/profile?primaryColor=${encodeURIComponent(GOLD)}`)
-  await expect.poll(() => readPrimaryColor(page), { timeout: BOOT_TIMEOUT }).toBe(GOLD)
+  await page.goto(`/profile?primaryColor=${encodeURIComponent(XCAVATE_BLUE)}`)
+  await expect.poll(() => readPrimaryColor(page), { timeout: BOOT_TIMEOUT }).toBe(XCAVATE_BLUE)
 
   await page.goto("/messages/my-buckets")
   await waitForAppBoot(page)
-  expect(await readPrimaryColor(page)).toBe(GOLD)
+  expect(await readPrimaryColor(page)).toBe(XCAVATE_BLUE)
 })
 
 test("ignores an unknown query color without breaking app startup", async ({ page }) => {
@@ -55,5 +57,5 @@ test("ignores an unknown query color without breaking app startup", async ({ pag
   // The host-injection bridge installs right after the settings store is
   // initialized, so it only appears if reading the parameter did not throw.
   await waitForAppBoot(page)
-  expect(await readPrimaryColor(page)).toBe(DEFAULT_BLUE)
+  expect(await readPrimaryColor(page)).toBe(DEFAULT_GOLD)
 })

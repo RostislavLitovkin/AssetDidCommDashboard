@@ -65,6 +65,44 @@ describe("createMessage", () => {
     expect(metadata.contentHash).toMatch(/^0x[0-9a-f]{64}$/)
   })
 
+  it("keeps ipfsContent at exactly the API's character cap", async () => {
+    const { repo, requests } = makeRepo([
+      BUCKET_RESPONSE,
+      { data: { write: { id: "9-5" } } }
+    ])
+    const atLimit = "x".repeat(1_048_576)
+
+    await repo.createMessage("9", atLimit, "5OWNER")
+
+    const message = requests[1]!.variables!.message as { ipfsContent?: string }
+    expect(message.ipfsContent).toBe(atLimit)
+  })
+
+  // The API rejects the whole write when ipfsContent exceeds 1 MiB of
+  // characters, which a file JWE easily does. The mirror is only a
+  // read-side latency shortcut — the payload is already on IPFS at
+  // `reference`, and every read path falls back to the gateway when
+  // ipfsContent is empty — so oversized payloads drop the mirror.
+  it("omits ipfsContent when the content exceeds the API's character cap", async () => {
+    const { repo, requests } = makeRepo([
+      BUCKET_RESPONSE,
+      { data: { write: { id: "9-5" } } }
+    ])
+    const oversized = "x".repeat(1_048_577)
+
+    await repo.createMessage("9", oversized, "5OWNER")
+
+    const message = requests[1]!.variables!.message as {
+      reference: string
+      ipfsContent?: string | null
+      metadata: { contentHash: string }
+    }
+    expect(message.ipfsContent ?? null).toBeNull()
+    // The write still happens: reference and contentHash still cover the payload.
+    expect(message.reference).toBe("bafyCID")
+    expect(message.metadata.contentHash).toMatch(/^0x[0-9a-f]{64}$/)
+  })
+
   it("caches namespaceId per bucket across sends", async () => {
     const { repo, requests } = makeRepo([
       BUCKET_RESPONSE,
@@ -91,31 +129,54 @@ describe("createMessage", () => {
 describe("rotateBucketKeyAndShare", () => {
   // resumeWriting, not rotateKey: fresh buckets are born Locked and rotateKey
   // refuses locked buckets, so the first key of a new bucket can only be set
-  // through resumeWriting (which also works on writable buckets).
-  it("sends resumeWriting and write in ONE signed document", async () => {
+  // through resumeWriting (which also works on writable buckets). createTag
+  // must precede write: the API rejects messages whose tag was never created,
+  // and createTag is idempotent, so it is safe to include on every rotation.
+  it("sends resumeWriting, createTag and write in ONE signed document", async () => {
     const { repo, requests } = makeRepo([
-      { data: { resumeWriting: { id: "9" }, write: { id: "9-8", messageId: "8" } } }
+      {
+        data: {
+          resumeWriting: { id: "9" },
+          createTag: { id: "9/didcomm/key-sharing-v1" },
+          write: { id: "9-8", messageId: "8" }
+        }
+      }
     ])
 
     const result = await repo.rotateBucketKeyAndShare(
       "3", "9", "0x" + "ab".repeat(32), "didcomm/key-sharing-v1", "jwe", "5OWNER"
     )
 
-    expect(result.method).toBe("resumeWriting+write")
+    expect(result.method).toBe("resumeWriting+createTag+write")
     expect(requests).toHaveLength(1)
     expect(requests[0]!.query).toContain("resumeWriting")
     expect(requests[0]!.query).not.toContain("rotateKey")
+    expect(requests[0]!.query).toContain("createTag")
     expect(requests[0]!.query).toContain("write")
+    expect(requests[0]!.variables).toMatchObject({ newTag: "didcomm/key-sharing-v1" })
+    const query = requests[0]!.query
+    expect(query.indexOf("createTag")).toBeGreaterThan(query.indexOf("resumeWriting"))
+    expect(query.indexOf("write(")).toBeGreaterThan(query.indexOf("createTag"))
   })
 
   it("rejects when resumeWriting result is missing", async () => {
     const { repo } = makeRepo([
-      { data: { write: { id: "9-8", messageId: "8" } } }
+      { data: { createTag: { id: "t" }, write: { id: "9-8", messageId: "8" } } }
     ])
 
     await expect(
       repo.rotateBucketKeyAndShare("3", "9", "0x" + "ab".repeat(32), "didcomm/key-sharing-v1", "jwe", "5OWNER")
     ).rejects.toThrow(/resumeWriting reported no result/)
+  })
+
+  it("rejects when createTag result is missing", async () => {
+    const { repo } = makeRepo([
+      { data: { resumeWriting: { id: "9" }, write: { id: "9-8", messageId: "8" } } }
+    ])
+
+    await expect(
+      repo.rotateBucketKeyAndShare("3", "9", "0x" + "ab".repeat(32), "didcomm/key-sharing-v1", "jwe", "5OWNER")
+    ).rejects.toThrow(/createTag reported no result/)
   })
 })
 

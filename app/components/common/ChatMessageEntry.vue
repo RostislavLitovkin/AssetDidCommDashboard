@@ -392,9 +392,13 @@ function formatFileSize(base64: string): string {
 
 .chat-attachment-img {
   display: block;
-  width: 100%;
+  /* Margin rather than padding so the radius rounds the image itself, not the
+     transparent padding box around it. */
+  width: calc(100% - 24px);
+  margin: 0 12px;
   max-height: 420px;
   object-fit: cover;
+  border-radius: 10px;
   cursor: pointer;
 }
 
