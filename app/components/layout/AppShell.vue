@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { ChevronRight, FileUp, Layers, Menu, MessageSquare, Settings, Trash2, UserRound, WandSparkles, Wallet, X } from "lucide-vue-next"
+import { ChevronRight, FileUp, Layers, Menu, MessageSquare, Settings, Trash2, Unplug, UserRound, WandSparkles, Wallet, X } from "lucide-vue-next"
 import { computed, ref } from "vue"
 import NotificationCenter from "../common/NotificationCenter.vue"
 import ProfileSetupBanners from "../common/ProfileSetupBanners.vue"
 import WalletSelectModal from "../common/WalletSelectModal.vue"
+import SetupTutorial from "../onboarding/SetupTutorial.vue"
 import { useAddress } from "../../composables/useAddress"
+import { tutorialActive } from "../../composables/useSetupTutorial"
 import { useWallet } from "../../composables/useWallet"
 import { X25519KeyService } from "../../services/crypto/x25519KeyService"
 import { buildX25519KeyFile, downloadX25519KeyFile } from "../../services/crypto/x25519KeyFile"
@@ -54,6 +56,14 @@ const isHeaderVisible = computed(() => {
 
 function openWalletPopup() {
   showWalletPopup.value = true
+  isTopbarExpanded.value = false
+}
+
+/** Reversible in one click, so unlike removing a key it needs no confirmation. */
+function disconnectWallet() {
+  walletCopyError.value = ""
+  walletCopySuccess.value = ""
+  wallet.disconnect()
   isTopbarExpanded.value = false
 }
 
@@ -224,11 +234,11 @@ async function copyX25519PublicKey() {
           <Layers :size="16" />
           <span class="sidebar-label">Namespaces</span>
         </NuxtLink>
-        <NuxtLink aria-label="Messages" class="btn sidebar-btn" to="/messages/my-buckets" style="display: flex; align-items: center; gap: 8px; text-decoration: none" @click="collapseTopbar">
+        <NuxtLink data-tutorial-target="messages" aria-label="Messages" class="btn sidebar-btn" to="/messages/my-buckets" style="display: flex; align-items: center; gap: 8px; text-decoration: none" @click="collapseTopbar">
           <MessageSquare :size="16" />
           <span class="sidebar-label">Messages</span>
         </NuxtLink>
-        <NuxtLink aria-label="Profile" class="btn sidebar-btn" to="/profile" style="display: flex; align-items: center; gap: 8px; text-decoration: none" @click="collapseTopbar">
+        <NuxtLink data-tutorial-target="profile" aria-label="Profile" class="btn sidebar-btn" to="/profile" style="display: flex; align-items: center; gap: 8px; text-decoration: none" @click="collapseTopbar">
           <UserRound :size="16" />
           <span class="sidebar-label">Profile</span>
         </NuxtLink>
@@ -264,7 +274,24 @@ async function copyX25519PublicKey() {
         <p class="muted" style="margin: 0 0 8px; font-size: 12px" v-if="!isWalletConnected">
           No wallet connected
         </p>
+        <div v-if="isWalletConnected" class="sidebar-btn-pair">
+          <button
+            data-tutorial-target="wallet"
+            class="btn sidebar-btn"
+            type="button"
+            @click="openWalletPopup"
+          >
+            <Wallet :size="16" />
+            <span class="sidebar-label">Switch</span>
+          </button>
+          <button class="btn sidebar-btn" type="button" @click="disconnectWallet">
+            <Unplug :size="16" />
+            <span class="sidebar-label">Disconnect</span>
+          </button>
+        </div>
         <button
+          v-else
+          data-tutorial-target="wallet"
           class="btn sidebar-btn"
           type="button"
           style="width: 100%; display: flex; align-items: center; justify-content: space-between"
@@ -272,7 +299,7 @@ async function copyX25519PublicKey() {
         >
           <span style="display: inline-flex; align-items: center; gap: 8px">
             <Wallet :size="16" />
-            {{ isWalletConnected ? "Switch Wallet" : "Connect Wallet" }}
+            Connect Wallet
           </span>
           <ChevronRight :size="14" />
         </button>
@@ -301,18 +328,31 @@ async function copyX25519PublicKey() {
             </span>
             <span class="x25519-copy-badge" v-if="showX25519CopyEffect">Copied!</span>
           </div>
-          <button
-            class="btn sidebar-btn"
-            type="button"
-            style="width: 100%; display: flex; align-items: center; justify-content: space-between"
-            @click="openX25519FilePicker"
-          >
-            <span style="display: inline-flex; align-items: center; gap: 8px">
+          <p class="muted" style="margin: 0 0 8px; font-size: 12px" v-if="!hasActiveX25519Key">
+            No X25519 key loaded
+          </p>
+
+          <div class="sidebar-btn-pair">
+            <button class="btn sidebar-btn" type="button" @click="openX25519FilePicker">
               <FileUp :size="16" />
-              {{ hasActiveX25519Key ? "Replace X25519 Key" : "Load X25519 Key" }}
-            </span>
-            <ChevronRight :size="14" />
-          </button>
+              <span class="sidebar-label">{{ hasActiveX25519Key ? "Replace" : "Load" }}</span>
+            </button>
+            <button
+              v-if="!hasActiveX25519Key"
+              data-tutorial-target="x25519"
+              class="btn sidebar-btn"
+              type="button"
+              :disabled="isGeneratingX25519Key"
+              @click="generateX25519Key"
+            >
+              <WandSparkles :size="16" />
+              <span class="sidebar-label">{{ isGeneratingX25519Key ? "Generating…" : "Generate" }}</span>
+            </button>
+            <button v-else class="btn sidebar-btn" type="button" @click="requestX25519Removal">
+              <Trash2 :size="16" />
+              <span class="sidebar-label">Remove</span>
+            </button>
+          </div>
           <input
             ref="x25519FileInputRef"
             class="sr-only-input"
@@ -322,59 +362,29 @@ async function copyX25519PublicKey() {
             @change="loadX25519SecretFromFile"
           />
 
-          <button
-            v-if="!hasActiveX25519Key"
-            class="btn sidebar-btn sidebar-btn-stacked"
-            type="button"
-            style="width: 100%; display: flex; align-items: center; justify-content: space-between"
-            :disabled="isGeneratingX25519Key"
-            @click="generateX25519Key"
-          >
-            <span style="display: inline-flex; align-items: center; gap: 8px">
-              <WandSparkles :size="16" />
-              {{ isGeneratingX25519Key ? "Generating…" : "Generate X25519 Key" }}
-            </span>
-            <ChevronRight :size="14" />
-          </button>
-
-          <template v-else>
-            <button
-              v-if="!isConfirmingX25519Removal"
-              class="btn sidebar-btn sidebar-btn-stacked"
-              type="button"
-              style="width: 100%; display: flex; align-items: center; justify-content: space-between"
-              @click="requestX25519Removal"
-            >
-              <span style="display: inline-flex; align-items: center; gap: 8px">
-                <Trash2 :size="16" />
-                <span class="sidebar-label">Remove X25519 Key</span>
-              </span>
-              <ChevronRight :size="14" />
-            </button>
-            <div v-else class="stack sidebar-btn-stacked" style="gap: 6px">
-              <p class="muted sidebar-confirm-text">
-                Removing the key is permanent. Messages encrypted to it stay locked unless you kept the key file.
-              </p>
-              <div class="row" style="gap: 6px; flex-wrap: nowrap">
-                <button
-                  class="btn sidebar-btn sidebar-btn-danger"
-                  type="button"
-                  style="flex: 1; justify-content: center"
-                  @click="clearX25519Secret"
-                >
-                  Confirm remove
-                </button>
-                <button
-                  class="btn sidebar-btn"
-                  type="button"
-                  style="flex: 1; justify-content: center"
-                  @click="cancelX25519Removal"
-                >
-                  Cancel
-                </button>
-              </div>
+          <div v-if="isConfirmingX25519Removal" class="stack sidebar-btn-stacked" style="gap: 6px">
+            <p class="muted sidebar-confirm-text">
+              Removing the key is permanent. Messages encrypted to it stay locked unless you kept the key file.
+            </p>
+            <div class="row" style="gap: 6px; flex-wrap: nowrap">
+              <button
+                class="btn sidebar-btn sidebar-btn-danger"
+                type="button"
+                style="flex: 1; justify-content: center"
+                @click="clearX25519Secret"
+              >
+                Confirm remove
+              </button>
+              <button
+                class="btn sidebar-btn"
+                type="button"
+                style="flex: 1; justify-content: center"
+                @click="cancelX25519Removal"
+              >
+                Cancel
+              </button>
             </div>
-          </template>
+          </div>
 
           <p class="sidebar-status-error" v-if="x25519LoadError">{{ x25519LoadError }}</p>
           <p class="sidebar-status-success" v-if="x25519LoadSuccess">{{ x25519LoadSuccess }}</p>
@@ -383,7 +393,9 @@ async function copyX25519PublicKey() {
     </aside>
 
     <section class="app-shell-content" :class="{ 'header-hidden': !isHeaderVisible }">
-      <ProfileSetupBanners />
+      <!-- The banners prompt for the same things the tutorial is already walking
+           the user through, so the guided path gets the screen to itself. -->
+      <ProfileSetupBanners v-if="!tutorialActive" />
       <div class="container">
         <slot />
       </div>
@@ -393,6 +405,9 @@ async function copyX25519PublicKey() {
 
     <WalletSelectModal v-if="showWalletPopup" @close="showWalletPopup = false" />
 
+    <!-- Points at the sidebar, so it only runs when there is a sidebar to
+         point at. -->
+    <SetupTutorial v-if="isHeaderVisible" />
   </main>
 </template>
 
@@ -620,6 +635,36 @@ async function copyX25519PublicKey() {
 
 .sidebar-btn-stacked {
   margin-top: 8px;
+}
+
+/* Two related actions share one row: the sidebar is only ~230px wide, so the
+   pair drops the chevron and trims labels to verbs to stay on one line. */
+.sidebar-btn-pair {
+  display: flex;
+  gap: 6px;
+}
+
+.app-shell-sidebar .sidebar-btn-pair .sidebar-btn {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 8px 4px;
+  font-size: 13px;
+}
+
+.app-shell-sidebar .sidebar-btn-pair .sidebar-btn svg {
+  flex: 0 0 auto;
+}
+
+.app-shell-sidebar .sidebar-btn-pair .sidebar-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-btn-danger {
