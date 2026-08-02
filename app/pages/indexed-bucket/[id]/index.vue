@@ -3,6 +3,7 @@ import type { ApiBucket, ApiMessage, OperationUpdate } from "../../../services/b
 import { isFileMessage, KEY_SHARING_MESSAGE_TAG, normalizeX25519ToJwkX } from "../../../services/buckets/valueCodecs"
 import { ProfileClient } from "../../../services/profile/profileClient"
 import { findViewersWithoutKeyAccess } from "../../../services/messages/keySharingCoverage"
+import { latestKeySharingMessage, resolveKeyAccessState, type KeyAccessState } from "../../../services/messages/keyAccess"
 import { withoutClaimedMessages } from "../../../services/messages/pendingMessageReconciliation"
 import { resolveAvatarUrls } from "../../../services/profile/avatarResolver"
 import { normalizeApiAddress } from "../../../services/wallet/addressUtils"
@@ -93,6 +94,8 @@ const attachmentById = ref<Record<string, ChatMessageAttachment>>({})
 // chronologically. Messages are decrypted with the key of their era (the most
 // recent key shared before them); sending always uses the latest key.
 interface BucketKeyEntry {
+  /** Id of the key-sharing message this key came out of. */
+  id: string
   createdAt: string
   messageId: string
   jwk: jose.JWK
@@ -110,6 +113,35 @@ const keySharingMessages = ref<ApiMessage[]>([])
 // null = not yet checked (lazy, admins only); a number is the count of viewers
 // whose X25519 key is missing from the latest key-sharing message.
 const viewersMissingKeyCount = ref<number | null>(null)
+
+// Whether the connected user can read the key the bucket is *currently* on.
+// Decrypting some earlier key is not enough: sending with it would encrypt to a
+// retired key nobody reads anymore. Gates the composer — see keyAccess.ts.
+const keyAccessState = computed<KeyAccessState>(() => resolveKeyAccessState({
+  hasSecret: Boolean(settings.x25519SecretJwk),
+  keySharingMessages: keySharingMessages.value,
+  decryptedIds: bucketKeyEntries.value.map(entry => entry.id)
+}))
+
+const keyAccessNotice = computed(() => {
+  switch (keyAccessState.value) {
+    case "no-key-shared":
+      return {
+        title: "No encryption key shared yet",
+        detail: "An admin needs to create and share the bucket encryption key before messages can be sent."
+      }
+    case "no-secret":
+      return {
+        title: "Encryption key not loaded",
+        detail: "Generate or load your X25519 encryption key in the sidebar to read and send messages in this bucket."
+      }
+    default:
+      return {
+        title: "You do not have access to the Encryption key.",
+        detail: "Ask an admin to re-share it with you."
+      }
+  }
+})
 
 const sendText = ref("")
 const sendError = ref("")
@@ -271,6 +303,9 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
       avatarUrl: outgoing ? undefined : avatarUrlByAddress.value[senderAddress],
       reference: m.reference ?? undefined,
       payloadError: payloadErrorById.value[m.id] ?? decryptErrorById.value[m.id],
+      // Decrypt failures only — a payload that never loaded keeps the plain
+      // warning line, since there is no ciphertext to hide.
+      decryptFailed: Boolean(decryptErrorById.value[m.id]),
       contentType: m.contentType ?? undefined,
       attachment: attachmentById.value[m.id],
       timestampLabel,
@@ -425,6 +460,7 @@ async function decryptKeySharingFromMessages(keySharingMessages: ApiMessage[]) {
         if (isX25519Secret(k)) {
           const jwk: jose.JWK = { ...k, use: "enc" }
           entries.push({
+            id: ksMsg.id,
             createdAt: ksMsg.createdAt,
             messageId: ksMsg.messageId,
             jwk,
@@ -877,7 +913,7 @@ async function createAndShareEncryptionKey(): Promise<void> {
 // Compares each viewer's X25519 key against the recipient kids of the latest
 // key-sharing JWE. Purely structural — needs no decryption capability.
 async function checkViewerKeyAccess(): Promise<void> {
-  const latest = keySharingMessages.value[keySharingMessages.value.length - 1]
+  const latest = latestKeySharingMessage(keySharingMessages.value)
   if (!latest) return // no key shared yet — the setup timeline covers that case
 
   if (payloadById.value[latest.id] === undefined) await hydratePayloads([latest])
@@ -1104,9 +1140,9 @@ onMounted(async () => {
     <!-- (B) Wallet connected but not admin/contributor -->
     <div v-else-if="!loading && !connectedAdminOrContributor" class="ib-footer-sticky">
       <div class="ib-container">
-        <div class="ib-not-contributor">
-          <ShieldAlert :size="20" class="ib-not-contributor-icon" />
-          <div class="ib-not-contributor-text">
+        <div class="ib-footer-notice">
+          <ShieldAlert :size="20" class="ib-footer-notice-icon" />
+          <div class="ib-footer-notice-text">
             <strong>Not a contributor</strong>
             <span class="muted">Your connected wallet is not a contributor to this bucket. Ask an admin to add you.</span>
           </div>
@@ -1114,7 +1150,22 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- (C) Authorized → Message composer (hidden while the setup timeline is guiding the user) -->
+    <!-- (C) Authorized but the current bucket key is unreadable → no composer:
+         anything sent would be encrypted to a key this user cannot read back. -->
+    <div v-else-if="!loading && !showSetupTimeline && keyAccessState !== 'ok'" class="ib-footer-sticky">
+      <div class="ib-container">
+        <div class="ib-footer-notice" :class="{ 'ib-footer-notice-info': keyAccessState !== 'no-access' }">
+          <ShieldAlert v-if="keyAccessState === 'no-access'" :size="20" class="ib-footer-notice-icon" />
+          <KeyRound v-else :size="20" class="ib-footer-notice-icon" />
+          <div class="ib-footer-notice-text">
+            <strong>{{ keyAccessNotice.title }}</strong>
+            <span class="muted">{{ keyAccessNotice.detail }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- (D) Authorized → Message composer (hidden while the setup timeline is guiding the user) -->
     <div v-else-if="!showSetupTimeline" class="ib-footer-sticky">
       <div class="ib-container">
         <input ref="fileInputRef" type="file" style="display:none" @change="onFileSelected" />
@@ -1144,9 +1195,6 @@ onMounted(async () => {
           </button>
         </form>
         <div class="ib-footer-meta">
-          <p v-if="!activeSecretJwk && !loading" class="muted" style="margin:0; text-align:center; font-size:13px">
-            Decrypt the bucket key to enable sending.
-          </p>
           <p v-if="sendError" style="margin:0; color:var(--status-error); text-align:center; font-size:13px">
             {{ sendError }}
           </p>
@@ -1499,8 +1547,10 @@ onMounted(async () => {
   color: var(--text-primary);
 }
 
-/* ── Not-contributor notice (variant B) ───────────────────────── */
-.ib-not-contributor {
+/* ── Footer notices in place of the composer (variants B and C) ─── */
+/* Warning tone by default — something is denied. The -info modifier is for the
+   states that are merely not set up yet, which are nobody's fault. */
+.ib-footer-notice {
   display: flex;
   align-items: center;
   gap: 14px;
@@ -1510,12 +1560,12 @@ onMounted(async () => {
   border: 1px solid color-mix(in srgb, var(--status-warning) 25%, transparent);
 }
 
-.ib-not-contributor-icon {
+.ib-footer-notice-icon {
   flex-shrink: 0;
   color: var(--status-warning);
 }
 
-.ib-not-contributor-text {
+.ib-footer-notice-text {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -1524,9 +1574,18 @@ onMounted(async () => {
   min-width: 0;
 }
 
-.ib-not-contributor-text strong {
+.ib-footer-notice-text strong {
   font-size: 14px;
   color: var(--text-primary);
+}
+
+.ib-footer-notice-info {
+  background: color-mix(in srgb, var(--color-primary) 6%, transparent);
+  border-color: color-mix(in srgb, var(--color-primary) 20%, transparent);
+}
+
+.ib-footer-notice-info .ib-footer-notice-icon {
+  color: var(--color-primary);
 }
 
 /* ── Composer (variant C) ─────────────────────────────────────── */
@@ -1850,7 +1909,7 @@ onMounted(async () => {
   }
 
   .ib-connect-prompt,
-  .ib-not-contributor {
+  .ib-footer-notice {
     flex-direction: column;
     text-align: center;
     padding: 16px;

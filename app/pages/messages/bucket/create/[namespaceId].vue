@@ -179,7 +179,7 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-/* Yellow "not a manager" notice — matches ib-not-contributor style */
+/* Yellow "not a manager" notice — matches ib-footer-notice style */
 .not-manager-notice {
   display: flex;
   align-items: center;

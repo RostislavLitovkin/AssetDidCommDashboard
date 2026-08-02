@@ -10,6 +10,10 @@ export interface ChatMessageProps {
   attachment?: ChatMessageAttachment
   reference?: string
   payloadError?: string
+  /** Payload arrived but could not be decrypted — the bubble shows a glitch
+   *  notice instead of the ciphertext. Distinct from `payloadError`, which also
+   *  covers payloads that never loaded. */
+  decryptFailed?: boolean
   timestampLabel: string
   debugEntries?: { key: string; value: string }[]
   avatarUrl?: string
@@ -48,6 +52,7 @@ export interface ChatMessageAttachment {
 import { computed, ref } from "vue"
 import { Paperclip, KeyRound } from "lucide-vue-next"
 import { useSettingsStore } from "../../stores/settings"
+import GlitchParticles from "./GlitchParticles.vue"
 
 const KEY_SHARING_TAG = "didcomm/key-sharing-v1"
 
@@ -135,11 +140,18 @@ function formatFileSize(base64: string): string {
       <p v-if="!message.outgoing" class="chat-sender">{{ message.senderLabel }}</p>
       <article class="chat-bubble" :class="[
         message.outgoing ? 'chat-bubble-outgoing' : 'chat-bubble-incoming',
-        { 'chat-bubble-pending': message.pending, 'chat-bubble-failed': message.failed }
+        {
+          'chat-bubble-pending': message.pending,
+          'chat-bubble-failed': message.failed,
+          'chat-bubble-undecryptable': message.decryptFailed
+        }
       ]">
 
+        <!-- Undecryptable: the ciphertext never reaches the DOM -->
+        <GlitchParticles v-if="message.decryptFailed" label="Unable to decrypt message" />
+
         <!-- Attachment rendering -->
-        <template v-if="attachment">
+        <template v-else-if="attachment">
           <!-- Image -->
           <div v-if="isImage" class="chat-attachment-media">
             <img :src="dataUrl" :alt="attachment.fileName" class="chat-attachment-img" loading="lazy"
@@ -178,7 +190,8 @@ function formatFileSize(base64: string): string {
           <p class="chat-text">{{ message.body }}</p>
         </template>
 
-        <p v-if="message.payloadError" class="chat-warning">⚠ {{ message.payloadError }}</p>
+        <!-- The glitch tile already states the failure, so no second warning. -->
+        <p v-if="message.payloadError && !message.decryptFailed" class="chat-warning">⚠ {{ message.payloadError }}</p>
         <details v-if="settings.showMessageDebug && message.debugEntries?.length" class="chat-debug">
           <summary>Debug</summary>
           <dl class="chat-debug-grid">
@@ -343,6 +356,24 @@ function formatFileSize(base64: string): string {
 .chat-bubble-outgoing {
   background: var(--color-primary);
   min-height: 44px;
+}
+
+/* Undecryptable: the bubble collapses onto the glitch tile — no padding for the
+   canvas to fight, and auto width so it hugs the notice instead of stretching
+   across the chat column the way a wall of ciphertext used to. */
+.chat-bubble-undecryptable {
+  width: auto;
+  padding: 0;
+  overflow: hidden;
+}
+
+.chat-bubble-incoming.chat-bubble-undecryptable {
+  padding-left: 0;
+}
+
+/* --status-error is illegible against the primary-yellow outgoing bubble. */
+.chat-bubble-outgoing.chat-bubble-undecryptable {
+  --glitch-color: #ffffff;
 }
 
 .chat-bubble-outgoing .chat-text,

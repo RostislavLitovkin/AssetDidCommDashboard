@@ -55,6 +55,8 @@ interface ChatMessage {
   tag?: string
   reference?: string
   payloadError?: string
+  /** Payload loaded but decryption failed — rendered as a glitch notice. */
+  decryptFailed?: boolean
   payloadLength?: number
   attachment?: ChatMessageAttachment
   deliveryState?: DeliveryState
@@ -1162,6 +1164,9 @@ function toChatMessage(message: ApiMessage): ChatMessage {
     reference,
     messageType: resolveMessageType(contentType, tag, payload),
     payloadError,
+    // Decrypt failures only — a payload that never loaded keeps the plain
+    // warning line, since there is no ciphertext to hide.
+    decryptFailed: Boolean(messageDecryptErrorById.value[message.id]),
     payloadLength: payload ? payload.length : undefined,
     attachment: messageAttachmentById.value[message.id]
   }
@@ -1244,6 +1249,7 @@ function toChatMessageProps(message: ChatMessage): ChatMessageProps {
     attachment: message.attachment,
     reference: message.reference,
     payloadError: message.payloadError,
+    decryptFailed: message.decryptFailed,
     timestampLabel: formatMessageMeta(message),
     debugEntries: buildMessageDebugEntries(message),
   }
