@@ -9,10 +9,12 @@ import SubmitButton from "../../../../components/common/SubmitButton.vue"
 import type { SubmitButtonLabels } from "../../../../components/common/submitButtonView"
 import { useAddress } from "../../../../composables/useAddress"
 import { useSubmitState } from "../../../../composables/useSubmitState"
-import { Trash2, File } from "lucide-vue-next"
+import { Trash2, File, UserRound, Tag, MessageSquare, ShieldCheck, CalendarDays, Clock } from "lucide-vue-next"
 import { normalizeApiAddress } from "../../../../services/wallet/addressUtils"
+import { buildBucketOverviewFacts, type BucketFactKey } from "../../../../services/buckets/bucketOverview"
 import * as jose from "jose"
 import { computed, nextTick, onMounted, ref, watch } from "vue"
+import type { Component } from "vue"
 import { useRoute, useRuntimeConfig } from "nuxt/app"
 import { useOperationsStore } from "../../../../stores/operations"
 import { useSessionStore } from "../../../../stores/session"
@@ -157,6 +159,32 @@ const viewerRecipients = computed(() => {
 })
 
 const bucketMetadata = computed<MetadataEntry[]>(() => extractBucketMetadataEntries(bucket.value))
+
+/** Lucide glyph per About-card row, keyed by the fact the overview builder emits. */
+const factIcons: Record<BucketFactKey, Component> = {
+  creator: UserRound,
+  category: Tag,
+  access: MessageSquare,
+  encryption: ShieldCheck,
+  created: CalendarDays,
+  updated: Clock
+}
+
+// The About card names the creator; `resolveMemberName` is not reused here because
+// its "Profile Not Found" fallback reads as an error in a plain summary row, where
+// the formatted address is a perfectly good answer.
+const creatorDisplayName = computed(() => {
+  const creator = bucket.value?.creator?.trim()
+  if (!creator) {
+    return ""
+  }
+
+  return memberProfiles.value[creator]?.nickname?.trim() || formatAddress(creator)
+})
+
+const bucketFacts = computed(() => {
+  return buildBucketOverviewFacts(bucket.value, { creatorName: creatorDisplayName.value })
+})
 
 const chatMessages = computed<ChatMessage[]>(() => {
   const chainMessages = messages.value.map((message) => toChatMessage(message))
@@ -386,17 +414,6 @@ async function decryptReceivedMessages(entries: ApiMessage[]): Promise<void> {
   messageDecryptErrorById.value = nextDecryptErrorById
 }
 
-
-function formatBucketCreatedAt(value: string): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return value
-  }
-
-  return date.toLocaleString([], {
-    month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit"
-  })
-}
 
 async function loadBucket() {
   bucketError.value = ""
@@ -1200,6 +1217,26 @@ function buildMessageDebugEntries(message: ChatMessage): MetadataEntry[] {
 
 async function loadBucketPage() {
   await Promise.all([loadBucket(), loadBucketMembers(), loadMessages()])
+  // Runs after both have settled: loadMemberProfiles replaces the whole profile
+  // map, so merging the creator in earlier would be clobbered by it.
+  await ensureCreatorProfile()
+}
+
+/** The creator is normally an admin too, so their profile usually arrives with the
+ *  member lists. Fetch it on its own when it does not, so the About card can name
+ *  them instead of falling back to a bare address. */
+async function ensureCreatorProfile(): Promise<void> {
+  const creator = bucket.value?.creator?.trim()
+  if (!creator || creator in memberProfiles.value) {
+    return
+  }
+
+  try {
+    const profile = await profileClient.getProfile(normalizeApiAddress(creator))
+    memberProfiles.value = { ...memberProfiles.value, [creator]: profile }
+  } catch {
+    // A failed lookup just leaves "Created by" on the formatted address.
+  }
 }
 
 function formatTimestamp(value: Date): string {
@@ -1359,28 +1396,37 @@ const allMembers = computed<MemberEntry[]>(() => {
           <div class="row" style="justify-content: space-between; align-items: center">
             <h4
               style="margin: 0; font-size: 16px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-              Metadata</h4>
-
+              About</h4>
           </div>
-          <SkeletonCard v-if="bucketLoading" :count="2" :lines="2" />
-          <p v-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
 
-          <dl v-if="!bucketLoading && !bucketError && bucketMetadata.length" class="bucket-metadata"
-            style="background: none; border: none; padding: 0;">
-            <div v-for="entry in bucketMetadata" :key="`bucket-${entry.key}`" class="bucket-metadata-item"
-              style="border-bottom: 1px solid var(--border-default); padding-bottom: 8px;">
-              <dt style="font-weight: 600;">{{ entry.key }}</dt>
-              <dd v-if="entry.key === 'createdAt' || entry.key === 'updatedAt'">
-                {{ formatBucketCreatedAt(entry.value) }}
-                <span v-if="showDebug" class="muted" style="font-size: 11px; margin-left: 6px;">(Raw: {{ entry.value
-                }})</span>
-              </dd>
-              <dd v-else-if="entry.key === 'category' && (!entry.value.trim() || entry.value.trim() === '0x')">None</dd>
-              <dd v-else>{{ entry.value }}</dd>
-            </div>
-          </dl>
-          <p v-if="!bucketLoading && !bucketError && !bucketMetadata.length" class="muted" style="margin: 0">
-            No metadata found for this bucket.
+          <SkeletonCard v-if="bucketLoading" :count="2" :lines="2" />
+          <p v-else-if="bucketError" style="margin: 0; color: var(--status-error)">{{ bucketError }}</p>
+
+          <template v-else-if="bucketFacts.length">
+            <dl class="bucket-facts">
+              <div v-for="fact in bucketFacts" :key="fact.key" class="bucket-fact">
+                <component :is="factIcons[fact.key]" :size="16" class="bucket-fact-icon" aria-hidden="true" />
+                <dt class="bucket-fact-label">{{ fact.label }}</dt>
+                <dd class="bucket-fact-value selectable" :class="{ 'bucket-fact-value-muted': fact.tone === 'muted' }">
+                  {{ fact.value }}
+                </dd>
+              </div>
+            </dl>
+
+            <!-- Raw record, straight off the chain. Settings > Show message debug info. -->
+            <section v-if="showDebug && bucketMetadata.length" class="bucket-tech">
+              <h5 class="bucket-tech-title">Technical details</h5>
+              <dl class="bucket-tech-grid selectable">
+                <div v-for="entry in bucketMetadata" :key="`bucket-${entry.key}`" class="bucket-tech-item">
+                  <dt>{{ entry.key }}</dt>
+                  <dd>{{ entry.value }}</dd>
+                </div>
+              </dl>
+            </section>
+          </template>
+
+          <p v-else class="muted" style="margin: 0">
+            No details found for this bucket.
           </p>
         </div>
 
@@ -1721,31 +1767,97 @@ const allMembers = computed<MemberEntry[]>(() => {
   color: var(--text-secondary);
 }
 
-.bucket-metadata {
-  margin: 10px 0 0;
+/* About card: one icon + label + value row per plain-language fact. The label
+   column is fixed so the values line up into a readable second column. */
+.bucket-facts {
+  margin: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.bucket-fact {
+  display: grid;
+  grid-template-columns: 16px minmax(110px, 150px) 1fr;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.bucket-fact:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.bucket-fact-icon {
+  color: var(--text-secondary);
+  /* Baseline alignment leaves the glyph riding high against the text. */
+  align-self: center;
+}
+
+.bucket-fact-label {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.bucket-fact-value {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  min-width: 0;
+  word-break: break-word;
+}
+
+/* An absent or negative value ("None", "Closed to new messages") reads as a gap
+   rather than as something someone deliberately configured. */
+.bucket-fact-value-muted {
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+/* Raw chain record, shown only with debug info enabled. */
+.bucket-tech {
+  border-top: 1px solid var(--border-default);
+  padding-top: 12px;
+}
+
+.bucket-tech-title {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+.bucket-tech-grid {
+  margin: 0;
   padding: 8px;
   border: 1px solid var(--border-default);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.55);
+  background: #f6f7f9;
   display: grid;
   gap: 6px;
 }
 
-.bucket-metadata-item {
+.bucket-tech-item {
   display: grid;
   grid-template-columns: minmax(110px, 200px) 1fr;
   gap: 8px;
   align-items: start;
 }
 
-.bucket-metadata-item dt {
+.bucket-tech-item dt {
   margin: 0;
   font-size: 12px;
+  font-weight: 600;
   color: var(--text-secondary);
   word-break: break-word;
 }
 
-.bucket-metadata-item dd {
+.bucket-tech-item dd {
   margin: 0;
   font-size: 12px;
   color: var(--text-primary);
@@ -1901,9 +2013,20 @@ const allMembers = computed<MemberEntry[]>(() => {
     grid-template-columns: 1fr;
   }
 
-  .bucket-metadata-item {
+  .bucket-tech-item {
     grid-template-columns: 1fr;
     gap: 2px;
+  }
+
+  /* Stack the label over the value, keeping the icon beside the label. */
+  .bucket-fact {
+    grid-template-columns: 16px 1fr;
+    align-items: center;
+    row-gap: 2px;
+  }
+
+  .bucket-fact-value {
+    grid-column: 2;
   }
 }
 </style>

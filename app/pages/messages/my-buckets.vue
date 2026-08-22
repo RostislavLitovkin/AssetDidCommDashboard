@@ -8,6 +8,7 @@ import { useRuntimeConfig } from "nuxt/app"
 import { useSessionStore } from "../../stores/session"
 import { useSettingsStore } from "../../stores/settings"
 import { normalizeApiAddress } from "../../services/wallet/addressUtils"
+import { timeAgo } from "../../services/format/relativeTime"
 import { base64url } from "jose"
 
 const runtimeConfig = useRuntimeConfig()
@@ -57,28 +58,6 @@ function resolveViewerKeyHex(): string {
   } catch {
     return ""
   }
-}
-
-function timeAgo(timestamp: number): string {
-  const seconds = Math.floor((Date.now() - timestamp) / 1000)
-  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" })
-  const units: Array<{ unit: Intl.RelativeTimeFormatUnit; secs: number }> = [
-    { unit: "year", secs: 31536000 },
-    { unit: "month", secs: 2592000 },
-    { unit: "day", secs: 86400 },
-    { unit: "hour", secs: 3600 },
-    { unit: "minute", secs: 60 },
-    { unit: "second", secs: 1 }
-  ]
-
-  for (const u of units) {
-    if (seconds >= u.secs || u.unit === "second") {
-      const value = Math.round(seconds / u.secs)
-      return rtf.format(-value, u.unit)
-    }
-  }
-
-  return "just now"
 }
 
 function formatLastMessage(bucket: MyBucketSummary): string {
