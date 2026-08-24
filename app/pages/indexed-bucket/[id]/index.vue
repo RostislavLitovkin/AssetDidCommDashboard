@@ -5,6 +5,8 @@ import { ProfileClient } from "../../../services/profile/profileClient"
 import { findViewersWithoutKeyAccess } from "../../../services/messages/keySharingCoverage"
 import { latestKeySharingMessage, resolveKeyAccessState, type KeyAccessState } from "../../../services/messages/keyAccess"
 import { withoutClaimedMessages } from "../../../services/messages/pendingMessageReconciliation"
+import { connectBucketMessagesSocket, type BucketMessagesSocket } from "../../../services/buckets/bucketMessagesSocket"
+import { createIncomingMessagePump } from "../../../services/messages/incomingMessagePump"
 import { resolveAvatarUrls } from "../../../services/profile/avatarResolver"
 import { normalizeApiAddress } from "../../../services/wallet/addressUtils"
 import ParticleLoader from "../../../components/common/ParticleLoader.vue"
@@ -18,7 +20,7 @@ import { useWallet } from "../../../composables/useWallet"
 import { useSubmitState } from "../../../composables/useSubmitState"
 import { useAutoGrowTextarea } from "../../../composables/useAutoGrowTextarea"
 import * as jose from "jose"
-import { computed, nextTick, onMounted, ref, shallowRef, watch } from "vue"
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from "vue"
 import { useRoute, useRuntimeConfig } from "nuxt/app"
 import { useOperationsStore } from "../../../stores/operations"
 import { useSessionStore } from "../../../stores/session"
@@ -146,6 +148,9 @@ const keyAccessNotice = computed(() => {
 const sendText = ref("")
 const sendError = ref("")
 const sending = ref(false)
+// True while the x25519-secret watch re-decrypts the whole history — a busy
+// window for the incoming pump, like loading and sending.
+const rekeying = ref(false)
 const composerInputRef = ref<HTMLTextAreaElement | null>(null)
 const chatViewportRef = ref<HTMLElement | null>(null)
 
@@ -339,6 +344,10 @@ async function loadAll() {
   error.value = ""
   loading.value = true
   try {
+    // The busy window is open, so no new live apply can start — but one may be
+    // mid-flight, and its map merges would land on top of the reload's state.
+    // Let it drain before snapshotting anything.
+    await incomingPump.idle()
     const detail = await bucketsRepository.fetchBucketDetail(bucketId.value)
     if (!detail) { error.value = "Bucket not found"; return }
     bucket.value = detail.bucket
@@ -381,6 +390,9 @@ async function loadAll() {
     error.value = e instanceof Error ? e.message : "Failed to load indexed data"
   } finally {
     loading.value = false
+    // Live messages that arrived during the reload were held back — apply them
+    // now that the wholesale state replacement is over.
+    incomingPump.flush()
   }
 }
 
@@ -429,15 +441,19 @@ function parseJson(s: string): unknown { try { return JSON.parse(s) } catch { re
 
 async function decryptKeySharingFromMessages(keySharingMessages: ApiMessage[]) {
   keySharingError.value = ""
-  bucketKeyEntries.value = []
 
   if (!keySharingMessages.length) {
+    bucketKeyEntries.value = []
     keySharingError.value = "No key-sharing message found"
     return
   }
 
   const secretJwk = settings.x25519SecretJwk
-  if (!secretJwk) { keySharingError.value = "Load X25519 secret in sidebar to decrypt"; return }
+  if (!secretJwk) {
+    bucketKeyEntries.value = []
+    keySharingError.value = "Load X25519 secret in sidebar to decrypt"
+    return
+  }
 
   // Decrypt every key-sharing message we can: rotations replace the bucket
   // key, so older messages need the older keys.
@@ -475,6 +491,8 @@ async function decryptKeySharingFromMessages(keySharingMessages: ApiMessage[]) {
   }))
 
   entries.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || Number(a.messageId) - Number(b.messageId))
+  // Single assignment at the end — never clear-then-rebuild: readers like the
+  // composer's key-access gate must not observe a half-built key set.
   bucketKeyEntries.value = entries
 
   if (!entries.length) {
@@ -519,10 +537,21 @@ async function decryptCompactWithEraKey(m: ApiMessage, compactJwe: string): Prom
   throw lastError instanceof Error ? lastError : new Error("Decrypt failed")
 }
 
+// Merges into the existing maps rather than replacing them, so it can be
+// called with just the messages that changed (a live socket message, a key
+// rotation's re-decrypt) without wiping everything already decrypted.
 async function decryptMessages(msgs: ApiMessage[]) {
-  const nextD: Record<string, string> = {}
-  const nextE: Record<string, string> = {}
-  if (!bucketKeyEntries.value.length) { decryptedById.value = {}; decryptErrorById.value = {}; return }
+  const nextD: Record<string, string> = { ...decryptedById.value }
+  const nextE: Record<string, string> = { ...decryptErrorById.value }
+  if (!bucketKeyEntries.value.length) {
+    // No usable keys: clear plaintext and errors for these messages only.
+    // Entries for other ids — attachment errors especially, which belong to
+    // hydrateAttachments — must survive a partial-list call.
+    for (const m of msgs) { delete nextD[m.id]; delete nextE[m.id] }
+    decryptedById.value = nextD
+    decryptErrorById.value = nextE
+    return
+  }
 
   await Promise.all(msgs.map(async m => {
     if (m.tag === KEY_SHARING_MESSAGE_TAG) return
@@ -530,10 +559,12 @@ async function decryptMessages(msgs: ApiMessage[]) {
     const p = payloadById.value[m.id]
     if (!p) return
     const t = p.trim()
-    if (!looksLikeCompactJwe(t)) { nextD[m.id] = p; return }
+    if (!looksLikeCompactJwe(t)) { nextD[m.id] = p; delete nextE[m.id]; return }
     try {
       const { plaintext } = await decryptCompactWithEraKey(m, t)
       nextD[m.id] = new TextDecoder().decode(plaintext)
+      // A key that arrived later may have unlocked an earlier failure.
+      delete nextE[m.id]
     } catch (e) {
       nextE[m.id] = e instanceof Error ? e.message : "Decrypt failed"
       nextD[m.id] = p
@@ -572,6 +603,8 @@ async function hydrateAttachments(msgs: ApiMessage[]) {
         fileName: typeof protectedHeader.filename === "string" ? protectedHeader.filename : undefined,
         data: bytesToBase64(plaintext)
       }
+      // A retry that succeeded (e.g. after a key rotation) clears its old error.
+      delete nextE[m.id]
     } catch (e) {
       nextE[m.id] = e instanceof Error ? e.message : "Attachment unavailable"
     }
@@ -604,6 +637,108 @@ async function loadSenderProfiles(msgs: ApiMessage[]) {
     }
   }))
 }
+
+// ── Live updates over the profile API's Socket.IO endpoint ─────────
+// The realtime API only delivers messages written while the connection is up
+// (at-most-once, no history, no replay), so loadAll stays the source of
+// history and the socket replaces manual reloads for new messages.
+function isKnownMessageId(id: string): boolean {
+  return messages.value.some(m => m.id === id)
+    || keySharingMessages.value.some(m => m.id === id)
+}
+
+// Runs the per-message slice of loadAll's pipeline for one live message.
+// Serialized by the pump, so the map merges in these steps never interleave.
+async function applyIncomingMessage(m: ApiMessage): Promise<void> {
+  if (isKnownMessageId(m.id)) return
+
+  if (m.tag === KEY_SHARING_MESSAGE_TAG) {
+    // A key rotation landed while the page is open. Decrypt the new key BEFORE
+    // publishing the message: keyAccessState reads both keySharingMessages and
+    // the decrypted key entries, and publishing first would flash "no access"
+    // (unmounting the composer mid-typing) until the decrypt caught up.
+    const nextKeySharing = [...keySharingMessages.value, m]
+    await hydratePayloads([m])
+    await decryptKeySharingFromMessages(nextKeySharing)
+    // Key-sharing messages live in both lists: `messages` renders the system
+    // notice, `keySharingMessages` feeds key recovery.
+    keySharingMessages.value = nextKeySharing
+    messages.value = [...messages.value, m]
+    // The new key may unlock messages and attachments whose decrypt failed
+    // under the previous key set.
+    await decryptMessages(messages.value)
+    await hydrateAttachments(messages.value)
+    await loadSenderProfiles([m])
+    viewersMissingKeyCount.value = null
+    if (connectedAdmin.value) void checkViewerKeyAccess()
+    return
+  }
+
+  messages.value = [...messages.value, m]
+  await hydratePayloads([m])
+  await decryptMessages([m])
+  await hydrateAttachments([m])
+  await loadSenderProfiles([m])
+}
+
+const incomingPump = createIncomingMessagePump<ApiMessage>({
+  isBusy: () => loading.value || sending.value || rekeying.value,
+  apply: applyIncomingMessage,
+  onError: (e, m) => console.warn(`Failed to apply live message ${m.id}`, e)
+})
+
+// Delivery starts only from the subscription and has no replay, so every
+// successful subscribe triggers a reconciliation fetch: unknown messages go
+// through the same pipeline as live events (the pump deduplicates). Bumped
+// on each subscribe and on unmount to cancel superseded retries.
+let catchUpGeneration = 0
+
+async function catchUpMissedMessages(attempt = 0): Promise<void> {
+  const generation = catchUpGeneration
+  try {
+    const all = await bucketsRepository.fetchMessages(bucketId.value)
+    if (generation !== catchUpGeneration) return
+    for (const m of all) incomingPump.push(m)
+  } catch (e) {
+    if (generation !== catchUpGeneration) return
+    if (attempt < 2) {
+      setTimeout(() => {
+        if (generation === catchUpGeneration) void catchUpMissedMessages(attempt + 1)
+      }, (attempt + 1) * 5000)
+      return
+    }
+    // Out of retries: the chat may be missing messages — say so instead of
+    // staying silently stale. Any later reload clears the notice.
+    console.warn("Failed to catch up messages after reconnect", e)
+    error.value = "Live updates may be behind — press Reload to refresh."
+  }
+}
+
+let messagesSocket: BucketMessagesSocket | null = null
+
+function connectMessagesSocket(): void {
+  messagesSocket = connectBucketMessagesSocket(
+    String(config.public.profileApiUrl),
+    bucketId.value,
+    {
+      onMessage: m => incomingPump.push(m),
+      // Fires on the first connect too: the initial loadAll races the
+      // subscription, and this fetch reconciles anything written in between.
+      onSubscribed: () => {
+        catchUpGeneration += 1
+        void catchUpMissedMessages()
+      },
+      // Non-fatal: the page still works read-on-load; Reload stays available.
+      onSubscribeError: e => console.warn(`Bucket subscription refused: ${e.code} ${e.message}`)
+    }
+  )
+}
+
+onUnmounted(() => {
+  catchUpGeneration += 1
+  messagesSocket?.close()
+  messagesSocket = null
+})
 
 // ── Send message (encrypted with latest key) ───────────────────────
 async function encryptOutgoing(plaintext: Uint8Array | string, extraProtectedHeader?: Record<string, string>): Promise<string> {
@@ -710,6 +845,10 @@ async function submitPending(pending: PendingOutgoingMessage): Promise<void> {
     operations.add("bucket_write", "Send message", "error", message)
   } finally {
     sending.value = false
+    // Live messages held back during the send (including our own echo from
+    // the socket) reconcile now — already-loaded ids are dropped by the pump's
+    // apply, so nothing renders twice.
+    incomingPump.flush()
   }
 }
 
@@ -980,7 +1119,23 @@ async function scrollToBottom() {
   }
 }
 
-watch(() => chatMessages.value.length, () => scrollToBottom())
+// Reading position wins over live messages: only pin to a new message when
+// the user was already at (or near) the bottom. Sampled in the watch callback,
+// which runs pre-flush — before the DOM grows with the new entry.
+function isNearBottom(): boolean {
+  const viewport = chatViewportRef.value
+  if (!viewport) return true
+  return viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 150
+}
+
+watch(() => chatMessages.value.length, () => {
+  if (isNearBottom()) void scrollToBottom()
+})
+// The user's own sends always pin, even from deep in the history — their
+// message (as a pending bubble) appears at the bottom.
+watch(() => pendingMessages.value.length, (count, previous) => {
+  if (count > (previous ?? 0)) void scrollToBottom()
+})
 // The loader replaces the message list wholesale, so when it clears the list
 // mounts fresh with scrollTop 0 and no length change to re-trigger the watch
 // above — scroll explicitly.
@@ -992,15 +1147,31 @@ watch(showChatLoading, isLoading => {
 // of leaving it stuck on "Key shared" until the page unmounts.
 watch(() => viewerRecipients.value.length, resetKey)
 watch(() => settings.x25519SecretJwk, async () => {
-  keySharingMessages.value = await bucketsRepository.fetchMessagesByTag(bucketId.value, KEY_SHARING_MESSAGE_TAG)
-  await hydratePayloads(keySharingMessages.value)
-  await decryptKeySharingFromMessages(keySharingMessages.value)
-  await decryptMessages(messages.value)
-  await hydrateAttachments(messages.value)
+  // A different secret changes what everything decrypts to — treat it like a
+  // reload: hold live applies (and wait out any in flight) while the whole
+  // history re-decrypts, or a concurrent apply's map write-backs would race
+  // this one's and the loser's plaintext would vanish.
+  rekeying.value = true
+  try {
+    await incomingPump.idle()
+    keySharingMessages.value = await bucketsRepository.fetchMessagesByTag(bucketId.value, KEY_SHARING_MESSAGE_TAG)
+    await hydratePayloads(keySharingMessages.value)
+    await decryptKeySharingFromMessages(keySharingMessages.value)
+    await decryptMessages(messages.value)
+    await hydrateAttachments(messages.value)
+  } finally {
+    rekeying.value = false
+    incomingPump.flush()
+  }
 }, { deep: true })
 
 onMounted(async () => {
   settings.initialize()
+  // The initial load and the subscription race each other, in both orders:
+  // events landing mid-load are buffered by the pump and deduplicated after,
+  // and the subscribe ack triggers a catch-up fetch that reconciles anything
+  // written before the subscription became active.
+  connectMessagesSocket()
   // No explicit scroll here: loadAll's completion flips showChatLoading off,
   // and that watch scrolls once the message list has actually mounted.
   await loadAll()
