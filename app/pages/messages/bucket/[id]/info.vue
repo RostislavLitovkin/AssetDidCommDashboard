@@ -9,7 +9,15 @@ import SubmitButton from "../../../../components/common/SubmitButton.vue"
 import type { SubmitButtonLabels } from "../../../../components/common/submitButtonView"
 import { useAddress } from "../../../../composables/useAddress"
 import { useSubmitState } from "../../../../composables/useSubmitState"
-import { Trash2, File, UserRound, Tag, MessageSquare, ShieldCheck, CalendarDays, Clock } from "lucide-vue-next"
+import { Trash2, File, UserRound, Tag, MessageSquare, ShieldCheck, CalendarDays, Clock, Store } from "lucide-vue-next"
+import {
+  REALXHUB_STATUS_TAG,
+  buildStatusPayload,
+  isRealXhubCategory,
+  parseStatusPayload,
+  resolveMarketStatus,
+} from "../../../../services/buckets/realxhub"
+import type { MarketStatus, StatusPayload } from "../../../../services/buckets/realxhub"
 import { normalizeApiAddress } from "../../../../services/wallet/addressUtils"
 import { buildBucketOverviewFacts, type BucketFactKey } from "../../../../services/buckets/bucketOverview"
 import * as jose from "jose"
@@ -1384,6 +1392,83 @@ const allMembers = computed<MemberEntry[]>(() => {
 
   return Array.from(membersMap.values())
 })
+
+// realXhub marketplace: admins manage the seller/buyer status of each member.
+const isRealXhubBucket = computed(() => isRealXhubCategory(bucket.value?.category))
+
+const orderedStatusPayloads = computed<StatusPayload[]>(() =>
+  messages.value
+    .filter((m) => resolveMessageTag(m) === REALXHUB_STATUS_TAG)
+    .sort((a, b) => {
+      const byCreated = Date.parse(a.createdAt) - Date.parse(b.createdAt)
+      if (byCreated !== 0) return byCreated
+      return Number(a.messageId) - Number(b.messageId)
+    })
+    .map((m) => parseStatusPayload(decryptedMessagePayloadById.value[m.id] ?? messagePayloadById.value[m.id] ?? ""))
+    .filter((p): p is StatusPayload => p !== undefined)
+)
+
+interface MarketplaceRoleEntry {
+  address: string
+  role: 'admin' | 'contributor'
+  status: MarketStatus
+}
+
+const marketplaceRoleMembers = computed<MarketplaceRoleEntry[]>(() => {
+  const seen = new Set<string>()
+  const members: MarketplaceRoleEntry[] = []
+  const append = (address: string, role: 'admin' | 'contributor') => {
+    if (seen.has(address)) return
+    seen.add(address)
+    members.push({
+      address,
+      role,
+      status: resolveMarketStatus(address, role, orderedStatusPayloads.value)
+    })
+  }
+  for (const admin of bucketAdmins.value) append(admin, 'admin')
+  for (const contributor of bucketContributors.value) append(contributor, 'contributor')
+  return members
+})
+
+const updatingRole = ref(false)
+const roleError = ref('')
+
+// createTag is idempotent server-side; guard against races with an in-memory set.
+const ensuredRealXhubTags = new Set<string>()
+
+async function ensureRealXhubTag(tag: string): Promise<void> {
+  if (!session.accountAddress || ensuredRealXhubTags.has(tag)) return
+  try {
+    await bucketsRepository.createTag(bucketId.value, tag, session.accountAddress)
+    ensuredRealXhubTags.add(tag)
+  } catch {
+    // Tag already exists (or equivalent race) — safe to proceed.
+  }
+}
+
+async function setMemberStatus(address: string, status: MarketStatus): Promise<void> {
+  if (!connectedAdmin.value || !session.accountAddress || updatingRole.value) return
+  updatingRole.value = true
+  roleError.value = ''
+  try {
+    await ensureRealXhubTag(REALXHUB_STATUS_TAG)
+    const encrypted = await encryptOutgoingBucketMessage(buildStatusPayload({ address, status }))
+    await bucketsRepository.createMessage(
+      bucketId.value,
+      encrypted,
+      session.accountAddress,
+      undefined,
+      REALXHUB_STATUS_TAG
+    )
+    operations.add('bucket_write', 'Update marketplace role', 'success', status)
+    await loadMessages()
+  } catch (error) {
+    roleError.value = error instanceof Error ? error.message : 'Unable to update marketplace role'
+  } finally {
+    updatingRole.value = false
+  }
+}
 </script>
 
 <template>
@@ -1471,6 +1556,58 @@ const allMembers = computed<MemberEntry[]>(() => {
           </ul>
           <p v-else-if="!bucketLoading && !membersError" class="muted" style="margin: 0">
             No members found for this bucket.
+          </p>
+        </div>
+
+        <div v-if="!bucketLoading && isRealXhubBucket" class="card stack" style="gap: 16px;">
+          <div class="row" style="justify-content: space-between; align-items: center">
+            <h4 style="margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px;">
+              <Store :size="16" aria-hidden="true" />
+              Marketplace roles
+            </h4>
+          </div>
+
+          <p class="muted" style="margin: 0">
+            Set whether each member sells or buys on this marketplace. Admins default to seller; contributors default to buyer.
+          </p>
+
+          <p v-if="roleError" style="margin: 0; color: var(--status-error)">{{ roleError }}</p>
+
+          <p v-if="!marketplaceRoleMembers.length" class="muted" style="margin: 0">
+            No members found.
+          </p>
+
+          <ul v-else
+            style="display: flex; flex-direction: column; gap: 8px; list-style: none; padding: 0; margin: 0;">
+            <li v-for="member in marketplaceRoleMembers" :key="member.address"
+              :style="{ padding: '12px 16px', background: '#f6f7f9', margin: 0, border: '1px solid var(--border-default)', borderRadius: '8px', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px', width: '100%', boxSizing: 'border-box', minWidth: 0 }">
+              <strong
+                :style="{ fontSize: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 1 200px', minWidth: 0 }">
+                {{ resolveMemberName(member.address) }}
+              </strong>
+              <span
+                :style="{ padding: '4px 8px', borderRadius: '999px', fontSize: '11px', color: 'white', fontWeight: '600', textTransform: 'capitalize', background: 'var(--color-primary)', flexShrink: 0 }">
+                {{ member.role }}
+              </span>
+              <div class="mr-status-toggle" style="display: flex; gap: 6px; flexShrink: 0;">
+                <button type="button" class="mr-status-btn" :class="{ 'mr-status-btn-active': member.status === 'seller' }"
+                  :disabled="updatingRole || !connectedAdmin" title="Set as seller"
+                  @click="setMemberStatus(member.address, 'seller')">
+                  <span v-if="updatingRole && member.status === 'seller'" class="spinner-small"></span>
+                  Seller
+                </button>
+                <button type="button" class="mr-status-btn" :class="{ 'mr-status-btn-active': member.status === 'buyer' }"
+                  :disabled="updatingRole || !connectedAdmin" title="Set as buyer"
+                  @click="setMemberStatus(member.address, 'buyer')">
+                  <span v-if="updatingRole && member.status === 'buyer'" class="spinner-small"></span>
+                  Buyer
+                </button>
+              </div>
+            </li>
+          </ul>
+
+          <p v-if="!connectedAdmin" class="muted" style="margin: 0">
+            Only bucket admins can change marketplace roles.
           </p>
         </div>
 
@@ -2028,5 +2165,41 @@ const allMembers = computed<MemberEntry[]>(() => {
   .bucket-fact-value {
     grid-column: 2;
   }
+}
+
+/* realXhub marketplace: seller/buyer status toggle */
+.mr-status-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 999px;
+  border: 1px solid var(--border-default);
+  background: var(--color-white);
+  color: var(--text-muted, #666);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.mr-status-btn:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.mr-status-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.mr-status-btn-active {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+}
+
+.mr-status-btn-active:hover:not(:disabled) {
+  color: #fff;
 }
 </style>

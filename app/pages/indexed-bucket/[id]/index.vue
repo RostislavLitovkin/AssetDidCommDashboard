@@ -42,7 +42,6 @@ import {
   marketPayloadSummary,
   buildMarketPayload,
   parseMarketPayload,
-  buildStatusPayload,
   parseStatusPayload,
   resolveMarketStatus,
   deriveActiveOffer,
@@ -134,7 +133,6 @@ const offerPrice = ref("")
 const offerTokenMint = ref(DEFAULT_OFFER_TOKEN.mint)
 const offerError = ref("")
 const paymentNotice = ref(false)
-const updatingRole = ref(false)
 
 // Every bucket key we could recover from key-sharing messages, sorted
 // chronologically. Messages are decrypted with the key of their era (the most
@@ -322,20 +320,6 @@ const activeMarketIsMine = computed(
 const offerToken = computed<SolanaToken>(
   () => SOLANA_TOKENS.find(t => t.mint === offerTokenMint.value) ?? DEFAULT_OFFER_TOKEN
 )
-
-// Sellers and buyers for the admin role panel (admins first, deduped).
-const realxhubRoleMembers = computed(() => {
-  const seen = new Set<string>()
-  const out: { address: string; role: "admin" | "contributor"; status: MarketStatus }[] = []
-  for (const role of ["admin", "contributor"] as const) {
-    for (const address of role === "admin" ? admins.value : contributors.value) {
-      if (seen.has(address)) continue
-      seen.add(address)
-      out.push({ address, role, status: resolveMarketStatus(address, role, orderedStatusPayloads.value) })
-    }
-  }
-  return out
-})
 
 // ── Empty-bucket setup timeline ────────────────────────────────────
 const memberCount = computed(() => {
@@ -1187,29 +1171,6 @@ function makePayment(): void {
   paymentNotice.value = true
 }
 
-// Admin flips a member between seller/buyer via a status-tagged message.
-async function setMemberStatus(address: string, status: MarketStatus): Promise<void> {
-  if (!connectedAdmin.value || !session.accountAddress || updatingRole.value) return
-  updatingRole.value = true
-  try {
-    await ensureRealXhubTag(REALXHUB_STATUS_TAG)
-    const encrypted = await encryptOutgoing(buildStatusPayload({ address, status }))
-    await bucketsRepository.createMessage(
-      bucketId.value,
-      encrypted,
-      session.accountAddress,
-      undefined,
-      REALXHUB_STATUS_TAG,
-    )
-    operations.add("bucket_write", "Update marketplace role", "success", status)
-    await loadAll()
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : "Failed to update marketplace role"
-  } finally {
-    updatingRole.value = false
-  }
-}
-
 // ── Create & share bucket encryption key (setup timeline step 2) ───
 function randomNumericKeyId(): number {
   return Math.floor(Math.random() * 1_000_000_000_000)
@@ -1560,33 +1521,6 @@ onMounted(async () => {
         </SubmitButton>
       </div>
       <p v-if="createKeyError && viewersMissingKeyCount" class="ib-error">{{ createKeyError }}</p>
-
-      <!-- realXhub: admin manages marketplace roles (seller / buyer) -->
-      <details v-if="!loading && isRealXhubBucket && connectedAdmin" class="card ib-panel">
-        <summary class="ib-panel-summary">
-          Marketplace roles
-          <span class="ib-panel-toggle">+</span>
-        </summary>
-        <div class="ib-panel-body">
-          <p v-if="!realxhubRoleMembers.length" class="muted">No members found.</p>
-          <div v-for="member in realxhubRoleMembers" :key="member.address" class="ib-role-row">
-            <span class="ib-role-address" :title="member.address">
-              {{ formatAddress(member.address) }}
-              <span class="muted ib-role-tag">{{ member.role }}</span>
-            </span>
-            <div class="ib-status-toggle">
-              <button class="ib-status-btn" :class="{ 'ib-status-btn-active': member.status === 'seller' }"
-                :disabled="updatingRole || sending" @click="setMemberStatus(member.address, 'seller')">
-                Seller
-              </button>
-              <button class="ib-status-btn" :class="{ 'ib-status-btn-active': member.status === 'buyer' }"
-                :disabled="updatingRole || sending" @click="setMemberStatus(member.address, 'buyer')">
-                Buyer
-              </button>
-            </div>
-          </div>
-        </div>
-      </details>
     </div>
 
     <!-- Chat viewport -->
@@ -2608,68 +2542,6 @@ onMounted(async () => {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-secondary);
-}
-
-/* realXhub marketplace: roles panel */
-.ib-role-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border-default);
-}
-
-.ib-role-row:last-child {
-  border-bottom: none;
-}
-
-.ib-role-address {
-  font-size: 14px;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ib-role-tag {
-  font-size: 11px;
-  margin-left: 6px;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-}
-
-.ib-status-toggle {
-  display: flex;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.ib-status-btn {
-  padding: 4px 12px;
-  border-radius: 999px;
-  border: 1px solid var(--border-default);
-  background: none;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: border-color 150ms, background 150ms, color 150ms;
-}
-
-.ib-status-btn:hover:not(:disabled) {
-  border-color: var(--color-primary);
-  color: var(--color-primary);
-}
-
-.ib-status-btn-active {
-  background: var(--color-primary);
-  border-color: var(--color-primary);
-  color: #fff;
-}
-
-.ib-status-btn-active:hover:not(:disabled) {
-  color: #fff;
 }
 
 @media (max-width: 840px) {
