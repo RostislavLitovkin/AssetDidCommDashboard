@@ -14,7 +14,7 @@ import PageHeader from "../../../components/common/PageHeader.vue"
 import SubmitButton from "../../../components/common/SubmitButton.vue"
 import type { SubmitButtonLabels } from "../../../components/common/submitButtonView"
 import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment, type ChatMarketInfo } from "../../../components/common/ChatMessageEntry.vue"
-import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, Check, HandCoins } from "lucide-vue-next"
+import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, Check, HandCoins, ChevronDown } from "lucide-vue-next"
 import { useAddress } from "../../../composables/useAddress"
 import { useWallet } from "../../../composables/useWallet"
 import { useSubmitState } from "../../../composables/useSubmitState"
@@ -132,6 +132,105 @@ const offerPrice = ref("")
 const offerTokenMint = ref(DEFAULT_OFFER_TOKEN.mint)
 const offerError = ref("")
 const paymentNotice = ref(false)
+
+// The offer / counter-offer form is a bottom sheet: it slides up from the
+// bottom edge and dismisses by clicking outside it or sliding the card down.
+// The sheet stays mounted while `sheetLeaving` so the exit slide can play;
+// the drag offset is applied inline only while a pointer is moving it.
+const SHEET_ANIM_MS = 340
+const offerSheetRef = ref<HTMLElement | null>(null)
+const offerPriceInputRef = ref<HTMLInputElement | null>(null)
+const sheetLeaving = ref(false)
+const sheetDragging = ref(false)
+const sheetDragY = ref(0)
+const sheetMounted = computed(() => offerPopupOpen.value || sheetLeaving.value)
+
+function offerSheetHeight(): number {
+  return offerSheetRef.value?.offsetHeight ?? 320
+}
+
+function closeOfferSheet(): void {
+  if (!offerPopupOpen.value || sheetLeaving.value) return
+  sheetLeaving.value = true
+  sheetDragging.value = false
+  sheetDragY.value = 0
+  window.setTimeout(() => {
+    offerPopupOpen.value = false
+    sheetLeaving.value = false
+  }, SHEET_ANIM_MS + 20)
+}
+
+// Drag-to-dismiss: only the sheet chrome (handle, title, empty space) starts a
+// drag; form controls keep their own pointer handling. The card only slides
+// down — upward motion is clamped so the sheet never floats above its rest.
+let sheetDragStartY = 0
+let sheetDragLastY = 0
+let sheetDragLastT = 0
+let sheetDragVelocity = 0
+
+function onOfferSheetPointerDown(e: PointerEvent): void {
+  if (!offerPopupOpen.value || sheetLeaving.value) return
+  const target = e.target as HTMLElement | null
+  if (target?.closest("input, select, textarea, button, a, label")) return
+  sheetDragStartY = e.clientY
+  sheetDragLastY = e.clientY
+  sheetDragLastT = performance.now()
+  sheetDragVelocity = 0
+  sheetDragging.value = true
+  sheetDragY.value = 0
+  offerSheetRef.value?.setPointerCapture(e.pointerId)
+}
+
+function onOfferSheetPointerMove(e: PointerEvent): void {
+  if (!sheetDragging.value) return
+  const now = performance.now()
+  const dt = now - sheetDragLastT
+  if (dt > 0) sheetDragVelocity = sheetDragVelocity * 0.7 + ((e.clientY - sheetDragLastY) / dt) * 0.3
+  sheetDragLastY = e.clientY
+  sheetDragLastT = now
+  sheetDragY.value = Math.max(0, e.clientY - sheetDragStartY)
+}
+
+function endOfferSheetDrag(settle: boolean): void {
+  if (!sheetDragging.value) return
+  sheetDragging.value = false
+  const pastThreshold = sheetDragY.value > Math.min(offerSheetHeight() * 0.35, 150)
+  if (settle && (pastThreshold || sheetDragVelocity > 0.5)) {
+    closeOfferSheet()
+  } else {
+    sheetDragY.value = 0
+  }
+}
+
+function onOfferSheetPointerUp(): void {
+  endOfferSheetDrag(true)
+}
+
+function onOfferSheetPointerCancel(): void {
+  endOfferSheetDrag(false)
+}
+
+const sheetDragStyle = computed(() => {
+  if (!sheetDragging.value) return {}
+  return { transform: `translateY(${sheetDragY.value}px)`, transition: "none" }
+})
+
+// The scrim lightens as the card is pulled down, so dismissing feels tied to
+// the drag instead of the sheet just detaching from the backdrop.
+const sheetBackdropStyle = computed(() => {
+  if (!sheetDragging.value) return {}
+  const progress = Math.min(sheetDragY.value / offerSheetHeight(), 1)
+  return { opacity: String(Math.max(0.15, 1 - 0.85 * progress)) }
+})
+
+function onOfferSheetKeydown(e: KeyboardEvent): void {
+  if (e.key === "Escape") closeOfferSheet()
+}
+
+watch(sheetMounted, (open) => {
+  if (open) window.addEventListener("keydown", onOfferSheetKeydown)
+  else window.removeEventListener("keydown", onOfferSheetKeydown)
+})
 
 // Every bucket key we could recover from key-sharing messages, sorted
 // chronologically. Messages are decrypted with the key of their era (the most
@@ -898,6 +997,7 @@ onUnmounted(() => {
   catchUpGeneration += 1
   messagesSocket?.close()
   messagesSocket = null
+  window.removeEventListener("keydown", onOfferSheetKeydown)
 })
 
 // ── Send message (encrypted with latest key) ───────────────────────
@@ -1080,6 +1180,7 @@ function openOfferPopup(kind: "offer" | "counterOffer"): void {
   offerError.value = ""
   offerTokenMint.value = DEFAULT_OFFER_TOKEN.mint
   offerPopupOpen.value = true
+  nextTick(() => offerPriceInputRef.value?.focus())
 }
 
 function buildPendingMarketMessage(
@@ -1122,7 +1223,7 @@ async function submitOffer(): Promise<void> {
     token: { ...offerToken.value },
     superseded: false,
   }
-  offerPopupOpen.value = false
+  closeOfferSheet()
   const pending = buildPendingMarketMessage(
     kind === "counterOffer" ? REALXHUB_COUNTER_OFFER_TAG : REALXHUB_OFFER_TAG,
     payload,
@@ -1683,37 +1784,50 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- realXhub offer / counter-offer popup -->
-    <div v-if="offerPopupOpen" class="ib-wallet-overlay" @click.self="offerPopupOpen = false">
-      <div class="card stack ib-offer-popup">
-        <div class="row" style="justify-content: space-between; align-items: center">
-          <h3 style="margin: 0">{{ offerKind === "counterOffer" ? "Make a counter-offer" : "Make an offer" }}</h3>
-          <button class="btn" type="button" aria-label="Close" @click="offerPopupOpen = false">
-            <X :size="14" />
-          </button>
-        </div>
-        <p class="muted" style="margin: 0">
+    <!-- realXhub offer / counter-offer bottom sheet: slides up from the bottom
+         edge; dismiss by clicking outside it or sliding the card back down. -->
+    <div v-if="sheetMounted" class="ib-sheet-overlay" :style="sheetBackdropStyle" @click.self="closeOfferSheet">
+      <div
+        ref="offerSheetRef"
+        class="card ib-offer-sheet"
+        :class="{ 'is-closing': sheetLeaving, 'is-dragging': sheetDragging }"
+        :style="sheetDragStyle"
+        role="dialog" aria-modal="true"
+        :aria-label="offerKind === 'counterOffer' ? 'Make a counter-offer' : 'Make an offer'"
+        @pointerdown="onOfferSheetPointerDown"
+        @pointermove="onOfferSheetPointerMove"
+        @pointerup="onOfferSheetPointerUp"
+        @pointercancel="onOfferSheetPointerCancel"
+      >
+        <div class="ib-sheet-handle" aria-hidden="true"></div>
+        <h3 class="ib-sheet-title">
+          {{ offerKind === "counterOffer" ? "Make a counter-offer" : "Make an offer" }}
+        </h3>
+        <p class="muted ib-sheet-desc">
           {{ offerKind === "counterOffer"
             ? "Propose a different price for the active offer."
             : "Set the price you want to accept to list this bucket for sale." }}
         </p>
-        <form class="stack" @submit.prevent="submitOffer">
-          <label class="ib-field" for="ib-offer-price">
-            <span class="ib-field-label">Price</span>
-            <input id="ib-offer-price" v-model="offerPrice" class="input" type="number" step="any" min="0"
-              inputmode="decimal" placeholder="0.00" required :disabled="sending" />
-          </label>
-          <label class="ib-field" for="ib-offer-token">
-            <span class="ib-field-label">Token</span>
-            <select id="ib-offer-token" v-model="offerTokenMint" class="input" :disabled="sending">
-              <option v-for="token in SOLANA_TOKENS" :key="token.mint" :value="token.mint">
-                {{ token.symbol }} — {{ tokenClusterLabel(token.cluster) }}
-              </option>
-            </select>
-          </label>
+        <form class="ib-sheet-form" @submit.prevent="submitOffer">
+          <div class="ib-sheet-price-row">
+            <div class="ib-sheet-field">
+              <label class="ib-sheet-label" for="ib-offer-price">Price</label>
+              <input id="ib-offer-price" ref="offerPriceInputRef" v-model="offerPrice" class="ib-sheet-input"
+                type="number" step="any" min="0" inputmode="decimal" placeholder="0.00" required :disabled="sending" />
+            </div>
+            <div class="ib-sheet-select">
+              <select v-model="offerTokenMint" class="ib-sheet-input ib-sheet-select-input" aria-label="Token"
+                :disabled="sending">
+                <option v-for="token in SOLANA_TOKENS" :key="token.mint" :value="token.mint">
+                  {{ token.symbol }} — {{ tokenClusterLabel(token.cluster) }}
+                </option>
+              </select>
+              <ChevronDown :size="16" class="ib-sheet-select-chevron" />
+            </div>
+          </div>
           <p v-if="offerError" class="ib-tl-error">{{ offerError }}</p>
-          <div class="row ib-offer-popup-actions">
-            <button class="btn" type="button" @click="offerPopupOpen = false" :disabled="sending">Cancel</button>
+          <div class="ib-sheet-actions">
+            <button class="btn ib-btn-dark" type="button" @click="closeOfferSheet" :disabled="sending">Cancel</button>
             <button class="btn btn-primary" type="submit" :disabled="sending">
               {{ offerKind === "counterOffer" ? "Counter-offer" : "Place offer" }}
             </button>
@@ -2503,26 +2617,235 @@ onMounted(async () => {
   border-color: var(--color-primary);
 }
 
-/* realXhub marketplace: offer popup */
-.ib-offer-popup {
-  width: min(440px, 92vw);
+/* realXhub marketplace: offer / counter-offer bottom sheet. The sheet slides
+   up from the bottom edge (keyframe on mount) and slides back down when
+   `.is-closing` lands on it; while a pointer drags it (`.is-dragging`) the
+   inline transform tracks the finger and transitions are suspended. */
+.ib-sheet-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 110;
+  animation: ib-sheet-backdrop-in 300ms ease-out;
 }
 
-.ib-offer-popup-actions {
-  justify-content: flex-end;
-  margin-top: 4px;
+@keyframes ib-sheet-backdrop-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
-.ib-field {
+.ib-offer-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  padding: 10px 24px 28px;
+  border: none;
+  border-radius: 20px 20px 0 0;
+  box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.18);
+  touch-action: none;
+  will-change: transform;
+  transition: transform 340ms cubic-bezier(0.32, 0.72, 0, 1);
+  animation: ib-sheet-in 340ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@keyframes ib-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+
+  to {
+    transform: translateY(0);
+  }
+}
+
+.ib-offer-sheet.is-closing {
+  /* Cancel the entry keyframe so its restart can't hijack the exit transition;
+     without this, releasing a drag re-triggers `ib-sheet-in` (the drag class
+     had suspended the animation) and the sheet teleports before sliding. */
+  animation: none;
+  transform: translateY(100%);
+}
+
+/* `transition: none` only — the entry animation must keep its current
+   `animation-name` while dragging, otherwise dropping the class at release
+   restarts the keyframe from translateY(100%). */
+.ib-offer-sheet.is-dragging {
+  transition: none;
+  cursor: grabbing;
+}
+
+.ib-sheet-handle {
+  width: 44px;
+  height: 5px;
+  margin: 2px auto 0;
+  border-radius: 999px;
+  background: var(--color-gray-300);
+  flex-shrink: 0;
+}
+
+.ib-sheet-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.ib-sheet-desc {
+  margin: 0;
+  font-size: 14px;
+}
+
+.ib-sheet-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ib-sheet-price-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.ib-sheet-field {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  flex: 1;
+  min-width: 0;
 }
 
-.ib-field-label {
+.ib-sheet-label {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-secondary);
+}
+
+.ib-sheet-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--color-gray-700);
+  border-radius: 10px;
+  background: var(--color-gray-800);
+  color: var(--color-white);
+  font-size: 15px;
+  padding: 12px 14px;
+  outline: none;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.ib-sheet-input::placeholder {
+  color: var(--color-gray-400);
+}
+
+.ib-sheet-input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 25%, transparent);
+}
+
+/* Hide the number spinners so the price field matches the mock. */
+.ib-sheet-input[type="number"]::-webkit-outer-spin-button,
+.ib-sheet-input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.ib-sheet-input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.ib-sheet-select {
+  position: relative;
+  flex: 0 0 210px;
+}
+
+.ib-sheet-select-input {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 38px;
+  cursor: pointer;
+}
+
+.ib-sheet-select-chevron {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  transform: translateY(-50%);
+  color: var(--color-gray-300);
+  pointer-events: none;
+}
+
+.ib-sheet-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 2px;
+}
+
+.ib-sheet-actions .btn {
+  flex: 1;
+  padding: 13px 16px;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* Counter-offer / Place offer takes more width, per the mock. */
+.ib-sheet-actions .btn-primary {
+  flex: 1.8;
+  color: var(--color-gray-900);
+  border: none;
+}
+
+.ib-sheet-actions .btn-primary:hover:not(:disabled),
+.ib-sheet-actions .btn-primary:focus-visible:not(:disabled) {
+  color: var(--color-gray-900);
+  border-color: var(--color-primary);
+  filter: brightness(1.05);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 35%, transparent);
+}
+
+.ib-btn-dark {
+  border: none;
+  background: var(--color-gray-800);
+  color: var(--color-white);
+}
+
+.ib-btn-dark:hover:not(:disabled),
+.ib-btn-dark:focus-visible:not(:disabled) {
+  background: #3d3d3d;
+  border-color: #3d3d3d;
+  color: var(--color-white);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-gray-800) 30%, transparent);
+}
+
+@media (max-width: 640px) {
+  .ib-sheet-price-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ib-sheet-select {
+    flex: 1 1 auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ib-sheet-overlay,
+  .ib-offer-sheet {
+    animation: none;
+    transition: none;
+  }
 }
 
 @media (max-width: 840px) {
