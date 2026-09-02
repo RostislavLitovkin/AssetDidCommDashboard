@@ -448,9 +448,6 @@ function formatFileSize(base64: string): string {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  border-radius: 10px;
-  padding: 10px 12px;
-  background: var(--surface-bg);
 }
 
 .chat-market-header {
@@ -488,12 +485,7 @@ function formatFileSize(base64: string): string {
   color: var(--text-primary);
 }
 
-/* Outgoing bubble: the primary background would drown the card, so it sits on a
-   translucent white plate with white-on-dark text of its own. */
-.chat-bubble-outgoing .chat-market-card {
-  background: rgba(255, 255, 255, 0.14);
-}
-
+/* Outgoing bubble: white text so the card reads as part of the bubble. */
 .chat-bubble-outgoing .chat-market-kind {
   color: rgba(255, 255, 255, 0.75);
 }

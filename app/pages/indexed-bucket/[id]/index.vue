@@ -148,15 +148,29 @@ function offerSheetHeight(): number {
   return offerSheetRef.value?.offsetHeight ?? 320
 }
 
+// The close timer is cancellable: if the sheet is re-opened before the exit
+// slide finishes, the stale timeout must not close the fresh sheet.
+let sheetCloseTimer: number | null = null
+
 function closeOfferSheet(): void {
   if (!offerPopupOpen.value || sheetLeaving.value) return
   sheetLeaving.value = true
   sheetDragging.value = false
   sheetDragY.value = 0
-  window.setTimeout(() => {
+  sheetCloseTimer = window.setTimeout(() => {
+    sheetCloseTimer = null
     offerPopupOpen.value = false
     sheetLeaving.value = false
   }, SHEET_ANIM_MS + 20)
+}
+
+function abortSheetClose(): void {
+  if (sheetCloseTimer === null) return
+  window.clearTimeout(sheetCloseTimer)
+  sheetCloseTimer = null
+  // Drop `.is-closing` so the entry keyframe restarts and the sheet slides up
+  // from the bottom again instead of sitting at the exit position.
+  sheetLeaving.value = false
 }
 
 // Drag-to-dismiss: only the sheet chrome (handle, title, empty space) starts a
@@ -995,6 +1009,10 @@ onUnmounted(() => {
   catchUpGeneration += 1
   messagesSocket?.close()
   messagesSocket = null
+  if (sheetCloseTimer !== null) {
+    window.clearTimeout(sheetCloseTimer)
+    sheetCloseTimer = null
+  }
   window.removeEventListener("keydown", onOfferSheetKeydown)
 })
 
@@ -1173,6 +1191,9 @@ async function ensureRealXhubTag(tag: string): Promise<void> {
 }
 
 function openOfferPopup(kind: "offer" | "counterOffer"): void {
+  // A close may still be in flight (Escape / outside click, quick re-open) —
+  // abort it so offer and counter-offer both slide up the same way.
+  abortSheetClose()
   offerKind.value = kind
   offerPrice.value = ""
   offerError.value = ""
