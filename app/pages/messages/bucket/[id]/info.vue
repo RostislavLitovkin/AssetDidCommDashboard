@@ -688,11 +688,8 @@ async function generateAndShareEncryptionKey(): Promise<void> {
     return
   }
 
-  const namespaceId = resolveNamespaceIdFromBucket(bucket.value)
-  if (!namespaceId) {
-    failKey("Namespace id is required to rotate bucket encryption keys")
-    return
-  }
+  // Null for standalone buckets — the API accepts a null namespace id there.
+  const namespaceId = bucket.value?.namespaceId != null ? String(bucket.value.namespaceId) : null
 
   // Captured before the closure: the guard above narrows `session.accountAddress`
   // for this function body, but that narrowing does not survive into runKey's callback.
