@@ -281,21 +281,6 @@ export function deriveActiveOffer(entries: readonly MarketMessageEntry[]): Activ
   return active;
 }
 
-/** True when a newer (valid) market message supersedes the given one. */
-export function isMarketMessageSuperseded(
-  entries: readonly MarketMessageEntry[],
-  message: ApiMessage,
-): boolean {
-  const key = marketSortValue(message);
-  return entries.some((entry) => {
-    if (entry.message.id === message.id) {
-      return false;
-    }
-    const other = marketSortValue(entry.message);
-    return other[0] > key[0] || (other[0] === key[0] && other[1] > key[1]);
-  });
-}
-
 /** Normalizes a decimal price for display: strips trailing zeros ("10.50" -> "10.5"). */
 export function formatPriceAmount(price: string): string {
   const match = PRICE_PATTERN.exec(price.trim());
@@ -329,11 +314,6 @@ export function priceToRawUnits(price: string, decimals: number): bigint | undef
     BigInt(integerPart) * 10n ** BigInt(decimals) +
     (fractionPart ? BigInt(fractionPart.padEnd(decimals, "0")) : 0n)
   );
-}
-
-/** Compact mint display: first 4 and last 4 chars for long addresses. */
-export function shortMint(mint: string): string {
-  return mint.length > 12 ? `${mint.slice(0, 4)}…${mint.slice(-4)}` : mint;
 }
 
 /** Human label for a market payload kind, used on chat cards and bars. */

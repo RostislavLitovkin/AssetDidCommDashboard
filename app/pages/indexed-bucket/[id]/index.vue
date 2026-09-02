@@ -44,7 +44,6 @@ import {
   parseStatusPayload,
   resolveMarketStatus,
   deriveActiveOffer,
-  isMarketMessageSuperseded,
   tokenClusterLabel
 } from "../../../services/buckets/realxhub"
 import type {
@@ -491,7 +490,6 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
           symbol: marketPayload.token.symbol,
           decimals: marketPayload.token.decimals,
         },
-        superseded: isMarketMessageSuperseded(marketEntries.value, m),
       }
     }
 
@@ -1221,7 +1219,6 @@ async function submitOffer(): Promise<void> {
     kind,
     price,
     token: { ...offerToken.value },
-    superseded: false,
   }
   closeOfferSheet()
   const pending = buildPendingMarketMessage(
@@ -1250,7 +1247,6 @@ async function acceptCounterOffer(): Promise<void> {
       symbol: token.symbol,
       decimals: token.decimals,
     },
-    superseded: false,
   }
   const pending = buildPendingMarketMessage(REALXHUB_OFFER_TAG, payload, info)
   pendingMessages.value = [...pendingMessages.value, pending]
@@ -1827,7 +1823,7 @@ onMounted(async () => {
           </div>
           <p v-if="offerError" class="ib-tl-error">{{ offerError }}</p>
           <div class="ib-sheet-actions">
-            <button class="btn ib-btn-dark" type="button" @click="closeOfferSheet" :disabled="sending">Cancel</button>
+            <button class="btn" type="button" @click="closeOfferSheet" :disabled="sending">Cancel</button>
             <button class="btn btn-primary" type="submit" :disabled="sending">
               {{ offerKind === "counterOffer" ? "Counter-offer" : "Place offer" }}
             </button>
@@ -2609,12 +2605,13 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  color: var(--color-primary);
+  color: var(--text-secondary);
   transition: border-color 150ms, color 150ms;
 }
 
 .ib-composer-offer:hover:not(:disabled) {
   border-color: var(--color-primary);
+  color: var(--color-primary);
 }
 
 /* realXhub marketplace: offer / counter-offer bottom sheet. The sheet slides
@@ -2734,10 +2731,10 @@ onMounted(async () => {
 .ib-sheet-input {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid var(--color-gray-700);
+  border: 1px solid var(--color-gray-300);
   border-radius: 10px;
-  background: var(--color-gray-800);
-  color: var(--color-white);
+  background: var(--color-white);
+  color: var(--text-primary);
   font-size: 15px;
   padding: 12px 14px;
   outline: none;
@@ -2782,7 +2779,7 @@ onMounted(async () => {
   top: 50%;
   right: 14px;
   transform: translateY(-50%);
-  color: var(--color-gray-300);
+  color: var(--color-gray-500);
   pointer-events: none;
 }
 
@@ -2800,33 +2797,22 @@ onMounted(async () => {
   font-weight: 600;
 }
 
-/* Counter-offer / Place offer takes more width, per the mock. */
+/* Counter-offer / Place offer takes more width, per the mock. Both sheet
+   buttons stay white (the sheet card is white); the primary one only differs
+   in width, matching the plain .btn hover idiom. */
 .ib-sheet-actions .btn-primary {
   flex: 1.8;
-  color: var(--color-gray-900);
-  border: none;
+  background: var(--color-white);
+  border: 1px solid var(--color-gray-300);
+  color: var(--text-primary);
 }
 
 .ib-sheet-actions .btn-primary:hover:not(:disabled),
 .ib-sheet-actions .btn-primary:focus-visible:not(:disabled) {
-  color: var(--color-gray-900);
+  background: var(--color-white);
   border-color: var(--color-primary);
-  filter: brightness(1.05);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 35%, transparent);
-}
-
-.ib-btn-dark {
-  border: none;
-  background: var(--color-gray-800);
-  color: var(--color-white);
-}
-
-.ib-btn-dark:hover:not(:disabled),
-.ib-btn-dark:focus-visible:not(:disabled) {
-  background: #3d3d3d;
-  border-color: #3d3d3d;
-  color: var(--color-white);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-gray-800) 30%, transparent);
+  color: var(--text-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 24%, transparent);
 }
 
 @media (max-width: 640px) {

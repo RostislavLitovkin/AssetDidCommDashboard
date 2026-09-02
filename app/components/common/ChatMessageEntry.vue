@@ -35,8 +35,6 @@ export interface ChatMarketInfo {
     symbol: string
     decimals: number
   }
-  /** An older offer that a newer message has superseded. */
-  superseded: boolean
 }
 
 /** Try to parse the body as a file-attachment envelope. */
@@ -70,9 +68,7 @@ import { Paperclip, KeyRound } from "lucide-vue-next"
 import { useSettingsStore } from "../../stores/settings"
 import {
   formatPriceAmount,
-  shortMint,
-  marketKindLabel,
-  tokenClusterLabel
+  marketKindLabel
 } from "../../services/buckets/realxhub"
 import GlitchParticles from "./GlitchParticles.vue"
 
@@ -130,13 +126,6 @@ const marketKindLabelValue = computed(() =>
 const marketPrice = computed(() =>
   market.value ? formatPriceAmount(market.value.price) : ""
 )
-const marketClusterLabel = computed(() =>
-  market.value ? tokenClusterLabel(market.value.token.cluster) : ""
-)
-const marketMintShort = computed(() =>
-  market.value ? shortMint(market.value.token.mint) : ""
-)
-
 function downloadAttachment() {
   const a = attachment.value
   if (!a) return
@@ -224,16 +213,14 @@ function formatFileSize(base64: string): string {
 
         <!-- realXhub market payload: offer / counter-offer price card -->
         <template v-else-if="market">
-          <div class="chat-market-card" :class="{ 'chat-market-superseded': market.superseded }">
+          <div class="chat-market-card">
             <div class="chat-market-header">
               <span class="chat-market-kind">{{ marketKindLabelValue }}</span>
-              <span v-if="market.superseded" class="chat-market-badge">Superseded</span>
             </div>
             <p class="chat-market-price">
               <span class="chat-market-amount">{{ marketPrice }}</span>
               <span class="chat-market-symbol">{{ market.token.symbol }}</span>
             </p>
-            <p class="chat-market-sub">{{ marketClusterLabel }} · {{ marketMintShort }}</p>
           </div>
         </template>
 
@@ -463,7 +450,6 @@ function formatFileSize(base64: string): string {
   gap: 6px;
   border-radius: 10px;
   padding: 10px 12px;
-  border: 1px solid var(--border-default);
   background: var(--surface-bg);
 }
 
@@ -480,17 +466,6 @@ function formatFileSize(base64: string): string {
   letter-spacing: 0.02em;
   text-transform: uppercase;
   color: var(--text-secondary);
-}
-
-.chat-market-badge {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 2px 7px;
-  border-radius: 999px;
-  color: var(--text-secondary);
-  background: color-mix(in srgb, var(--text-secondary) 14%, transparent);
 }
 
 .chat-market-price {
@@ -513,21 +488,9 @@ function formatFileSize(base64: string): string {
   color: var(--text-primary);
 }
 
-.chat-market-sub {
-  margin: 0;
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-/* Superseded: dim the whole card so it reads as history, not the live price. */
-.chat-market-superseded {
-  opacity: 0.6;
-}
-
 /* Outgoing bubble: the primary background would drown the card, so it sits on a
    translucent white plate with white-on-dark text of its own. */
 .chat-bubble-outgoing .chat-market-card {
-  border-color: rgba(255, 255, 255, 0.28);
   background: rgba(255, 255, 255, 0.14);
 }
 
@@ -535,18 +498,9 @@ function formatFileSize(base64: string): string {
   color: rgba(255, 255, 255, 0.75);
 }
 
-.chat-bubble-outgoing .chat-market-badge {
-  color: rgba(255, 255, 255, 0.9);
-  background: rgba(255, 255, 255, 0.2);
-}
-
 .chat-bubble-outgoing .chat-market-amount,
 .chat-bubble-outgoing .chat-market-symbol {
   color: #ffffff;
-}
-
-.chat-bubble-outgoing .chat-market-sub {
-  color: rgba(255, 255, 255, 0.8);
 }
 
 .chat-warning {

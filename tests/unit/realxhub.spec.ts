@@ -8,7 +8,6 @@ import {
   defaultStatusForRole,
   deriveActiveOffer,
   formatPriceAmount,
-  isMarketMessageSuperseded,
   isRealXhubCategory,
   isRealXhubTag,
   marketPayloadSummary,
@@ -17,7 +16,6 @@ import {
   parseStatusPayload,
   priceToRawUnits,
   resolveMarketStatus,
-  shortMint,
   tokenClusterLabel,
   REALXHUB_COUNTER_OFFER_TAG,
   REALXHUB_OFFER_TAG,
@@ -230,16 +228,6 @@ describe("active offer state machine", () => {
     expect(active?.type).toBe("counterOffer");
   });
 
-  it("marks superseded messages against newer market messages", () => {
-    const entries = [
-      { message: offerMessage, payload: offerPayload },
-      { message: counterMessage, payload: counterPayload },
-      { message: refusalMessage, payload: refusalPayload },
-    ];
-    expect(isMarketMessageSuperseded(entries, offerMessage)).toBe(true);
-    expect(isMarketMessageSuperseded(entries, counterMessage)).toBe(true);
-    expect(isMarketMessageSuperseded(entries, refusalMessage)).toBe(false);
-  });
 });
 
 describe("price formatting and raw units", () => {
@@ -262,13 +250,6 @@ describe("price formatting and raw units", () => {
     expect(priceToRawUnits("1.123", 2)).toBeUndefined();
     expect(priceToRawUnits("abc", 2)).toBeUndefined();
     expect(priceToRawUnits("1", -1)).toBeUndefined();
-  });
-});
-
-describe("mint display helper", () => {
-  it("shortens long mints and leaves short ones intact", () => {
-    expect(shortMint("71G3dc4B9p9QBosLx3XhWY3ULRPAxjopngsin66M9HUb")).toBe("71G3…9HUb");
-    expect(shortMint("short")).toBe("short");
   });
 });
 
