@@ -36,7 +36,6 @@ import {
   isRealXhubTag,
   isValidPrice,
   priceToRawUnits,
-  shortMint,
   formatPriceAmount,
   marketKindLabel,
   marketPayloadSummary,
@@ -1479,14 +1478,7 @@ onMounted(async () => {
             <template v-else> from {{ formatAddress(activeMarket.message.contributor) }}</template>
           </p>
           <p v-if="activeMarket.payload.price !== undefined" class="ib-offer-amount">
-            Total: <strong>{{ formatPriceAmount(activeMarket.payload.price) }}</strong>
-            <template v-if="activeMarket.payload.token">
-              {{ activeMarket.payload.token.symbol }}
-              <span class="ib-offer-token-meta">
-                ({{ tokenClusterLabel(activeMarket.payload.token.cluster) }} ·
-                {{ shortMint(activeMarket.payload.token.mint) }})
-              </span>
-            </template>
+            total amount: <strong>{{ formatPriceAmount(activeMarket.payload.price) }}</strong> <template v-if="activeMarket.payload.token">{{ activeMarket.payload.token.symbol }}</template>
           </p>
         </div>
         <div v-if="myStatus === 'buyer' && activeMarket.type === 'offer'" class="ib-offer-actions">
@@ -1498,7 +1490,6 @@ onMounted(async () => {
           <button class="btn" :disabled="sending" @click="refuseCounterOffer">Refuse counter-offer</button>
           <button class="btn btn-primary" :disabled="sending" @click="acceptCounterOffer">Accept counter-offer</button>
         </div>
-        <p v-else class="ib-offer-waiting">Waiting for the other party…</p>
       </div>
     </div>
 
@@ -2478,11 +2469,6 @@ onMounted(async () => {
   color: var(--text-primary);
 }
 
-.ib-offer-token-meta {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
 .ib-offer-actions {
   display: flex;
   align-items: center;
@@ -2494,13 +2480,6 @@ onMounted(async () => {
 .ib-offer-note {
   font-size: 12px;
   color: var(--text-secondary);
-}
-
-.ib-offer-waiting {
-  margin: 0;
-  font-size: 13px;
-  color: var(--text-secondary);
-  flex-shrink: 0;
 }
 
 /* realXhub marketplace: composer offer button */
@@ -2588,8 +2567,7 @@ onMounted(async () => {
   }
 
   .ib-offer-inner {
-    flex-direction: column;
-    align-items: stretch;
+    flex-wrap: wrap;
   }
 
   .ib-offer-actions {
