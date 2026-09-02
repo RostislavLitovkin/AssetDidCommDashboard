@@ -1101,7 +1101,9 @@ function buildPendingMarketMessage(
 }
 
 async function submitOffer(): Promise<void> {
-  const price = offerPrice.value.trim()
+  // v-model on a type="number" input assigns a number once the entry is
+  // valid, so normalize to a string before string processing.
+  const price = String(offerPrice.value ?? "").trim()
   if (!isValidPrice(price) || priceToRawUnits(price, offerToken.value.decimals) === undefined) {
     offerError.value = "Enter a valid price"
     return

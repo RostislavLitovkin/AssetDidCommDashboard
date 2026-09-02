@@ -1567,10 +1567,6 @@ async function setMemberStatus(address: string, status: MarketStatus): Promise<v
             </h4>
           </div>
 
-          <p class="muted" style="margin: 0">
-            Set whether each member sells or buys on this marketplace. Admins default to seller; contributors default to buyer.
-          </p>
-
           <p v-if="roleError" style="margin: 0; color: var(--status-error)">{{ roleError }}</p>
 
           <p v-if="!marketplaceRoleMembers.length" class="muted" style="margin: 0">
@@ -1585,24 +1581,24 @@ async function setMemberStatus(address: string, status: MarketStatus): Promise<v
                 :style="{ fontSize: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 1 200px', minWidth: 0 }">
                 {{ resolveMemberName(member.address) }}
               </strong>
-              <span
-                :style="{ padding: '4px 8px', borderRadius: '999px', fontSize: '11px', color: 'white', fontWeight: '600', textTransform: 'capitalize', background: 'var(--color-primary)', flexShrink: 0 }">
-                {{ member.role }}
-              </span>
-              <div class="mr-status-toggle" style="display: flex; gap: 6px; flexShrink: 0;">
+              <div v-if="connectedAdmin" class="mr-status-toggle" style="display: flex; gap: 6px; flexShrink: 0;">
                 <button type="button" class="mr-status-btn" :class="{ 'mr-status-btn-active': member.status === 'seller' }"
-                  :disabled="updatingRole || !connectedAdmin" title="Set as seller"
+                  :disabled="updatingRole" title="Set as seller"
                   @click="setMemberStatus(member.address, 'seller')">
                   <span v-if="updatingRole && member.status === 'seller'" class="spinner-small"></span>
                   Seller
                 </button>
                 <button type="button" class="mr-status-btn" :class="{ 'mr-status-btn-active': member.status === 'buyer' }"
-                  :disabled="updatingRole || !connectedAdmin" title="Set as buyer"
+                  :disabled="updatingRole" title="Set as buyer"
                   @click="setMemberStatus(member.address, 'buyer')">
                   <span v-if="updatingRole && member.status === 'buyer'" class="spinner-small"></span>
                   Buyer
                 </button>
               </div>
+              <span v-else
+                :style="{ padding: '4px 8px', borderRadius: '999px', fontSize: '11px', color: 'white', fontWeight: '600', textTransform: 'capitalize', background: 'var(--color-primary)', flexShrink: 0 }">
+                {{ member.status }}
+              </span>
             </li>
           </ul>
 
