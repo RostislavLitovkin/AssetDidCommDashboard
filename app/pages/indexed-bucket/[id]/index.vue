@@ -13,8 +13,8 @@ import ParticleLoader from "../../../components/common/ParticleLoader.vue"
 import PageHeader from "../../../components/common/PageHeader.vue"
 import SubmitButton from "../../../components/common/SubmitButton.vue"
 import type { SubmitButtonLabels } from "../../../components/common/submitButtonView"
-import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment } from "../../../components/common/ChatMessageEntry.vue"
-import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, Check } from "lucide-vue-next"
+import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment, type ChatMarketInfo } from "../../../components/common/ChatMessageEntry.vue"
+import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, Check, HandCoins } from "lucide-vue-next"
 import { useAddress } from "../../../composables/useAddress"
 import { useWallet } from "../../../composables/useWallet"
 import { useSubmitState } from "../../../composables/useSubmitState"
@@ -25,6 +25,38 @@ import { useRoute, useRuntimeConfig } from "nuxt/app"
 import { useOperationsStore } from "../../../stores/operations"
 import { useSessionStore } from "../../../stores/session"
 import { useSettingsStore } from "../../../stores/settings"
+import {
+  REALXHUB_COUNTER_OFFER_TAG,
+  REALXHUB_OFFER_TAG,
+  REALXHUB_REFUSE_COUNTER_OFFER_TAG,
+  REALXHUB_STATUS_TAG,
+  SOLANA_TOKENS,
+  DEFAULT_OFFER_TOKEN,
+  isRealXhubCategory,
+  isRealXhubTag,
+  isValidPrice,
+  priceToRawUnits,
+  shortMint,
+  formatPriceAmount,
+  marketKindLabel,
+  marketPayloadSummary,
+  buildMarketPayload,
+  parseMarketPayload,
+  buildStatusPayload,
+  parseStatusPayload,
+  resolveMarketStatus,
+  deriveActiveOffer,
+  isMarketMessageSuperseded,
+  tokenClusterLabel
+} from "../../../services/buckets/realxhub"
+import type {
+  ActiveMarketOffer,
+  MarketMessageEntry,
+  MarketPayload,
+  MarketStatus,
+  SolanaToken,
+  StatusPayload
+} from "../../../services/buckets/realxhub"
 
 const route = useRoute()
 const config = useRuntimeConfig()
@@ -91,6 +123,18 @@ const payloadErrorById = ref<Record<string, string>>({})
 const decryptedById = ref<Record<string, string>>({})
 const decryptErrorById = ref<Record<string, string>>({})
 const attachmentById = ref<Record<string, ChatMessageAttachment>>({})
+
+// realXhub marketplace state — market + status messages are fetched by tag on
+// top of the main message list, so the active offer survives page reloads.
+const realxhubMarketMessages = ref<ApiMessage[]>([])
+const realxhubStatusMessages = ref<ApiMessage[]>([])
+const offerPopupOpen = ref(false)
+const offerKind = ref<"offer" | "counterOffer">("offer")
+const offerPrice = ref("")
+const offerTokenMint = ref(DEFAULT_OFFER_TOKEN.mint)
+const offerError = ref("")
+const paymentNotice = ref(false)
+const updatingRole = ref(false)
 
 // Every bucket key we could recover from key-sharing messages, sorted
 // chronologically. Messages are decrypted with the key of their era (the most
@@ -179,6 +223,9 @@ interface PendingOutgoingMessage {
   senderAddress: string
   /** Set once the write resolves — hides the server copy until this bubble goes. */
   serverId?: string
+  tag?: string
+  displayBody?: string
+  market?: ChatMarketInfo
 }
 
 const pendingMessages = ref<PendingOutgoingMessage[]>([])
@@ -233,6 +280,63 @@ const canManageBucket = computed(() =>
   connectedAdmin.value || connectedNamespaceManager.value || connectedStandaloneCreator.value
 )
 
+// ── realXhub marketplace (offers, counter-offers, seller/buyer roles) ──
+const isRealXhubBucket = computed(() => isRealXhubCategory(bucket.value?.category))
+
+const orderedStatusPayloads = computed<StatusPayload[]>(() =>
+  [...realxhubStatusMessages.value]
+    .sort((a, b) =>
+      Date.parse(a.createdAt) - Date.parse(b.createdAt) || Number(a.messageId) - Number(b.messageId)
+    )
+    .map(m => parseStatusPayload(decryptedById.value[m.id] ?? payloadById.value[m.id] ?? ""))
+    .filter((p): p is StatusPayload => p !== undefined)
+)
+
+// Marketplace role of the connected wallet: admins default to seller, every
+// contributor to buyer; a later encrypted status message overrides the default.
+const myStatus = computed<MarketStatus | null>(() => {
+  if (!isRealXhubBucket.value || !session.accountAddress) return null
+  const role = connectedAdmin.value ? "admin" : "contributor"
+  return resolveMarketStatus(session.accountAddress, role, orderedStatusPayloads.value)
+})
+
+const marketEntries = computed<MarketMessageEntry[]>(() =>
+  realxhubMarketMessages.value
+    .map(m => {
+      const payload = parseMarketPayload(decryptedById.value[m.id] ?? payloadById.value[m.id] ?? "")
+      return payload ? { message: m, payload } : null
+    })
+    .filter((e): e is MarketMessageEntry => e !== null)
+)
+
+// The newest offer / counter-offer is the only active one; a refusal clears it.
+const activeMarket = computed<ActiveMarketOffer | null>(() => deriveActiveOffer(marketEntries.value))
+const activeMarketIsMine = computed(
+  () =>
+    Boolean(
+      activeMarket.value &&
+        session.accountAddress &&
+        addressesEqual(activeMarket.value.message.contributor, session.accountAddress)
+    )
+)
+const offerToken = computed<SolanaToken>(
+  () => SOLANA_TOKENS.find(t => t.mint === offerTokenMint.value) ?? DEFAULT_OFFER_TOKEN
+)
+
+// Sellers and buyers for the admin role panel (admins first, deduped).
+const realxhubRoleMembers = computed(() => {
+  const seen = new Set<string>()
+  const out: { address: string; role: "admin" | "contributor"; status: MarketStatus }[] = []
+  for (const role of ["admin", "contributor"] as const) {
+    for (const address of role === "admin" ? admins.value : contributors.value) {
+      if (seen.has(address)) continue
+      seen.add(address)
+      out.push({ address, role, status: resolveMarketStatus(address, role, orderedStatusPayloads.value) })
+    }
+  }
+  return out
+})
+
 // ── Empty-bucket setup timeline ────────────────────────────────────
 const memberCount = computed(() => {
   const unique = new Set<string>()
@@ -271,13 +375,43 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
   // Messages an in-flight pending bubble already stands in for are held back so
   // the two never render side by side (see pendingMessageReconciliation).
   const visibleMessages = withoutClaimedMessages(messages.value, pendingMessages.value)
-  const sortedMessages = visibleMessages.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
 
-  const entries = sortedMessages.map(m => {
+  // realXhub marketplace messages arrive via dedicated tag fetches and are
+  // merged in when they are not part of the main list yet.
+  const taggedExtras = isRealXhubBucket.value
+    ? realxhubMarketMessages.value.filter((m) => !visibleMessages.some((x) => x.id === m.id))
+    : []
+
+  const sortedMessages = [...visibleMessages, ...taggedExtras].sort(
+    (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || Number(a.messageId) - Number(b.messageId),
+  )
+
+  const rawEntries = sortedMessages.map((m): ChatMessageProps | null => {
+    // Role-status messages feed the roles panel, not the chat.
+    if (m.tag === REALXHUB_STATUS_TAG) return null
+
     const payload = decryptedById.value[m.id] ?? payloadById.value[m.id]
     const payloadBody = payload ? summarize(payload) ?? payload : undefined
-    const body = payloadBody ?? m.description ?? m.ipfsContent ?? `Message #${m.messageId}`
+    const marketPayload = parseMarketPayload(payload ?? "")
+    // Market payloads render as a card — keep the JSON body out of the bubble.
+    const baseBody = (marketPayload ? undefined : payloadBody) ?? m.description ?? m.ipfsContent ?? `Message #${m.messageId}`
+    const body = marketPayload?.kind === "refuse" ? marketPayloadSummary(marketPayload) : baseBody
     const outgoing = Boolean(session.accountAddress && addressesEqual(m.contributor, session.accountAddress))
+
+    let market: ChatMarketInfo | undefined
+    if (marketPayload && marketPayload.kind !== "refuse" && marketPayload.token) {
+      market = {
+        kind: marketPayload.kind,
+        price: marketPayload.price ?? "",
+        token: {
+          cluster: marketPayload.token.cluster,
+          mint: marketPayload.token.mint,
+          symbol: marketPayload.token.symbol,
+          decimals: marketPayload.token.decimals,
+        },
+        superseded: isMarketMessageSuperseded(marketEntries.value, m),
+      }
+    }
 
     // Key-sharing system notices always name the sender — by profile nickname
     // when there is one, otherwise the address — never "You", even for the
@@ -313,10 +447,13 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
       decryptFailed: Boolean(decryptErrorById.value[m.id]),
       contentType: m.contentType ?? undefined,
       attachment: attachmentById.value[m.id],
+      market,
       timestampLabel,
       debugEntries,
     }
   })
+
+  const entries = rawEntries.filter((e): e is ChatMessageProps => e !== null)
 
   // Optimistic in-flight messages sit at the bottom, newest last. They stay in
   // `pendingMessages` until the reload that follows their submit call has
@@ -324,11 +461,12 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
   for (const p of pendingMessages.value) {
     entries.push({
       id: p.id,
-      body: p.body,
+      body: p.displayBody ?? p.body,
       outgoing: true,
       senderLabel: "You",
       senderAddress: p.senderAddress,
       attachment: p.attachment,
+      market: p.market,
       timestampLabel: pendingStatusLabels[p.status],
       pending: true,
       failed: p.status === "failed",
@@ -365,6 +503,23 @@ async function loadAll() {
       namespaceManagers.value = []
     }
 
+    // 0. realXhub marketplace + role-status messages live under their own tags
+    if (isRealXhubBucket.value) {
+      const [realxhubOffers, realxhubCounters, realxhubRefuses, realxhubStatuses] = await Promise.all([
+        bucketsRepository.fetchMessagesByTag(bucketId.value, REALXHUB_OFFER_TAG),
+        bucketsRepository.fetchMessagesByTag(bucketId.value, REALXHUB_COUNTER_OFFER_TAG),
+        bucketsRepository.fetchMessagesByTag(bucketId.value, REALXHUB_REFUSE_COUNTER_OFFER_TAG),
+        bucketsRepository.fetchMessagesByTag(bucketId.value, REALXHUB_STATUS_TAG),
+      ])
+      realxhubMarketMessages.value = [...realxhubOffers, ...realxhubCounters, ...realxhubRefuses]
+      realxhubStatusMessages.value = realxhubStatuses
+      // Hydrate now; decryption runs in step 5 once the active key is known.
+      const freshTagged = [...realxhubMarketMessages.value, ...realxhubStatusMessages.value].filter(
+        (m) => !detail.messages.some((x) => x.id === m.id),
+      )
+      if (freshTagged.length) await hydratePayloads(freshTagged)
+    }
+
     // 1. Fetch key-sharing messages by tag first
     keySharingMessages.value = await bucketsRepository.fetchMessagesByTag(bucketId.value, KEY_SHARING_MESSAGE_TAG)
     viewersMissingKeyCount.value = null // data changed — the lazy viewer check must re-run
@@ -378,14 +533,23 @@ async function loadAll() {
     // 4. Now hydrate all remaining message payloads
     await hydratePayloads(detail.messages)
 
-    // 5. Decrypt normal messages using the active key
+    // 5. Decrypt normal messages using the active key (realXhub marketplace
+    // and role-status payloads ride the same bucket key)
     await decryptMessages(detail.messages)
+    if (isRealXhubBucket.value) {
+      await decryptMessages([...realxhubMarketMessages.value, ...realxhubStatusMessages.value])
+    }
 
     // 6. Resolve file attachments referenced by CID-pointer messages
     await hydrateAttachments(detail.messages)
 
     // 7. Resolve sender profiles (nicknames + pictures) for every message sender
-    await loadSenderProfiles([...detail.messages, ...keySharingMessages.value])
+    await loadSenderProfiles([
+      ...detail.messages,
+      ...keySharingMessages.value,
+      ...realxhubMarketMessages.value,
+      ...realxhubStatusMessages.value,
+    ])
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Failed to load indexed data"
   } finally {
@@ -645,6 +809,8 @@ async function loadSenderProfiles(msgs: ApiMessage[]) {
 function isKnownMessageId(id: string): boolean {
   return messages.value.some(m => m.id === id)
     || keySharingMessages.value.some(m => m.id === id)
+    || realxhubMarketMessages.value.some(m => m.id === id)
+    || realxhubStatusMessages.value.some(m => m.id === id)
 }
 
 // Runs the per-message slice of loadAll's pipeline for one live message.
@@ -671,6 +837,17 @@ async function applyIncomingMessage(m: ApiMessage): Promise<void> {
     await loadSenderProfiles([m])
     viewersMissingKeyCount.value = null
     if (connectedAdmin.value) void checkViewerKeyAccess()
+    return
+  }
+
+  // realXhub marketplace / role-status messages carry their own tags and may
+  // not be part of the generic message fetch — route them into the tagged lists.
+  if (isRealXhubTag(m.tag)) {
+    const list = m.tag === REALXHUB_STATUS_TAG ? realxhubStatusMessages : realxhubMarketMessages
+    list.value = [...list.value, m]
+    await hydratePayloads([m])
+    await decryptMessages([m])
+    await loadSenderProfiles([m])
     return
   }
 
@@ -815,9 +992,11 @@ async function submitPending(pending: PendingOutgoingMessage): Promise<void> {
         bucketId.value, fileJwe, pending.attachment.contentType, pending.senderAddress, onOperationUpdate
       )
     } else {
+      // realXhub marketplace messages are created under their dedicated tag
+      if (pending.tag) await ensureRealXhubTag(pending.tag)
       const encrypted = await encryptOutgoing(pending.body)
       result = await bucketsRepository.createMessage(
-        bucketId.value, encrypted, pending.senderAddress, onOperationUpdate
+        bucketId.value, encrypted, pending.senderAddress, onOperationUpdate, pending.tag
       )
     }
     operations.add("bucket_write", "Send message", "success", `Message submitted: ${result.id}`)
@@ -895,6 +1074,140 @@ function discardFailedMessage(id: string): void {
   const entry = pendingMessages.value.find(p => p.id === id)
   if (!entry || entry.status !== "failed") return
   pendingMessages.value = pendingMessages.value.filter(p => p.id !== id)
+}
+
+// ── realXhub marketplace actions ─────────────────────────────────────
+const ensuredRealXhubTags = new Set<string>()
+
+// Create the bucket tag once before sending; a duplicate or failed ensure
+// must never block the message itself.
+async function ensureRealXhubTag(tag: string): Promise<void> {
+  if (ensuredRealXhubTags.has(tag) || !session.accountAddress) return
+  try {
+    await bucketsRepository.createTag(bucketId.value, tag, session.accountAddress)
+  } catch {
+    // Tag may already exist or the API may be unavailable — sending still proceeds.
+  }
+  ensuredRealXhubTags.add(tag)
+}
+
+function openOfferPopup(kind: "offer" | "counterOffer"): void {
+  offerKind.value = kind
+  offerPrice.value = ""
+  offerError.value = ""
+  offerTokenMint.value = DEFAULT_OFFER_TOKEN.mint
+  offerPopupOpen.value = true
+}
+
+function buildPendingMarketMessage(
+  tag: string,
+  payload: MarketPayload,
+  info?: ChatMarketInfo,
+): PendingOutgoingMessage {
+  if (!session.accountAddress) throw new Error("No connected account")
+  return {
+    id: `pending-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    body: buildMarketPayload(payload),
+    tag,
+    displayBody: marketPayloadSummary(payload),
+    market: info,
+    status: "signing",
+    senderAddress: session.accountAddress,
+  }
+}
+
+async function submitOffer(): Promise<void> {
+  const price = offerPrice.value.trim()
+  if (!isValidPrice(price) || priceToRawUnits(price, offerToken.value.decimals) === undefined) {
+    offerError.value = "Enter a valid price"
+    return
+  }
+  const kind = offerKind.value
+  const payload: MarketPayload = {
+    kind,
+    price,
+    token: { ...offerToken.value },
+    ...(kind === "counterOffer" && activeMarket.value
+      ? { counterOf: activeMarket.value.message.messageId }
+      : {}),
+  }
+  const info: ChatMarketInfo = {
+    kind,
+    price,
+    token: { ...offerToken.value },
+    superseded: false,
+  }
+  offerPopupOpen.value = false
+  const pending = buildPendingMarketMessage(
+    kind === "counterOffer" ? REALXHUB_COUNTER_OFFER_TAG : REALXHUB_OFFER_TAG,
+    payload,
+    info,
+  )
+  pendingMessages.value = [...pendingMessages.value, pending]
+  await submitPending(pending)
+}
+
+// The seller accepts the counter-offer by re-sending it as a fresh offer;
+// only the newest offer stays active, so this supersedes the old one.
+async function acceptCounterOffer(): Promise<void> {
+  const active = activeMarket.value
+  if (!active || active.type !== "counterOffer" || !active.payload.token || !active.payload.price) return
+  const token = active.payload.token
+  const price = active.payload.price
+  const payload: MarketPayload = { kind: "offer", price, token: { ...token } }
+  const info: ChatMarketInfo = {
+    kind: "offer",
+    price,
+    token: {
+      cluster: token.cluster,
+      mint: token.mint,
+      symbol: token.symbol,
+      decimals: token.decimals,
+    },
+    superseded: false,
+  }
+  const pending = buildPendingMarketMessage(REALXHUB_OFFER_TAG, payload, info)
+  pendingMessages.value = [...pendingMessages.value, pending]
+  await submitPending(pending)
+}
+
+async function refuseCounterOffer(): Promise<void> {
+  const active = activeMarket.value
+  const payload: MarketPayload = {
+    kind: "refuse",
+    ...(active ? { refusedOf: active.message.messageId } : {}),
+  }
+  const pending = buildPendingMarketMessage(REALXHUB_REFUSE_COUNTER_OFFER_TAG, payload)
+  pendingMessages.value = [...pendingMessages.value, pending]
+  await submitPending(pending)
+}
+
+// On-chain payment lands later — for now just flag the placeholder.
+function makePayment(): void {
+  paymentNotice.value = true
+}
+
+// Admin flips a member between seller/buyer via a status-tagged message.
+async function setMemberStatus(address: string, status: MarketStatus): Promise<void> {
+  if (!connectedAdmin.value || !session.accountAddress || updatingRole.value) return
+  updatingRole.value = true
+  try {
+    await ensureRealXhubTag(REALXHUB_STATUS_TAG)
+    const encrypted = await encryptOutgoing(buildStatusPayload({ address, status }))
+    await bucketsRepository.createMessage(
+      bucketId.value,
+      encrypted,
+      session.accountAddress,
+      undefined,
+      REALXHUB_STATUS_TAG,
+    )
+    operations.add("bucket_write", "Update marketplace role", "success", status)
+    await loadAll()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "Failed to update marketplace role"
+  } finally {
+    updatingRole.value = false
+  }
 }
 
 // ── Create & share bucket encryption key (setup timeline step 2) ───
@@ -1158,6 +1471,9 @@ watch(() => settings.x25519SecretJwk, async () => {
     await hydratePayloads(keySharingMessages.value)
     await decryptKeySharingFromMessages(keySharingMessages.value)
     await decryptMessages(messages.value)
+    if (isRealXhubBucket.value) {
+      await decryptMessages([...realxhubMarketMessages.value, ...realxhubStatusMessages.value])
+    }
     await hydrateAttachments(messages.value)
   } finally {
     rekeying.value = false
@@ -1188,6 +1504,41 @@ onMounted(async () => {
       </template>
     </PageHeader>
 
+    <!-- realXhub marketplace: active offer / counter-offer bar -->
+    <div v-if="!loading && isRealXhubBucket && activeMarket && myStatus && connectedAdminOrContributor"
+      class="ib-container ib-offer-bar" role="region" aria-label="Marketplace offer">
+      <div class="ib-offer-inner">
+        <HandCoins :size="18" class="ib-offer-icon" />
+        <div class="ib-offer-info">
+          <p class="ib-offer-title">
+            {{ marketKindLabel(activeMarket.type) }}
+            <template v-if="activeMarketIsMine"> you made</template>
+            <template v-else> from {{ formatAddress(activeMarket.message.contributor) }}</template>
+          </p>
+          <p v-if="activeMarket.payload.price !== undefined" class="ib-offer-amount">
+            Total: <strong>{{ formatPriceAmount(activeMarket.payload.price) }}</strong>
+            <template v-if="activeMarket.payload.token">
+              {{ activeMarket.payload.token.symbol }}
+              <span class="ib-offer-token-meta">
+                ({{ tokenClusterLabel(activeMarket.payload.token.cluster) }} ·
+                {{ shortMint(activeMarket.payload.token.mint) }})
+              </span>
+            </template>
+          </p>
+        </div>
+        <div v-if="myStatus === 'buyer' && activeMarket.type === 'offer'" class="ib-offer-actions">
+          <button class="btn" :disabled="sending" @click="openOfferPopup('counterOffer')">Make counter-offer</button>
+          <button class="btn btn-primary" :disabled="sending" @click="makePayment">Make payment</button>
+          <span v-if="paymentNotice" class="ib-offer-note">Payment flow coming soon.</span>
+        </div>
+        <div v-else-if="myStatus === 'seller' && activeMarket.type === 'counterOffer'" class="ib-offer-actions">
+          <button class="btn" :disabled="sending" @click="refuseCounterOffer">Refuse counter-offer</button>
+          <button class="btn btn-primary" :disabled="sending" @click="acceptCounterOffer">Accept counter-offer</button>
+        </div>
+        <p v-else class="ib-offer-waiting">Waiting for the other party…</p>
+      </div>
+    </div>
+
     <div class="ib-container">
       <p v-if="error" class="ib-error">{{ error }}</p>
 
@@ -1209,6 +1560,33 @@ onMounted(async () => {
         </SubmitButton>
       </div>
       <p v-if="createKeyError && viewersMissingKeyCount" class="ib-error">{{ createKeyError }}</p>
+
+      <!-- realXhub: admin manages marketplace roles (seller / buyer) -->
+      <details v-if="!loading && isRealXhubBucket && connectedAdmin" class="card ib-panel">
+        <summary class="ib-panel-summary">
+          Marketplace roles
+          <span class="ib-panel-toggle">+</span>
+        </summary>
+        <div class="ib-panel-body">
+          <p v-if="!realxhubRoleMembers.length" class="muted">No members found.</p>
+          <div v-for="member in realxhubRoleMembers" :key="member.address" class="ib-role-row">
+            <span class="ib-role-address" :title="member.address">
+              {{ formatAddress(member.address) }}
+              <span class="muted ib-role-tag">{{ member.role }}</span>
+            </span>
+            <div class="ib-status-toggle">
+              <button class="ib-status-btn" :class="{ 'ib-status-btn-active': member.status === 'seller' }"
+                :disabled="updatingRole || sending" @click="setMemberStatus(member.address, 'seller')">
+                Seller
+              </button>
+              <button class="ib-status-btn" :class="{ 'ib-status-btn-active': member.status === 'buyer' }"
+                :disabled="updatingRole || sending" @click="setMemberStatus(member.address, 'buyer')">
+                Buyer
+              </button>
+            </div>
+          </div>
+        </div>
+      </details>
     </div>
 
     <!-- Chat viewport -->
@@ -1357,6 +1735,11 @@ onMounted(async () => {
               :disabled="sending || !activeSecretJwk" title="Attach file">
               <Paperclip :size="18" />
             </button>
+            <button v-if="!sendText && isRealXhubBucket && myStatus === 'seller' && !activeMarket" type="button"
+              class="ib-composer-offer" :disabled="sending || !activeSecretJwk" title="Make offer"
+              @click="openOfferPopup('offer')">
+              <HandCoins :size="18" />
+            </button>
             <textarea ref="composerInputRef" v-model="sendText" class="input ib-composer-input composer-scroll"
               name="message-text" placeholder="Write a message" rows="1" :disabled="sending" />
           </template>
@@ -1370,6 +1753,45 @@ onMounted(async () => {
             {{ sendError }}
           </p>
         </div>
+      </div>
+    </div>
+
+    <!-- realXhub offer / counter-offer popup -->
+    <div v-if="offerPopupOpen" class="ib-wallet-overlay" @click.self="offerPopupOpen = false">
+      <div class="card stack ib-offer-popup">
+        <div class="row" style="justify-content: space-between; align-items: center">
+          <h3 style="margin: 0">{{ offerKind === "counterOffer" ? "Make a counter-offer" : "Make an offer" }}</h3>
+          <button class="btn" type="button" aria-label="Close" @click="offerPopupOpen = false">
+            <X :size="14" />
+          </button>
+        </div>
+        <p class="muted" style="margin: 0">
+          {{ offerKind === "counterOffer"
+            ? "Propose a different price for the active offer."
+            : "Set the price you want to accept to list this bucket for sale." }}
+        </p>
+        <form class="stack" @submit.prevent="submitOffer">
+          <label class="ib-field" for="ib-offer-price">
+            <span class="ib-field-label">Price</span>
+            <input id="ib-offer-price" v-model="offerPrice" class="input" type="number" step="any" min="0"
+              inputmode="decimal" placeholder="0.00" required :disabled="sending" />
+          </label>
+          <label class="ib-field" for="ib-offer-token">
+            <span class="ib-field-label">Token</span>
+            <select id="ib-offer-token" v-model="offerTokenMint" class="input" :disabled="sending">
+              <option v-for="token in SOLANA_TOKENS" :key="token.mint" :value="token.mint">
+                {{ token.symbol }} — {{ tokenClusterLabel(token.cluster) }}
+              </option>
+            </select>
+          </label>
+          <p v-if="offerError" class="ib-tl-error">{{ offerError }}</p>
+          <div class="row ib-offer-popup-actions">
+            <button class="btn" type="button" @click="offerPopupOpen = false" :disabled="sending">Cancel</button>
+            <button class="btn btn-primary" type="submit" :disabled="sending">
+              {{ offerKind === "counterOffer" ? "Counter-offer" : "Place offer" }}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
 
@@ -2071,7 +2493,184 @@ onMounted(async () => {
   width: min(560px, 92vw);
 }
 
+/* realXhub marketplace: offer / counter-offer bar */
+.ib-offer-bar {
+  margin-top: 8px;
+}
 
+.ib-offer-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-default);
+  border-left: 3px solid var(--color-primary);
+  border-radius: 12px;
+  background: var(--surface-bg);
+}
+
+.ib-offer-icon {
+  flex-shrink: 0;
+  color: var(--color-primary);
+}
+
+.ib-offer-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ib-offer-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ib-offer-amount {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.ib-offer-amount strong {
+  color: var(--text-primary);
+}
+
+.ib-offer-token-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ib-offer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.ib-offer-note {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ib-offer-waiting {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+/* realXhub marketplace: composer offer button */
+.ib-composer-offer {
+  background: none;
+  border: 1px solid var(--border-default);
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--color-primary);
+  transition: border-color 150ms, color 150ms;
+}
+
+.ib-composer-offer:hover:not(:disabled) {
+  border-color: var(--color-primary);
+}
+
+/* realXhub marketplace: offer popup */
+.ib-offer-popup {
+  width: min(440px, 92vw);
+}
+
+.ib-offer-popup-actions {
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.ib-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ib-field-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* realXhub marketplace: roles panel */
+.ib-role-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.ib-role-row:last-child {
+  border-bottom: none;
+}
+
+.ib-role-address {
+  font-size: 14px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ib-role-tag {
+  font-size: 11px;
+  margin-left: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.ib-status-toggle {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.ib-status-btn {
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-default);
+  background: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color 150ms, background 150ms, color 150ms;
+}
+
+.ib-status-btn:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.ib-status-btn-active {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+}
+
+.ib-status-btn-active:hover:not(:disabled) {
+  color: #fff;
+}
 
 @media (max-width: 840px) {
 
@@ -2112,6 +2711,17 @@ onMounted(async () => {
     align-self: stretch;
     justify-content: center;
     white-space: normal;
+  }
+
+  .ib-offer-inner {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ib-offer-actions {
+    margin-left: 0;
+    width: 100%;
+    flex-wrap: wrap;
   }
 }
 </style>

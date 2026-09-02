@@ -4,15 +4,17 @@ import {
   PRIMARY_COLORS,
   PRIMARY_COLOR_OPTIONS,
   normalizePrimaryColor,
-  resolvePrimaryColor
+  resolvePrimaryColor,
+  secondaryColorFor
 } from "../../app/services/theme/primaryColor"
 
 describe("PRIMARY_COLOR_OPTIONS", () => {
-  it("lists the three selectable colors in display order", () => {
+  it("lists the four selectable colors in display order", () => {
     expect(PRIMARY_COLOR_OPTIONS.map((option) => option.value)).toEqual([
       "#f7cb4d",
       "#57a0c5",
-      "#3B4F74"
+      "#3B4F74",
+      "#00463F"
     ])
   })
 
@@ -20,7 +22,8 @@ describe("PRIMARY_COLOR_OPTIONS", () => {
     expect(PRIMARY_COLOR_OPTIONS.map((option) => option.name)).toEqual([
       "Gold",
       "Light blue",
-      "Xcavate blue"
+      "Xcavate blue",
+      "realXhub green"
     ])
   })
 })
@@ -64,5 +67,28 @@ describe("resolvePrimaryColor", () => {
     expect(resolvePrimaryColor(null)).toBe(DEFAULT_PRIMARY_COLOR)
     expect(resolvePrimaryColor("")).toBe(DEFAULT_PRIMARY_COLOR)
     expect(resolvePrimaryColor("#123456")).toBe(DEFAULT_PRIMARY_COLOR)
+  })
+})
+
+describe("secondaryColorFor", () => {
+  it("returns the secondary color for realXhub green", () => {
+    expect(secondaryColorFor("#00463F")).toBe("#78B36E")
+  })
+
+  it("matches case-insensitively like the other lookups", () => {
+    expect(secondaryColorFor("#00463f")).toBe("#78B36E")
+    expect(secondaryColorFor("  #00463F  ")).toBe("#78B36E")
+  })
+
+  it("returns undefined for colors without a secondary companion", () => {
+    for (const color of ["#f7cb4d", "#57a0c5", "#3B4F74"]) {
+      expect(secondaryColorFor(color)).toBeUndefined()
+    }
+  })
+
+  it("returns undefined for missing or invalid input", () => {
+    expect(secondaryColorFor(null)).toBeUndefined()
+    expect(secondaryColorFor("")).toBeUndefined()
+    expect(secondaryColorFor("#123456")).toBeUndefined()
   })
 })

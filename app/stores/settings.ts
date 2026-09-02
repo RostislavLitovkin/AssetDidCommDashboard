@@ -5,7 +5,8 @@ import {
   PRIMARY_COLOR_QUERY_KEY,
   PRIMARY_COLOR_STORAGE_KEY,
   normalizePrimaryColor,
-  resolvePrimaryColor
+  resolvePrimaryColor,
+  secondaryColorFor
 } from "../services/theme/primaryColor"
 import type { WalletKind } from "../services/wallet/types"
 
@@ -166,6 +167,13 @@ function applyPrimaryColor(value: string): void {
   }
 
   document.documentElement.style.setProperty("--color-primary", value)
+
+  const secondary = secondaryColorFor(value)
+  if (secondary !== undefined) {
+    document.documentElement.style.setProperty("--color-secondary", secondary)
+  } else {
+    document.documentElement.style.removeProperty("--color-secondary")
+  }
 }
 
 export const useSettingsStore = defineStore("settings", {
