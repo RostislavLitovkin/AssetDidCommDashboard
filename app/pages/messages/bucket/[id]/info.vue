@@ -1610,10 +1610,6 @@ async function setMemberStatus(address: string, status: MarketStatus): Promise<v
               </span>
             </li>
           </ul>
-
-          <p v-if="!connectedAdmin" class="muted" style="margin: 0">
-            Only bucket admins can change marketplace roles.
-          </p>
         </div>
 
         <div class="card stack" style="gap: 16px;">
