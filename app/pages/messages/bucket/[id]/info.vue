@@ -18,10 +18,11 @@ import {
   resolveMarketStatus,
 } from "../../../../services/buckets/realxhub"
 import type { MarketStatus, StatusPayload } from "../../../../services/buckets/realxhub"
+import { REALXHUB_PRIMARY_COLOR } from "../../../../services/theme/primaryColor"
 import { normalizeApiAddress } from "../../../../services/wallet/addressUtils"
 import { buildBucketOverviewFacts, type BucketFactKey } from "../../../../services/buckets/bucketOverview"
 import * as jose from "jose"
-import { computed, nextTick, onMounted, ref, watch } from "vue"
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue"
 import type { Component } from "vue"
 import { useRoute, useRuntimeConfig } from "nuxt/app"
 import { useOperationsStore } from "../../../../stores/operations"
@@ -1392,6 +1393,17 @@ const allMembers = computed<MemberEntry[]>(() => {
 
 // realXhub marketplace: admins manage the seller/buyer status of each member.
 const isRealXhubBucket = computed(() => isRealXhubCategory(bucket.value?.category))
+
+// realXhub-category buckets brand the app with realXhub green while the page
+// is open; leaving it (or a non-realXhub bucket) restores the saved theme.
+// `bucket` starts null and is set by loadBucketPage, so the watch also covers
+// the initial load; unmount covers navigations that skip the watch entirely.
+watch(isRealXhubBucket, (real) => {
+  settings.setBucketPrimaryColor(real ? REALXHUB_PRIMARY_COLOR : null)
+})
+onUnmounted(() => {
+  settings.setBucketPrimaryColor(null)
+})
 
 const orderedStatusPayloads = computed<StatusPayload[]>(() =>
   messages.value

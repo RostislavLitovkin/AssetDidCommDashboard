@@ -3,6 +3,7 @@ import {
   DEFAULT_PRIMARY_COLOR,
   PRIMARY_COLORS,
   PRIMARY_COLOR_OPTIONS,
+  REALXHUB_PRIMARY_COLOR,
   normalizePrimaryColor,
   resolvePrimaryColor,
   secondaryColorFor
@@ -90,5 +91,18 @@ describe("secondaryColorFor", () => {
     expect(secondaryColorFor(null)).toBeUndefined()
     expect(secondaryColorFor("")).toBeUndefined()
     expect(secondaryColorFor("#123456")).toBeUndefined()
+  })
+})
+
+describe("REALXHUB_PRIMARY_COLOR", () => {
+  it("is the realXhub green accent", () => {
+    expect(REALXHUB_PRIMARY_COLOR).toBe("#00463F")
+  })
+
+  it("is the value behind the realXhub green option", () => {
+    const option = PRIMARY_COLOR_OPTIONS.find((o) => o.name === "realXhub green")
+    expect(option?.value).toBe(REALXHUB_PRIMARY_COLOR)
+    expect(PRIMARY_COLORS).toContain(REALXHUB_PRIMARY_COLOR)
+    expect(secondaryColorFor(REALXHUB_PRIMARY_COLOR)).toBe("#78B36E")
   })
 })

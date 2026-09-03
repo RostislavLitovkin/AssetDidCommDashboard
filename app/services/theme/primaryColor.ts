@@ -16,12 +16,15 @@ export interface PrimaryColorOption {
   secondaryColor?: string
 }
 
+/** realXhub green — the accent realXhub-category buckets brand themselves with. */
+export const REALXHUB_PRIMARY_COLOR = "#00463F"
+
 /** The four selectable accent colors, in display order. */
 export const PRIMARY_COLOR_OPTIONS: readonly PrimaryColorOption[] = [
   { value: "#f7cb4d", name: "Gold" },
   { value: "#57a0c5", name: "Light blue" },
   { value: "#3B4F74", name: "Xcavate blue" },
-  { value: "#00463F", name: "realXhub green", secondaryColor: "#78B36E" },
+  { value: REALXHUB_PRIMARY_COLOR, name: "realXhub green", secondaryColor: "#78B36E" },
 ]
 
 /** Allowlisted color values, in canonical casing. */

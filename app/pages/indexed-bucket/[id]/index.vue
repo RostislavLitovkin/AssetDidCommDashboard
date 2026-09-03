@@ -54,6 +54,7 @@ import type {
   SolanaToken,
   StatusPayload
 } from "../../../services/buckets/realxhub"
+import { REALXHUB_PRIMARY_COLOR } from "../../../services/theme/primaryColor"
 
 const route = useRoute()
 const config = useRuntimeConfig()
@@ -392,6 +393,17 @@ const canManageBucket = computed(() =>
 // ── realXhub marketplace (offers, counter-offers, seller/buyer roles) ──
 const isRealXhubBucket = computed(() => isRealXhubCategory(bucket.value?.category))
 
+// realXhub-category buckets brand the app with realXhub green while the page
+// is open; leaving it (or a non-realXhub bucket) restores the saved theme.
+// `bucket` starts null and is set by loadAll, so the watch also covers the
+// initial load; unmount covers navigations that skip the watch entirely.
+watch(isRealXhubBucket, (real) => {
+  settings.setBucketPrimaryColor(real ? REALXHUB_PRIMARY_COLOR : null)
+})
+onUnmounted(() => {
+  settings.setBucketPrimaryColor(null)
+})
+
 const orderedStatusPayloads = computed<StatusPayload[]>(() =>
   [...realxhubStatusMessages.value]
     .sort((a, b) =>
@@ -428,6 +440,12 @@ const activeMarketIsMine = computed(
         addressesEqual(activeMarket.value.message.contributor, session.accountAddress)
     )
 )
+// The bar names the sender by profile nickname once the profile has loaded
+// (profiles load asynchronously), falling back to the address until then.
+const activeMarketSenderLabel = computed(() => {
+  const sender = activeMarket.value?.message.contributor ?? ""
+  return profilesByAddress.value[sender]?.nickname || formatAddress(sender)
+})
 const offerToken = computed<SolanaToken>(
   () => SOLANA_TOKENS.find(t => t.mint === offerTokenMint.value) ?? DEFAULT_OFFER_TOKEN
 )
@@ -1584,29 +1602,33 @@ onMounted(async () => {
       </template>
     </PageHeader>
 
-    <!-- realXhub marketplace: active offer / counter-offer bar -->
+    <!-- realXhub marketplace: active offer / counter-offer bar — a full-width
+         band under the page header: bottom border only (like PageHeader),
+         inner content constrained to the 1000px chat column -->
     <div v-if="!loading && isRealXhubBucket && activeMarket && myStatus && connectedAdminOrContributor"
-      class="ib-container ib-offer-bar" role="region" aria-label="Marketplace offer">
+      class="ib-offer-bar" role="region" aria-label="Marketplace offer">
       <div class="ib-offer-inner">
-        <HandCoins :size="18" class="ib-offer-icon" />
-        <div class="ib-offer-info">
-          <p class="ib-offer-title">
-            {{ marketKindLabel(activeMarket.type) }}
-            <template v-if="activeMarketIsMine"> you made</template>
-            <template v-else> from {{ formatAddress(activeMarket.message.contributor) }}</template>
-          </p>
-          <p v-if="activeMarket.payload.price !== undefined" class="ib-offer-amount">
-            total amount: <strong>{{ formatPriceAmount(activeMarket.payload.price) }}</strong> <template v-if="activeMarket.payload.token">{{ activeMarket.payload.token.symbol }}</template>
-          </p>
+        <div class="ib-offer-head">
+          <HandCoins :size="18" class="ib-offer-icon" />
+          <div class="ib-offer-info">
+            <p class="ib-offer-title">
+              {{ marketKindLabel(activeMarket.type) }}
+              <template v-if="activeMarketIsMine"> you made</template>
+              <template v-else> from {{ activeMarketSenderLabel }}</template>
+            </p>
+            <p v-if="activeMarket.payload.price !== undefined" class="ib-offer-amount">
+              total amount: <strong>{{ formatPriceAmount(activeMarket.payload.price) }}</strong> <template v-if="activeMarket.payload.token">{{ activeMarket.payload.token.symbol }}</template>
+            </p>
+          </div>
         </div>
         <div v-if="myStatus === 'buyer' && activeMarket.type === 'offer'" class="ib-offer-actions">
-          <button class="btn" :disabled="sending" @click="openOfferPopup('counterOffer')">Make counter-offer</button>
-          <button class="btn btn-primary" :disabled="sending" @click="makePayment">Make payment</button>
+          <button class="btn ib-offer-action" :disabled="sending" @click="openOfferPopup('counterOffer')">Make counter-offer</button>
+          <button class="btn btn-primary ib-offer-action" :disabled="sending" @click="makePayment">Make payment</button>
           <span v-if="paymentNotice" class="ib-offer-note">Payment flow coming soon.</span>
         </div>
         <div v-else-if="myStatus === 'seller' && activeMarket.type === 'counterOffer'" class="ib-offer-actions">
-          <button class="btn" :disabled="sending" @click="refuseCounterOffer">Refuse counter-offer</button>
-          <button class="btn btn-primary" :disabled="sending" @click="acceptCounterOffer">Accept counter-offer</button>
+          <button class="btn ib-offer-action" :disabled="sending" @click="refuseCounterOffer">Refuse counter-offer</button>
+          <button class="btn btn-primary ib-offer-action" :disabled="sending" @click="acceptCounterOffer">Accept counter-offer</button>
         </div>
       </div>
     </div>
@@ -2551,20 +2573,28 @@ onMounted(async () => {
   width: min(560px, 92vw);
 }
 
-/* realXhub marketplace: offer / counter-offer bar */
+/* realXhub marketplace: offer / counter-offer bar — full-width band under the
+   page header, like PageHeader: bottom border only, no radius, inner content
+   constrained to the 1000px chat column */
 .ib-offer-bar {
-  margin-top: 8px;
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
 }
 
 .ib-offer-inner {
   display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 16px 48px;
+}
+
+.ib-offer-head {
+  display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 14px;
-  border: 1px solid var(--border-default);
-  border-left: 3px solid var(--color-primary);
-  border-radius: 12px;
-  background: var(--surface-bg);
+  min-width: 0;
 }
 
 .ib-offer-icon {
@@ -2600,17 +2630,26 @@ onMounted(async () => {
   color: var(--text-primary);
 }
 
+/* Buttons stack at full column width with centered labels */
 .ib-offer-actions {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 8px;
-  flex-shrink: 0;
-  margin-left: auto;
+}
+
+.ib-offer-action {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
 }
 
 .ib-offer-note {
   font-size: 12px;
   color: var(--text-secondary);
+  text-align: center;
 }
 
 /* realXhub marketplace: composer offer button */
@@ -2897,13 +2936,8 @@ onMounted(async () => {
   }
 
   .ib-offer-inner {
-    flex-wrap: wrap;
-  }
-
-  .ib-offer-actions {
-    margin-left: 0;
-    width: 100%;
-    flex-wrap: wrap;
+    padding-left: 16px;
+    padding-right: 16px;
   }
 }
 </style>

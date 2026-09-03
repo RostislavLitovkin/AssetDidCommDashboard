@@ -184,6 +184,7 @@ export const useSettingsStore = defineStore("settings", {
     showMessageDebug: false,
     notificationsEnabled: false,
     primaryColor: DEFAULT_PRIMARY_COLOR,
+    bucketPrimaryColorOverride: null as string | null,
     walletType: "solana" as WalletKind
   }),
   actions: {
@@ -287,6 +288,28 @@ export const useSettingsStore = defineStore("settings", {
       }
 
       this.setPrimaryColor(nextColor)
+    },
+    /**
+     * Brands the app with a bucket-scoped accent (realXhub green for buckets
+     * in the realXhub category) while the caller's page is open. Unlike
+     * `setPrimaryColor` this is transient: the saved `primaryColor` is left
+     * untouched, and passing `null` drops the override and restores the saved
+     * color on the CSS custom property.
+     */
+    setBucketPrimaryColor(value: string | null): void {
+      if (value === null) {
+        this.bucketPrimaryColorOverride = null
+        applyPrimaryColor(this.primaryColor)
+        return
+      }
+
+      const nextColor = normalizePrimaryColor(value)
+      if (nextColor === undefined) {
+        return
+      }
+
+      this.bucketPrimaryColorOverride = nextColor
+      applyPrimaryColor(nextColor)
     }
   }
 })
