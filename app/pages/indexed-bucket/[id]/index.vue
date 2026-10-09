@@ -13,8 +13,8 @@ import ParticleLoader from "../../../components/common/ParticleLoader.vue"
 import PageHeader from "../../../components/common/PageHeader.vue"
 import SubmitButton from "../../../components/common/SubmitButton.vue"
 import type { SubmitButtonLabels } from "../../../components/common/submitButtonView"
-import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment, type ChatMarketInfo } from "../../../components/common/ChatMessageEntry.vue"
-import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, Check, HandCoins, ChevronDown } from "lucide-vue-next"
+import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment, type ChatMarketInfo, type ChatVotingInfo } from "../../../components/common/ChatMessageEntry.vue"
+import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, Check, HandCoins, ChevronDown, Vote } from "lucide-vue-next"
 import { useAddress } from "../../../composables/useAddress"
 import { useWallet } from "../../../composables/useWallet"
 import { useSubmitState } from "../../../composables/useSubmitState"
@@ -55,6 +55,37 @@ import type {
   StatusPayload
 } from "../../../services/buckets/realxhub"
 import { REALXHUB_PRIMARY_COLOR } from "../../../services/theme/primaryColor"
+import {
+  VOTING_TAGS,
+  isVotingTag,
+  parseVotingPayload,
+  deriveActiveVote,
+  votingKindLabel,
+  votingStatusLabel,
+  votingPercentages,
+  votingSideLabels,
+  type VotingKind,
+  type VotingOpenPayload,
+  type VotingMessageEntry,
+} from "../../../services/buckets/voting"
+import {
+  buildVoteOnSpvLawyerTransaction,
+  buildVoteOnProposalTransaction,
+  buildVoteOnChallengeTransaction,
+  castVoteOnChain,
+  findVoteBridge,
+} from "../../../services/voting/solanaVote"
+import {
+  fetchSpvElection,
+  fetchActiveProposal,
+  fetchActiveChallenge,
+  fetchShareHolding,
+  availableVotingShares,
+  type IndexerSpvElection,
+  type IndexerProposal,
+  type IndexerChallenge,
+  type IndexerShareHolding,
+} from "../../../services/voting/indexerClient"
 
 const route = useRoute()
 const config = useRuntimeConfig()
@@ -450,6 +481,239 @@ const offerToken = computed<SolanaToken>(
   () => SOLANA_TOKENS.find(t => t.mint === offerTokenMint.value) ?? DEFAULT_OFFER_TOKEN
 )
 
+// ── Governance voting lane ─────────────────────────────────────────
+// Voting messages (posted by the profile API's system identity from indexer
+// webhooks) live under their own tags, like the realXhub lanes. Payloads are
+// plaintext JSON validated by parseVotingPayload; the indexer client fills in
+// live tallies over the announcement data (the chain is the source of truth).
+const VOTING_SYSTEM_CONTRIBUTOR = "system:voting"
+
+const votingMessages = ref<ApiMessage[]>([])
+const indexerSpvElection = ref<IndexerSpvElection | null>(null)
+const indexerProposal = ref<IndexerProposal | null>(null)
+const indexerChallenge = ref<IndexerChallenge | null>(null)
+const indexerHolding = ref<IndexerShareHolding | null>(null)
+const indexerHoldingLoaded = ref(false)
+
+const votingEntries = computed<VotingMessageEntry[]>(() =>
+  votingMessages.value.flatMap((m) => {
+    const payload = parseVotingPayload(m.ipfsContent)
+    return payload ? [{ message: m, payload }] : []
+  }),
+)
+const activeVotes = computed(() => deriveActiveVote(votingEntries.value))
+
+/** The listing this bucket's votes belong to (the newest announcement wins). */
+const votingListingId = computed(() => {
+  const newest = votingEntries.value[votingEntries.value.length - 1]
+  return newest?.payload.listingId
+})
+
+/** The open vote a connected investor can act on right now, by urgency. */
+const actionableVote = computed(() => {
+  for (const kind of ["terms", "challenge", "proposal"] as VotingKind[]) {
+    const active = activeVotes.value[kind]
+    if (!active || active.payload.status !== "open") continue
+    if (Date.parse(active.payload.expiresAt) <= Date.now()) continue
+    return active
+  }
+  return undefined
+})
+
+/** Elections are announced here but cast in the app (candidate choice UX). */
+const activeElection = computed(() => {
+  const active = activeVotes.value.election
+  if (!active || active.payload.status !== "open") return undefined
+  return Date.parse(active.payload.expiresAt) > Date.now() ? active : undefined
+})
+
+function timeLeftLabel(expiresAt: string): string {
+  const ms = Date.parse(expiresAt) - Date.now()
+  if (Number.isNaN(ms) || ms <= 0) return "closed"
+  const minutes = Math.ceil(ms / 60000)
+  if (minutes < 60) return `${minutes}m left`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 48) return `${hours}h ${minutes % 60}m left`
+  return `${Math.floor(hours / 24)}d left`
+}
+
+/** Live tallies for an open vote, chain-truth first via the indexer. */
+function liveTalliesFor(payload: VotingOpenPayload): { yes?: number; no?: number; abstain?: number } {
+  switch (payload.kind) {
+    case "terms": {
+      // The SPV-lawyer election: turnout over the sold shares is the split bar.
+      const election = indexerSpvElection.value
+      if (!election || election.totalVotePower === undefined || election.soldShareAmount === undefined) {
+        return {}
+      }
+      return {
+        yes: election.totalVotePower,
+        no: Math.max(0, election.soldShareAmount - election.totalVotePower),
+      }
+    }
+    case "proposal":
+      return {
+        yes: indexerProposal.value?.tallyYes,
+        no: indexerProposal.value?.tallyNo,
+        abstain: indexerProposal.value?.tallyAbstain,
+      }
+    case "challenge":
+      return {
+        yes: indexerChallenge.value?.tallyYes,
+        no: indexerChallenge.value?.tallyNo,
+        abstain: indexerChallenge.value?.tallyAbstain,
+      }
+    default:
+      return {}
+  }
+}
+
+async function refreshIndexerVotingState(): Promise<void> {
+  const listingId = votingListingId.value
+  if (!listingId) {
+    indexerSpvElection.value = null
+    indexerProposal.value = null
+    indexerChallenge.value = null
+    return
+  }
+  const [terms, proposal, challenge] = await Promise.allSettled([
+    fetchSpvElection(listingId),
+    fetchActiveProposal(listingId),
+    fetchActiveChallenge(listingId),
+  ])
+  if (terms.status === "fulfilled") indexerSpvElection.value = terms.value
+  if (proposal.status === "fulfilled") indexerProposal.value = proposal.value
+  if (challenge.status === "fulfilled") indexerChallenge.value = challenge.value
+
+  if (session.accountAddress) {
+    try {
+      indexerHolding.value = await fetchShareHolding(listingId, session.accountAddress)
+    } catch {
+      indexerHolding.value = null
+    }
+    indexerHoldingLoaded.value = true
+  }
+}
+
+/** Shares the connected wallet can still lock behind a vote (undefined while loading). */
+const votingPower = computed(() => {
+  if (!indexerHoldingLoaded.value) return undefined
+  return indexerHolding.value ? availableVotingShares(indexerHolding.value) : 0
+})
+
+// The injected Wallet Standard bridge (MAUI host) or a Phantom-style wallet;
+// null on standalone web sessions with message-signing-only wallets.
+const voteBridge = shallowRef(findVoteBridge())
+
+const voteSheetOpen = ref(false)
+const voteSheetSide = ref<"yes" | "no">("yes")
+const voteSubmitting = ref(false)
+const voteError = ref("")
+const voteNotice = ref("")
+
+const voteSheetKind = computed<VotingKind>(() => actionableVote.value?.payload.kind ?? "terms")
+
+const voteActionLabels = computed(() => {
+  const kind = actionableVote.value?.payload.kind
+  return kind === "terms" ? { yes: "Approve terms", no: "Reject terms" } : { yes: "Vote Yes", no: "Vote No" }
+})
+
+const voteSheetTitle = computed(() => {
+  const kind = voteSheetKind.value
+  if (kind === "terms") return voteSheetSide.value === "yes" ? "Approve terms" : "Reject terms"
+  const label = votingKindLabel(kind)
+  return voteSheetSide.value === "yes" ? `Vote Yes — ${label}` : `Vote No — ${label}`
+})
+
+const voteSheetDescription = computed(() => {
+  if (voteSheetKind.value !== "terms") {
+    return voteSheetSide.value === "yes"
+      ? "I vote Yes on this decision."
+      : "I vote No on this decision."
+  }
+  return voteSheetSide.value === "yes"
+    ? "I have reviewed the document and agree with the proposed management terms."
+    : "I do not agree with the current terms and would like a revision."
+})
+
+function openVoteSheet(side: "yes" | "no"): void {
+  if (!actionableVote.value) return
+  voteSheetSide.value = side
+  voteError.value = ""
+  voteSheetOpen.value = true
+}
+
+function closeVoteSheet(): void {
+  if (voteSubmitting.value) return
+  voteSheetOpen.value = false
+}
+
+let votePollTimer: number | null = null
+
+async function submitVote(): Promise<void> {
+  const active = actionableVote.value
+  const voter = session.accountAddress
+  if (!active || !voter || voteSubmitting.value) return
+
+  const bridge = voteBridge.value ?? findVoteBridge()
+  if (!bridge) {
+    voteError.value = "Cast your vote in the realXmarket app — this wallet cannot send transactions."
+    return
+  }
+  const amount = votingPower.value
+  if (amount === undefined) return
+  if (amount < 1) {
+    voteError.value = "No voting power — the indexer shows no unlocked shares for this wallet."
+    return
+  }
+
+  const approve = voteSheetSide.value === "yes"
+  voteSubmitting.value = true
+  voteError.value = ""
+  try {
+    let tx
+    if (active.payload.kind === "terms") {
+      const election = indexerSpvElection.value
+      const candidacy = election?.leadingCandidacy
+      if (!election || !candidacy) {
+        throw new Error("The indexer shows no SPV candidacy yet — try again in a moment.")
+      }
+      tx = buildVoteOnSpvLawyerTransaction({
+        listingId: active.payload.listingId,
+        round: election.round,
+        lawyer: candidacy.lawyer,
+        amount,
+        voter,
+      })
+    } else if (active.payload.kind === "proposal") {
+      const id = active.payload.id
+      if (!id) throw new Error("This proposal announcement is missing its id.")
+      tx = buildVoteOnProposalTransaction({
+        assetId: active.payload.listingId, proposalId: id, choice: approve ? "yes" : "no", amount, voter,
+      })
+    } else if (active.payload.kind === "challenge") {
+      const id = active.payload.id
+      if (!id) throw new Error("This challenge announcement is missing its id.")
+      tx = buildVoteOnChallengeTransaction({
+        assetId: active.payload.listingId, challengeId: id, choice: approve ? "yes" : "no", amount, voter,
+      })
+    } else {
+      throw new Error("Letting-agent elections are cast in the realXmarket app.")
+    }
+
+    const { signature } = await castVoteOnChain(tx, voter, { bridge })
+    voteSheetOpen.value = false
+    voteNotice.value = `Vote submitted (${signature.slice(0, 8)}…) — tallies refresh in a few seconds.`
+    window.setTimeout(() => { voteNotice.value = "" }, 15000)
+    // The indexer needs a beat to mirror the vote; the webhook announcement follows.
+    window.setTimeout(() => void refreshIndexerVotingState(), 4000)
+  } catch (e) {
+    voteError.value = e instanceof Error ? e.message : "Vote submission failed"
+  } finally {
+    voteSubmitting.value = false
+  }
+}
+
 // ── Empty-bucket setup timeline ────────────────────────────────────
 const memberCount = computed(() => {
   const unique = new Set<string>()
@@ -490,10 +754,14 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
   const visibleMessages = withoutClaimedMessages(messages.value, pendingMessages.value)
 
   // realXhub marketplace messages arrive via dedicated tag fetches and are
-  // merged in when they are not part of the main list yet.
-  const taggedExtras = isRealXhubBucket.value
-    ? realxhubMarketMessages.value.filter((m) => !visibleMessages.some((x) => x.id === m.id))
-    : []
+  // merged in when they are not part of the main list yet. Voting lane
+  // messages merge the same way.
+  const taggedExtras = [
+    ...(isRealXhubBucket.value
+      ? realxhubMarketMessages.value.filter((m) => !visibleMessages.some((x) => x.id === m.id))
+      : []),
+    ...votingMessages.value.filter((m) => !visibleMessages.some((x) => x.id === m.id)),
+  ]
 
   const sortedMessages = [...visibleMessages, ...taggedExtras].sort(
     (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || Number(a.messageId) - Number(b.messageId),
@@ -525,14 +793,49 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
       }
     }
 
+    // Voting payloads render as a vote card; tallies come from the indexer
+    // read-back for open votes, from the result announcement itself for finals.
+    let voting: ChatVotingInfo | undefined
+    if (isVotingTag(m.tag)) {
+      const votingPayload = parseVotingPayload(payload ?? m.ipfsContent)
+      if (votingPayload) {
+        const tallies = votingPayload.status === "open"
+          ? liveTalliesFor(votingPayload)
+          : { yes: votingPayload.yes, no: votingPayload.no, abstain: votingPayload.abstain }
+        const pct = votingPercentages(tallies.yes, tallies.no)
+        const sides = votingSideLabels(votingPayload.kind)
+        voting = {
+          kind: votingPayload.kind,
+          kindLabel: votingKindLabel(votingPayload.kind),
+          status: votingPayload.status,
+          statusLabel: votingStatusLabel(votingPayload.status),
+          round: votingPayload.round,
+          id: votingPayload.id,
+          documentsHash: votingPayload.documentsHash,
+          expiresAt: votingPayload.status === "open" ? votingPayload.expiresAt : undefined,
+          timeLeftLabel: votingPayload.status === "open" ? timeLeftLabel(votingPayload.expiresAt) : undefined,
+          yes: tallies.yes,
+          no: tallies.no,
+          abstain: tallies.abstain,
+          yesPct: pct?.yesPct,
+          noPct: pct?.noPct,
+          yesLabel: sides.yes,
+          noLabel: sides.no,
+        }
+      }
+    }
+
     // Key-sharing system notices always name the sender — by profile nickname
     // when there is one, otherwise the address — never "You", even for the
-    // connected user's own key rotations.
+    // connected user's own key rotations. The API's governance poster renders
+    // as "System".
     const senderAddress = m.contributor ?? ""
     const profile = profilesByAddress.value[senderAddress]
-    const senderLabel = m.tag !== KEY_SHARING_MESSAGE_TAG && outgoing
-      ? "You"
-      : profile?.nickname || formatAddress(senderAddress)
+    const senderLabel = senderAddress === VOTING_SYSTEM_CONTRIBUTOR
+      ? "System"
+      : m.tag !== KEY_SHARING_MESSAGE_TAG && outgoing
+        ? "You"
+        : profile?.nickname || formatAddress(senderAddress)
 
     const debugEntries: { key: string; value: string }[] = []
     debugEntries.push({ key: "ID", value: m.id })
@@ -560,6 +863,7 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
       contentType: m.contentType ?? undefined,
       attachment: attachmentById.value[m.id],
       market,
+      voting,
       timestampLabel,
       debugEntries,
     }
@@ -636,6 +940,12 @@ async function loadAll() {
     keySharingMessages.value = await bucketsRepository.fetchMessagesByTag(bucketId.value, KEY_SHARING_MESSAGE_TAG)
     viewersMissingKeyCount.value = null // data changed — the lazy viewer check must re-run
 
+    // 1b. Governance voting messages live under their own tags (property buckets)
+    const votingLaneResults = await Promise.all(
+      VOTING_TAGS.map((tag) => bucketsRepository.fetchMessagesByTag(bucketId.value, tag)),
+    )
+    votingMessages.value = votingLaneResults.flat()
+
     // 2. Hydrate their payloads so we can decrypt them
     await hydratePayloads(keySharingMessages.value)
 
@@ -654,6 +964,9 @@ async function loadAll() {
 
     // 6. Resolve file attachments referenced by CID-pointer messages
     await hydrateAttachments(detail.messages)
+
+    // 6b. Live vote tallies from the indexer (chain truth over the announcements)
+    await refreshIndexerVotingState()
 
     // 7. Resolve sender profiles (nicknames + pictures) for every message sender
     await loadSenderProfiles([
@@ -923,6 +1236,7 @@ function isKnownMessageId(id: string): boolean {
     || keySharingMessages.value.some(m => m.id === id)
     || realxhubMarketMessages.value.some(m => m.id === id)
     || realxhubStatusMessages.value.some(m => m.id === id)
+    || votingMessages.value.some(m => m.id === id)
 }
 
 // Runs the per-message slice of loadAll's pipeline for one live message.
@@ -949,6 +1263,14 @@ async function applyIncomingMessage(m: ApiMessage): Promise<void> {
     await loadSenderProfiles([m])
     viewersMissingKeyCount.value = null
     if (connectedAdmin.value) void checkViewerKeyAccess()
+    return
+  }
+
+  // Governance voting announcements live under their own tags. Plaintext
+  // payloads arrive inline; the indexer read-back freshens the tallies.
+  if (isVotingTag(m.tag)) {
+    votingMessages.value = [...votingMessages.value, m]
+    void refreshIndexerVotingState()
     return
   }
 
@@ -1027,6 +1349,10 @@ onUnmounted(() => {
   catchUpGeneration += 1
   messagesSocket?.close()
   messagesSocket = null
+  if (votePollTimer !== null) {
+    window.clearInterval(votePollTimer)
+    votePollTimer = null
+  }
   if (sheetCloseTimer !== null) {
     window.clearTimeout(sheetCloseTimer)
     sheetCloseTimer = null
@@ -1589,6 +1915,11 @@ onMounted(async () => {
   // No explicit scroll here: loadAll's completion flips showChatLoading off,
   // and that watch scrolls once the message list has actually mounted.
   await loadAll()
+  // Keep tallies honest while a vote is live — the socket tells us about new
+  // announcements, this polls the numbers for the open ones.
+  votePollTimer = window.setInterval(() => {
+    if (actionableVote.value) void refreshIndexerVotingState()
+  }, 30_000)
 })
 </script>
 
@@ -1633,8 +1964,54 @@ onMounted(async () => {
       </div>
     </div>
 
+    <!-- Governance voting: the actionable open vote for this bucket's property -->
+    <div v-if="!loading && activeElection" class="ib-offer-bar" role="region" aria-label="Letting-agent election">
+      <div class="ib-offer-inner">
+        <div class="ib-offer-head">
+          <Vote :size="18" class="ib-offer-icon" />
+          <div class="ib-offer-info">
+            <p class="ib-offer-title">Letting-agent election in progress</p>
+            <p class="ib-offer-amount">
+              Round {{ activeElection.payload.round }} — {{ timeLeftLabel(activeElection.payload.expiresAt) }}
+            </p>
+          </div>
+        </div>
+        <div class="ib-offer-actions">
+          <span class="ib-offer-note">Candidate votes are cast in the realXmarket app.</span>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="!loading && actionableVote" class="ib-offer-bar" role="region" aria-label="Governance vote">
+      <div class="ib-offer-inner">
+        <div class="ib-offer-head">
+          <Vote :size="18" class="ib-offer-icon" />
+          <div class="ib-offer-info">
+            <p class="ib-offer-title">{{ votingKindLabel(actionableVote.payload.kind) }}</p>
+            <p class="ib-offer-amount">{{ timeLeftLabel(actionableVote.payload.expiresAt) }}</p>
+          </div>
+        </div>
+        <!-- Elections are approve-only: not voting is the on-chain "reject". -->
+        <div v-if="actionableVote.payload.kind === 'terms'" class="ib-offer-actions">
+          <button class="btn btn-primary ib-offer-action" :disabled="voteSubmitting" @click="openVoteSheet('yes')">
+            Approve terms
+          </button>
+          <span class="ib-offer-note">Not voting counts as rejecting the terms.</span>
+        </div>
+        <div v-else class="ib-offer-actions">
+          <button class="btn btn-primary ib-offer-action" :disabled="voteSubmitting" @click="openVoteSheet('yes')">
+            {{ voteActionLabels.yes }}
+          </button>
+          <button class="btn ib-vote-reject ib-offer-action" :disabled="voteSubmitting" @click="openVoteSheet('no')">
+            {{ voteActionLabels.no }}
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div class="ib-container">
       <p v-if="error" class="ib-error">{{ error }}</p>
+      <p v-if="voteNotice" class="ib-vote-notice">{{ voteNotice }}</p>
 
       <!-- Admin-only: some viewers are missing from the latest key-sharing message -->
       <div v-if="!loading && connectedAdmin && viewersMissingKeyCount" class="ib-key-status ib-key-warning"
@@ -1872,6 +2249,29 @@ onMounted(async () => {
             </button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- Governance vote bottom sheet: confirmation + Submit vote / Cancel -->
+    <div v-if="voteSheetOpen" class="ib-sheet-overlay" @click.self="closeVoteSheet">
+      <div class="card ib-offer-sheet" role="dialog" aria-modal="true" :aria-label="voteSheetTitle">
+        <div class="ib-sheet-handle" aria-hidden="true"></div>
+        <h3 class="ib-sheet-title">{{ voteSheetTitle }}</h3>
+        <p class="muted ib-sheet-desc">{{ voteSheetDescription }}</p>
+        <p class="muted ib-sheet-desc">
+          <template v-if="votingPower !== undefined">
+            Voting power: <strong>{{ votingPower }}</strong> {{ votingPower === 1 ? "share" : "shares" }}
+          </template>
+          <template v-else>Checking your voting power…</template>
+        </p>
+        <p v-if="voteError" class="ib-tl-error">{{ voteError }}</p>
+        <div class="ib-sheet-actions">
+          <button class="btn" type="button" :disabled="voteSubmitting" @click="closeVoteSheet">Cancel</button>
+          <button class="btn btn-primary" type="button"
+            :disabled="voteSubmitting || votingPower === undefined || votingPower < 1" @click="submitVote">
+            {{ voteSubmitting ? "Submitting…" : "Submit vote" }}
+          </button>
+        </div>
       </div>
     </div>
 
@@ -2630,26 +3030,38 @@ onMounted(async () => {
   color: var(--text-primary);
 }
 
-/* Buttons stack at full column width with centered labels */
+/* Buttons sit side by side at equal width with centered labels */
 .ib-offer-actions {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 8px;
 }
 
 .ib-offer-action {
-  width: 100%;
+  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   text-align: center;
+  white-space: nowrap;
 }
 
 .ib-offer-note {
   font-size: 12px;
   color: var(--text-secondary);
   text-align: center;
+}
+
+.ib-vote-notice {
+  color: var(--primary, #3b4f74);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ib-vote-reject {
+  color: var(--status-error, #c62828);
+  border-color: var(--status-error, #c62828);
 }
 
 /* realXhub marketplace: composer offer button */
@@ -2938,6 +3350,16 @@ onMounted(async () => {
   .ib-offer-inner {
     padding-left: 16px;
     padding-right: 16px;
+  }
+
+  /* Side-by-side buttons get cramped below the chat column width */
+  .ib-offer-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ib-offer-action {
+    white-space: normal;
   }
 }
 </style>

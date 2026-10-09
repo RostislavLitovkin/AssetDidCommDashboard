@@ -23,6 +23,29 @@ export interface ChatMessageProps {
   failed?: boolean
   /** realXhub market payload (offer / counter-offer) rendered as a price card. */
   market?: ChatMarketInfo
+  /** Governance voting message rendered as a vote card. */
+  voting?: ChatVotingInfo
+}
+
+/** Display-ready projection of a voting-tag message (see services/buckets/voting.ts). */
+export interface ChatVotingInfo {
+  kind: "terms" | "election" | "proposal" | "challenge"
+  kindLabel: string
+  status: "open" | "ratified" | "rejected" | "passed" | "failed"
+  statusLabel: string
+  round?: number
+  id?: string
+  expiresAt?: string
+  /** Human "in 6h" / "2h 15m left" line; empty once closed or expired. */
+  timeLeftLabel?: string
+  documentsHash?: string
+  yes?: number
+  no?: number
+  abstain?: number
+  yesPct?: number
+  noPct?: number
+  yesLabel: string
+  noLabel: string
 }
 
 export interface ChatMarketInfo {
@@ -126,6 +149,11 @@ const marketKindLabelValue = computed(() =>
 const marketPrice = computed(() =>
   market.value ? formatPriceAmount(market.value.price) : ""
 )
+
+// Governance voting card: open votes show the split bar and the clock, results
+// the outcome chip; tallies may be absent (no indexer read back them yet).
+const voting = computed(() => props.message.voting ?? null)
+const votingIsOpen = computed(() => voting.value?.status === "open")
 function downloadAttachment() {
   const a = attachment.value
   if (!a) return
@@ -221,6 +249,39 @@ function formatFileSize(base64: string): string {
               <span class="chat-market-amount">{{ marketPrice }}</span>
               <span class="chat-market-symbol">{{ market.token.symbol }}</span>
             </p>
+          </div>
+        </template>
+
+        <!-- Governance voting message: split-bar card with status -->
+        <template v-else-if="voting">
+          <div class="chat-vote-card">
+            <div class="chat-vote-head">
+              <span class="chat-vote-kind">{{ voting.kindLabel }}</span>
+              <span class="chat-vote-status" :class="`chat-vote-status-${voting.status}`">
+                {{ voting.statusLabel }}
+              </span>
+            </div>
+            <p class="chat-vote-sub">
+              <template v-if="voting.id !== undefined">#{{ voting.id }} · </template>
+              <template v-if="voting.round !== undefined">Round {{ voting.round }}</template>
+              <template v-if="votingIsOpen && voting.timeLeftLabel"> · {{ voting.timeLeftLabel }}</template>
+            </p>
+            <template v-if="voting.yes !== undefined && voting.no !== undefined">
+              <div class="chat-vote-bar" role="img"
+                :aria-label="`${voting.yesLabel}: ${voting.yes}, ${voting.noLabel}: ${voting.no}`">
+                <div class="chat-vote-bar-yes" :style="{ width: `${voting.yesPct ?? 50}%` }"></div>
+                <div class="chat-vote-bar-no" :style="{ width: `${voting.noPct ?? 50}%` }"></div>
+              </div>
+              <div class="chat-vote-splits">
+                <span class="chat-vote-split-yes">
+                  {{ voting.yesLabel }}<template v-if="voting.yesPct !== undefined"> {{ voting.yesPct }}%</template>
+                </span>
+                <span class="chat-vote-split-no">
+                  {{ voting.noLabel }}<template v-if="voting.noPct !== undefined"> {{ voting.noPct }}%</template>
+                </span>
+              </div>
+            </template>
+            <p v-else-if="votingIsOpen" class="chat-vote-sub muted">No votes recorded yet.</p>
           </div>
         </template>
 
@@ -448,6 +509,93 @@ function formatFileSize(base64: string): string {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.chat-vote-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 240px;
+}
+
+.chat-vote-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chat-vote-kind {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.chat-vote-status {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-hover, rgba(127, 127, 127, 0.16));
+  color: var(--text-secondary);
+}
+
+.chat-vote-status-open {
+  color: var(--primary, #3b4f74);
+  background: color-mix(in srgb, var(--primary, #3b4f74) 14%, transparent);
+}
+
+.chat-vote-status-ratified,
+.chat-vote-status-passed {
+  color: var(--success, #2e7d32);
+  background: color-mix(in srgb, var(--success, #2e7d32) 14%, transparent);
+}
+
+.chat-vote-status-rejected,
+.chat-vote-status-failed {
+  color: var(--error, #c62828);
+  background: color-mix(in srgb, var(--error, #c62828) 14%, transparent);
+}
+
+.chat-vote-sub {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.chat-vote-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface-hover, rgba(127, 127, 127, 0.16));
+}
+
+.chat-vote-bar-yes {
+  background: var(--primary, #3b4f74);
+  transition: width 0.3s ease;
+}
+
+.chat-vote-bar-no {
+  background: var(--error, #c62828);
+  transition: width 0.3s ease;
+}
+
+.chat-vote-splits {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.chat-vote-split-yes {
+  color: var(--primary, #3b4f74);
+}
+
+.chat-vote-split-no {
+  color: var(--error, #c62828);
 }
 
 .chat-market-header {
