@@ -14,6 +14,7 @@ const bucket = (overrides: Partial<ApiBucket> = {}): ApiBucket => ({
   encryptionKey: "0xabc123",
   createdAt: "2026-08-12T09:14:00.000Z",
   updatedAt: "2026-08-20T09:14:00.000Z",
+  properties: null,
   ...overrides
 })
 

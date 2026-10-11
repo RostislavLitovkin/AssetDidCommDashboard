@@ -22,7 +22,7 @@ interface ConnectionPage<T> {
 
 const NAMESPACE_FIELDS = "id namespaceId name schemaUri properties creator createdAt"
 const BUCKET_FIELDS =
-  "id bucketId namespaceId creator name category isWritable encryptionKey createdAt updatedAt"
+  "id bucketId namespaceId creator name category isWritable encryptionKey createdAt updatedAt properties"
 const MESSAGE_FIELDS =
   "id messageId contributor reference tag description contentType contentHash ipfsContent createdAt"
 

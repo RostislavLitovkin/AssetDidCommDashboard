@@ -6,6 +6,8 @@ export interface ApiBucket {
   id: string; bucketId: string; namespaceId: string | null; creator: string | null
   name: string | null; category: string | null; isWritable: boolean
   encryptionKey: string | null; createdAt: string; updatedAt: string
+  /** JSON string of app-annotated properties (realXmarket buckets carry assetId/shareListingId/buyer/seller). */
+  properties: string | null
 }
 export interface ApiBucketWithMembers extends ApiBucket {
   admins: string[]; contributors: string[]

@@ -3,7 +3,7 @@ import type { ApiBucket, ApiMessage, OperationUpdate } from "../../../services/b
 import { isFileMessage, KEY_SHARING_MESSAGE_TAG, normalizeX25519ToJwkX } from "../../../services/buckets/valueCodecs"
 import { ProfileClient } from "../../../services/profile/profileClient"
 import { findViewersWithoutKeyAccess } from "../../../services/messages/keySharingCoverage"
-import { latestKeySharingMessage, resolveKeyAccessState, type KeyAccessState } from "../../../services/messages/keyAccess"
+import { latestKeySharingMessage, parsePlaintextKeySharingBody, resolveKeyAccessState, type KeyAccessState } from "../../../services/messages/keyAccess"
 import { withoutClaimedMessages } from "../../../services/messages/pendingMessageReconciliation"
 import { connectBucketMessagesSocket, type BucketMessagesSocket } from "../../../services/buckets/bucketMessagesSocket"
 import { createIncomingMessagePump } from "../../../services/messages/incomingMessagePump"
@@ -14,7 +14,7 @@ import PageHeader from "../../../components/common/PageHeader.vue"
 import SubmitButton from "../../../components/common/SubmitButton.vue"
 import type { SubmitButtonLabels } from "../../../components/common/submitButtonView"
 import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment, type ChatMarketInfo, type ChatVotingInfo } from "../../../components/common/ChatMessageEntry.vue"
-import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, Check, HandCoins, ChevronDown, Vote } from "lucide-vue-next"
+import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, Check, HandCoins, ChevronDown, Vote, Handshake, ShoppingCart, BadgeCheck, CircleX } from "lucide-vue-next"
 import { useAddress } from "../../../composables/useAddress"
 import { useWallet } from "../../../composables/useWallet"
 import { useSubmitState } from "../../../composables/useSubmitState"
@@ -54,6 +54,36 @@ import type {
   SolanaToken,
   StatusPayload
 } from "../../../services/buckets/realxhub"
+import {
+  REALXMARKET_ACCEPT_TAG,
+  REALXMARKET_COUNTER_OFFER_TAG,
+  REALXMARKET_REFUSE_TAG,
+  REALXMARKET_TAGS,
+  buildAcceptPayload,
+  buildCounterOfferPayload,
+  buildRefusePayload,
+  deriveRealXmarketNegotiation,
+  formatGbpQuote,
+  formatGbpTotal,
+  gbpToPricePerToken,
+  isRealXmarketCategory,
+  isRealXmarketTag,
+  parseOfferBucketPropertyName,
+  parseRealXmarketBucketProperties,
+  parseRealXmarketPayload,
+  realXmarketKindLabel,
+  realXmarketPayloadSummary
+} from "../../../services/buckets/realxmarket"
+import type {
+  RealXmarketEntry,
+  RealXmarketNegotiation
+} from "../../../services/buckets/realxmarket"
+import {
+  buildBuyRelistedPostMessage,
+  buildDelistAndRelistPostMessage,
+  findMauiMarketplaceBridge,
+  type MauiMarketplaceBridge
+} from "../../../services/injection/mauiMarketplaceBridge"
 import { REALXHUB_PRIMARY_COLOR } from "../../../services/theme/primaryColor"
 import {
   VOTING_TAGS,
@@ -481,6 +511,131 @@ const offerToken = computed<SolanaToken>(
   () => SOLANA_TOKENS.find(t => t.mint === offerTokenMint.value) ?? DEFAULT_OFFER_TOKEN
 )
 
+// ── realXmarket secondary market (share-listing offer negotiation) ──
+// The offer bucket for a relisted share listing: category "realXmarket",
+// properties { assetId, shareListingId, buyer, seller }. The app seeds the
+// first offer and the key-sharing message as plaintext JSON; everything the
+// SPA sends back (counter / accept / refuse) is JWE-encrypted like any other
+// message. Chain execution (buy / relist) is handed off to the MAUI host via
+// window.mauiMarketplace — absent in plain browsers, where the agreed terms
+// render with a hint to open the realXmarket app instead.
+const isRealXmarketBucket = computed(() => isRealXmarketCategory(bucket.value?.category))
+
+const realxmarketMessages = ref<ApiMessage[]>([])
+const counterSheetOpen = ref(false)
+const counterPrice = ref("")
+const counterAmount = ref("")
+const counterError = ref("")
+
+const realXmarketProps = computed(() => parseRealXmarketBucketProperties(bucket.value?.properties))
+
+// The connected wallet's side of the negotiation, from the bucket properties.
+const realXmarketViewerParty = computed<"buyer" | "seller" | null>(() => {
+  if (!session.accountAddress) return null
+  const props = realXmarketProps.value
+  if (props.buyer && addressesEqual(session.accountAddress, props.buyer)) return "buyer"
+  if (props.seller && addressesEqual(session.accountAddress, props.seller)) return "seller"
+  return null
+})
+
+const realXmarketEntries = computed<RealXmarketEntry[]>(() =>
+  realxmarketMessages.value
+    .map(m => {
+      const payload = parseRealXmarketPayload(decryptedById.value[m.id] ?? payloadById.value[m.id] ?? "")
+      return payload ? { message: m, payload } : null
+    })
+    .filter((e): e is RealXmarketEntry => e !== null)
+)
+
+const realXmarketNegotiation = computed<RealXmarketNegotiation>(() =>
+  deriveRealXmarketNegotiation(realXmarketEntries.value, {
+    buyer: realXmarketProps.value.buyer,
+    seller: realXmarketProps.value.seller
+  })
+)
+
+// The banner shows whenever the negotiation has anything to say.
+const showRealXmarketBanner = computed(() => {
+  const n = realXmarketNegotiation.value
+  return isRealXmarketBucket.value && !loading.value
+    && Boolean(n.latestOffer || n.agreed || n.refused || n.purchased)
+})
+
+const realXmarketLatestOfferIsMine = computed(() => {
+  const latest = realXmarketNegotiation.value.latestOffer
+  return Boolean(latest && session.accountAddress
+    && addressesEqual(latest.payload.from ?? latest.message.contributor, session.accountAddress))
+})
+
+const realXmarketProposerLabel = computed(() => {
+  const latest = realXmarketNegotiation.value.latestOffer
+  const sender = latest?.payload.from ?? latest?.message.contributor ?? ""
+  return profilesByAddress.value[sender]?.nickname || formatAddress(sender)
+})
+
+// One-word state for the banner: the terminal states first, then whose move it is.
+const realXmarketStateLabel = computed(() => {
+  const n = realXmarketNegotiation.value
+  if (n.purchased) return "purchased"
+  if (n.agreed) return "agreed"
+  if (n.refused && !n.latestOffer) return "refused"
+  if (n.latestOffer && n.awaitingParty) {
+    if (!realXmarketViewerParty.value) return `awaiting ${n.awaitingParty}`
+    return n.awaitingParty === realXmarketViewerParty.value ? "awaiting you" : "awaiting them"
+  }
+  return ""
+})
+
+// The viewer may act when it is their turn and they can actually write
+// (contributor with the current bucket key, like the composer gate).
+const realXmarketCanAct = computed(() => {
+  const n = realXmarketNegotiation.value
+  return Boolean(
+    n.latestOffer && n.awaitingParty && !n.agreed && !n.purchased
+    && realXmarketViewerParty.value === n.awaitingParty
+    && connectedAdminOrContributor.value && activeSecretJwk.value
+  )
+})
+
+// Terms of the agreement / latest offer for display and for the bridge hand-off.
+const realXmarketDisplayTerms = computed(() => {
+  const n = realXmarketNegotiation.value
+  const source = n.agreed ?? (n.latestOffer
+    ? { pricePerToken: n.latestOffer.payload.pricePerToken ?? "", amount: n.latestOffer.payload.amount ?? 0 }
+    : null)
+  if (!source) return null
+  return {
+    pricePerToken: source.pricePerToken,
+    amount: source.amount,
+    priceLabel: source.pricePerToken ? formatGbpQuote(source.pricePerToken) : "",
+    totalLabel: source.pricePerToken && source.amount > 0 ? formatGbpTotal(source.pricePerToken, source.amount) : ""
+  }
+})
+
+// Ids for the bridge hand-off: bucket properties first, the payload as fallback.
+const realXmarketHandoffIds = computed(() => {
+  const n = realXmarketNegotiation.value
+  const payloadSource = n.agreed?.entry.payload ?? n.latestOffer?.payload
+  return {
+    shareListingId: realXmarketProps.value.shareListingId ?? payloadSource?.shareListingId ?? "",
+    assetId: realXmarketProps.value.assetId ?? payloadSource?.assetId ?? "",
+    seller: realXmarketProps.value.seller ?? ""
+  }
+})
+
+// Detected on mount (the MAUI host injects the bridge during page boot) and
+// re-detected on every hand-off click — plain browsers never have it, so the
+// agreed-terms card falls back to a hint to open the realXmarket app.
+const mauiMarketplaceBridge = shallowRef<MauiMarketplaceBridge | null>(null)
+
+const realXmarketPropertyName = computed(() => parseOfferBucketPropertyName(bucket.value?.name))
+
+const realXmarketPurchasedTxUrl = computed(() => {
+  const tx = realXmarketNegotiation.value.purchased?.payload.tx
+  return tx ? `https://solscan.io/tx/${encodeURIComponent(tx)}?cluster=devnet` : ""
+})
+
+
 // ── Governance voting lane ─────────────────────────────────────────
 // Voting messages (posted by the profile API's system identity from indexer
 // webhooks) live under their own tags, like the realXhub lanes. Payloads are
@@ -754,12 +909,13 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
   const visibleMessages = withoutClaimedMessages(messages.value, pendingMessages.value)
 
   // realXhub marketplace messages arrive via dedicated tag fetches and are
-  // merged in when they are not part of the main list yet. Voting lane
-  // messages merge the same way.
+  // merged in when they are not part of the main list yet. Voting lane and
+  // realXmarket negotiation messages merge the same way.
   const taggedExtras = [
     ...(isRealXhubBucket.value
       ? realxhubMarketMessages.value.filter((m) => !visibleMessages.some((x) => x.id === m.id))
       : []),
+    ...realxmarketMessages.value.filter((m) => !visibleMessages.some((x) => x.id === m.id)),
     ...votingMessages.value.filter((m) => !visibleMessages.some((x) => x.id === m.id)),
   ]
 
@@ -774,9 +930,16 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
     const payload = decryptedById.value[m.id] ?? payloadById.value[m.id]
     const payloadBody = payload ? summarize(payload) ?? payload : undefined
     const marketPayload = parseMarketPayload(payload ?? "")
+    // realXmarket negotiation payloads render as a one-line summary, like the
+    // realXhub refusal — keep the JSON body out of the bubble.
+    const realXmarketPayload = isRealXmarketTag(m.tag) ? parseRealXmarketPayload(payload ?? "") : undefined
     // Market payloads render as a card — keep the JSON body out of the bubble.
-    const baseBody = (marketPayload ? undefined : payloadBody) ?? m.description ?? m.ipfsContent ?? `Message #${m.messageId}`
-    const body = marketPayload?.kind === "refuse" ? marketPayloadSummary(marketPayload) : baseBody
+    const baseBody = (marketPayload || realXmarketPayload ? undefined : payloadBody) ?? m.description ?? m.ipfsContent ?? `Message #${m.messageId}`
+    const body = marketPayload?.kind === "refuse"
+      ? marketPayloadSummary(marketPayload)
+      : realXmarketPayload
+        ? realXmarketPayloadSummary(realXmarketPayload)
+        : baseBody
     const outgoing = Boolean(session.accountAddress && addressesEqual(m.contributor, session.accountAddress))
 
     let market: ChatMarketInfo | undefined
@@ -936,6 +1099,21 @@ async function loadAll() {
       if (freshTagged.length) await hydratePayloads(freshTagged)
     }
 
+    // 0b. realXmarket negotiation messages live under their own tags too; the
+    // seeded first offer arrives as plaintext JSON, the rest JWE-encrypted.
+    if (isRealXmarketBucket.value) {
+      const laneResults = await Promise.all(
+        REALXMARKET_TAGS.map((tag) => bucketsRepository.fetchMessagesByTag(bucketId.value, tag)),
+      )
+      realxmarketMessages.value = laneResults.flat()
+      const freshTagged = realxmarketMessages.value.filter(
+        (m) => !detail.messages.some((x) => x.id === m.id),
+      )
+      if (freshTagged.length) await hydratePayloads(freshTagged)
+    } else {
+      realxmarketMessages.value = []
+    }
+
     // 1. Fetch key-sharing messages by tag first
     keySharingMessages.value = await bucketsRepository.fetchMessagesByTag(bucketId.value, KEY_SHARING_MESSAGE_TAG)
     viewersMissingKeyCount.value = null // data changed — the lazy viewer check must re-run
@@ -961,6 +1139,9 @@ async function loadAll() {
     if (isRealXhubBucket.value) {
       await decryptMessages([...realxhubMarketMessages.value, ...realxhubStatusMessages.value])
     }
+    if (isRealXmarketBucket.value) {
+      await decryptMessages(realxmarketMessages.value)
+    }
 
     // 6. Resolve file attachments referenced by CID-pointer messages
     await hydrateAttachments(detail.messages)
@@ -974,6 +1155,7 @@ async function loadAll() {
       ...keySharingMessages.value,
       ...realxhubMarketMessages.value,
       ...realxhubStatusMessages.value,
+      ...realxmarketMessages.value,
     ])
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Failed to load indexed data"
@@ -1038,15 +1220,11 @@ async function decryptKeySharingFromMessages(keySharingMessages: ApiMessage[]) {
   }
 
   const secretJwk = settings.x25519SecretJwk
-  if (!secretJwk) {
-    bucketKeyEntries.value = []
-    keySharingError.value = "Load X25519 secret in sidebar to decrypt"
-    return
-  }
 
   // Decrypt every key-sharing message we can: rotations replace the bucket
-  // key, so older messages need the older keys.
-  const readerKey = await jose.importJWK(secretJwk as jose.JWK, "ECDH-ES+A256KW")
+  // key, so older messages need the older keys. The reader key is optional:
+  // plaintext key-sharing bodies (realXmarket offer buckets) need no secret.
+  const readerKey = secretJwk ? await jose.importJWK(secretJwk as jose.JWK, "ECDH-ES+A256KW") : null
   const entries: BucketKeyEntry[] = []
 
   await Promise.all(keySharingMessages.map(async ksMsg => {
@@ -1056,6 +1234,25 @@ async function decryptKeySharingFromMessages(keySharingMessages: ApiMessage[]) {
     try {
       const parsed = parseJson(raw)
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return
+
+      // Plaintext key-sharing: the body IS the key-sharing document (the app
+      // seeds offer buckets this way). Treat it exactly like a successfully
+      // decrypted message — same key extraction, no JWE involved.
+      const plaintextBody = parsePlaintextKeySharingBody(parsed)
+      if (plaintextBody) {
+        const k = plaintextBody.keys[0]!
+        const jwk: jose.JWK = { ...k, use: "enc" }
+        entries.push({
+          id: ksMsg.id,
+          createdAt: ksMsg.createdAt,
+          messageId: ksMsg.messageId,
+          jwk,
+          key: await jose.importJWK(jwk, "ECDH-ES+A256KW")
+        })
+        return
+      }
+
+      if (!readerKey) return
       const { plaintext } = await jose.generalDecrypt(parsed as jose.GeneralJWE, readerKey)
       const decoded = new TextDecoder().decode(plaintext)
       const inner = parseJson(decoded)
@@ -1085,7 +1282,9 @@ async function decryptKeySharingFromMessages(keySharingMessages: ApiMessage[]) {
   bucketKeyEntries.value = entries
 
   if (!entries.length) {
-    keySharingError.value = "Could not decrypt any key-sharing message"
+    keySharingError.value = secretJwk
+      ? "Could not decrypt any key-sharing message"
+      : "Load X25519 secret in sidebar to decrypt"
   }
 }
 
@@ -1135,8 +1334,17 @@ async function decryptMessages(msgs: ApiMessage[]) {
   if (!bucketKeyEntries.value.length) {
     // No usable keys: clear plaintext and errors for these messages only.
     // Entries for other ids — attachment errors especially, which belong to
-    // hydrateAttachments — must survive a partial-list call.
-    for (const m of msgs) { delete nextD[m.id]; delete nextE[m.id] }
+    // hydrateAttachments — must survive a partial-list call. Plaintext
+    // realXmarket seeds need no key at all, so they still surface as-is.
+    for (const m of msgs) {
+      delete nextD[m.id]
+      delete nextE[m.id]
+      if (!isRealXmarketTag(m.tag)) continue
+      const p = payloadById.value[m.id]
+      if (p && (m.contentType?.trim().toLowerCase() === "application/json" || !looksLikeCompactJwe(p.trim()))) {
+        nextD[m.id] = p
+      }
+    }
     decryptedById.value = nextD
     decryptErrorById.value = nextE
     return
@@ -1144,11 +1352,21 @@ async function decryptMessages(msgs: ApiMessage[]) {
 
   await Promise.all(msgs.map(async m => {
     if (m.tag === KEY_SHARING_MESSAGE_TAG) return
-    if (isFileMessage(m)) return
+    // realXmarket negotiation messages are text even when their contentType
+    // says application/json — the seeded first offer is plaintext JSON, and
+    // the file-message classifier would otherwise route it to attachments.
+    if (isFileMessage(m) && !isRealXmarketTag(m.tag)) return
     const p = payloadById.value[m.id]
     if (!p) return
     const t = p.trim()
-    if (!looksLikeCompactJwe(t)) { nextD[m.id] = p; delete nextE[m.id]; return }
+    // Plaintext tolerance: a message marked application/json (the seeded
+    // offer) or any payload that is not JWE-shaped surfaces as the decrypted
+    // payload instead of failing.
+    if (m.contentType?.trim().toLowerCase() === "application/json" || !looksLikeCompactJwe(t)) {
+      nextD[m.id] = p
+      delete nextE[m.id]
+      return
+    }
     try {
       const { plaintext } = await decryptCompactWithEraKey(m, t)
       nextD[m.id] = new TextDecoder().decode(plaintext)
@@ -1182,6 +1400,9 @@ async function hydrateAttachments(msgs: ApiMessage[]) {
   await Promise.all(msgs.map(async m => {
     if (next[m.id]) return
     if (!isFileMessage(m)) return
+    // realXmarket messages can carry an application/json contentType while
+    // being plaintext negotiation payloads — never encrypted attachments.
+    if (isRealXmarketTag(m.tag)) return
     const fileJwe = payloadById.value[m.id]?.trim()
     if (!fileJwe) return
     try {
@@ -1236,6 +1457,7 @@ function isKnownMessageId(id: string): boolean {
     || keySharingMessages.value.some(m => m.id === id)
     || realxhubMarketMessages.value.some(m => m.id === id)
     || realxhubStatusMessages.value.some(m => m.id === id)
+    || realxmarketMessages.value.some(m => m.id === id)
     || votingMessages.value.some(m => m.id === id)
 }
 
@@ -1279,6 +1501,17 @@ async function applyIncomingMessage(m: ApiMessage): Promise<void> {
   if (isRealXhubTag(m.tag)) {
     const list = m.tag === REALXHUB_STATUS_TAG ? realxhubStatusMessages : realxhubMarketMessages
     list.value = [...list.value, m]
+    await hydratePayloads([m])
+    await decryptMessages([m])
+    await loadSenderProfiles([m])
+    return
+  }
+
+  // realXmarket negotiation messages the same way — the banner re-derives
+  // from realxmarketMessages, so a live counter / accept / refuse / purchased
+  // updates it without a reload.
+  if (isRealXmarketTag(m.tag)) {
+    realxmarketMessages.value = [...realxmarketMessages.value, m]
     await hydratePayloads([m])
     await decryptMessages([m])
     await loadSenderProfiles([m])
@@ -1436,7 +1669,7 @@ async function submitPending(pending: PendingOutgoingMessage): Promise<void> {
       )
     } else {
       // realXhub marketplace messages are created under their dedicated tag
-      if (pending.tag) await ensureRealXhubTag(pending.tag)
+      if (pending.tag) await ensureBucketTag(pending.tag)
       const encrypted = await encryptOutgoing(pending.body)
       result = await bucketsRepository.createMessage(
         bucketId.value, encrypted, pending.senderAddress, onOperationUpdate, pending.tag
@@ -1520,18 +1753,19 @@ function discardFailedMessage(id: string): void {
 }
 
 // ── realXhub marketplace actions ─────────────────────────────────────
-const ensuredRealXhubTags = new Set<string>()
+const ensuredBucketTags = new Set<string>()
 
 // Create the bucket tag once before sending; a duplicate or failed ensure
-// must never block the message itself.
-async function ensureRealXhubTag(tag: string): Promise<void> {
-  if (ensuredRealXhubTags.has(tag) || !session.accountAddress) return
+// must never block the message itself. Used for the realXhub and realXmarket
+// tag families alike.
+async function ensureBucketTag(tag: string): Promise<void> {
+  if (ensuredBucketTags.has(tag) || !session.accountAddress) return
   try {
     await bucketsRepository.createTag(bucketId.value, tag, session.accountAddress)
   } catch {
     // Tag may already exist or the API may be unavailable — sending still proceeds.
   }
-  ensuredRealXhubTags.add(tag)
+  ensuredBucketTags.add(tag)
 }
 
 function openOfferPopup(kind: "offer" | "counterOffer"): void {
@@ -1632,6 +1866,132 @@ async function refuseCounterOffer(): Promise<void> {
 // On-chain payment lands later — for now just flag the placeholder.
 function makePayment(): void {
   paymentNotice.value = true
+}
+
+// ── realXmarket secondary-market actions ─────────────────────────────
+// All three sends go through the pending pipeline: the body is the protocol
+// JSON, encrypted with the current bucket key like any other message, under
+// the realXmarket/* tags. counterOf always carries ApiMessage.messageId (the
+// per-bucket on-chain sequence number) of the message being answered.
+function buildPendingRealXmarketMessage(tag: string, body: string, summary: string): PendingOutgoingMessage {
+  if (!session.accountAddress) throw new Error("No connected account")
+  return {
+    id: `pending-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    body,
+    tag,
+    displayBody: summary,
+    status: "signing",
+    senderAddress: session.accountAddress,
+  }
+}
+
+function openCounterSheet(): void {
+  const latest = realXmarketNegotiation.value.latestOffer
+  if (!latest) return
+  counterPrice.value = ""
+  counterAmount.value = latest.payload.amount !== undefined ? String(latest.payload.amount) : ""
+  counterError.value = ""
+  counterSheetOpen.value = true
+}
+
+function closeCounterSheet(): void {
+  if (sending.value) return
+  counterSheetOpen.value = false
+}
+
+async function submitCounterOffer(): Promise<void> {
+  const latest = realXmarketNegotiation.value.latestOffer
+  if (!latest || !session.accountAddress) return
+
+  const pricePerToken = gbpToPricePerToken(String(counterPrice.value ?? ""))
+  if (!pricePerToken) {
+    counterError.value = "Enter a valid price per token in GBP"
+    return
+  }
+  const amount = Number(String(counterAmount.value ?? "").trim())
+  if (!Number.isInteger(amount) || amount <= 0) {
+    counterError.value = "Enter a whole-token amount greater than zero"
+    return
+  }
+
+  const body = buildCounterOfferPayload({
+    shareListingId: realXmarketHandoffIds.value.shareListingId || latest.payload.shareListingId,
+    assetId: realXmarketHandoffIds.value.assetId || latest.payload.assetId,
+    pricePerToken,
+    amount,
+    counterOf: latest.message.messageId,
+    from: session.accountAddress,
+  })
+  counterSheetOpen.value = false
+  const pending = buildPendingRealXmarketMessage(REALXMARKET_COUNTER_OFFER_TAG, body, `Counter-offer: ${formatGbpQuote(pricePerToken)} per token × ${amount}`)
+  pendingMessages.value = [...pendingMessages.value, pending]
+  await submitPending(pending)
+}
+
+async function acceptLatestOffer(): Promise<void> {
+  const latest = realXmarketNegotiation.value.latestOffer
+  if (!latest || !session.accountAddress || !latest.payload.pricePerToken || latest.payload.amount === undefined) return
+
+  const body = buildAcceptPayload({
+    shareListingId: realXmarketHandoffIds.value.shareListingId || latest.payload.shareListingId,
+    assetId: realXmarketHandoffIds.value.assetId || latest.payload.assetId,
+    pricePerToken: latest.payload.pricePerToken,
+    amount: latest.payload.amount,
+    counterOf: latest.message.messageId,
+    from: session.accountAddress,
+  })
+  const pending = buildPendingRealXmarketMessage(REALXMARKET_ACCEPT_TAG, body, "Offer accepted")
+  pendingMessages.value = [...pendingMessages.value, pending]
+  await submitPending(pending)
+}
+
+async function refuseLatestOffer(): Promise<void> {
+  const latest = realXmarketNegotiation.value.latestOffer
+  if (!latest || !session.accountAddress) return
+
+  const body = buildRefusePayload({
+    shareListingId: realXmarketHandoffIds.value.shareListingId || latest.payload.shareListingId,
+    assetId: realXmarketHandoffIds.value.assetId || latest.payload.assetId,
+    counterOf: latest.message.messageId,
+    from: session.accountAddress,
+  })
+  const pending = buildPendingRealXmarketMessage(REALXMARKET_REFUSE_TAG, body, "Offer refused")
+  pendingMessages.value = [...pendingMessages.value, pending]
+  await submitPending(pending)
+}
+
+// After an accept, the buyer hands the purchase to the native app — the chain
+// transaction and the purchased status message both happen there. The bucket's
+// ids ride along so the app can write that status back into this bucket.
+function buyAgreedTerms(): void {
+  const agreed = realXmarketNegotiation.value.agreed
+  const bridge = mauiMarketplaceBridge.value ?? findMauiMarketplaceBridge()
+  if (!agreed || !bridge) return
+  bridge.postMessage(buildBuyRelistedPostMessage({
+    shareListingId: realXmarketHandoffIds.value.shareListingId,
+    assetId: realXmarketHandoffIds.value.assetId,
+    amount: agreed.amount,
+    pricePerToken: agreed.pricePerToken,
+    seller: realXmarketHandoffIds.value.seller,
+    propertyName: realXmarketPropertyName.value,
+    namespaceId: bucket.value?.namespaceId != null ? String(bucket.value.namespaceId) : undefined,
+    bucketId: bucketId.value || undefined,
+  }))
+}
+
+// The seller relists at the agreed price and finalizes — needed when the
+// agreed price differs from the price the share was listed at.
+function finalizeSellerRelist(): void {
+  const agreed = realXmarketNegotiation.value.agreed
+  const bridge = mauiMarketplaceBridge.value ?? findMauiMarketplaceBridge()
+  if (!agreed || !bridge) return
+  bridge.postMessage(buildDelistAndRelistPostMessage({
+    shareListingId: realXmarketHandoffIds.value.shareListingId,
+    assetId: realXmarketHandoffIds.value.assetId,
+    amount: agreed.amount,
+    pricePerToken: agreed.pricePerToken,
+    seller: realXmarketHandoffIds.value.seller,
+  }))
 }
 
 // ── Create & share bucket encryption key (setup timeline step 2) ───
@@ -1898,6 +2258,9 @@ watch(() => settings.x25519SecretJwk, async () => {
     if (isRealXhubBucket.value) {
       await decryptMessages([...realxhubMarketMessages.value, ...realxhubStatusMessages.value])
     }
+    if (isRealXmarketBucket.value) {
+      await decryptMessages(realxmarketMessages.value)
+    }
     await hydrateAttachments(messages.value)
   } finally {
     rekeying.value = false
@@ -1907,6 +2270,9 @@ watch(() => settings.x25519SecretJwk, async () => {
 
 onMounted(async () => {
   settings.initialize()
+  // The MAUI host injects the marketplace bridge during page boot; detect it
+  // once here (the hand-off handlers re-detect on click for late injection).
+  mauiMarketplaceBridge.value = findMauiMarketplaceBridge()
   // The initial load and the subscription race each other, in both orders:
   // events landing mid-load are buffered by the pump and deduplicated after,
   // and the subscribe ack triggers a catch-up fetch that reconciles anything
@@ -1961,6 +2327,133 @@ onMounted(async () => {
           <button class="btn ib-offer-action" :disabled="sending" @click="refuseCounterOffer">Refuse counter-offer</button>
           <button class="btn btn-primary ib-offer-action" :disabled="sending" @click="acceptCounterOffer">Accept counter-offer</button>
         </div>
+      </div>
+    </div>
+
+    <!-- realXmarket secondary market: negotiation banner — same full-width
+         band pattern as the realXhub offer bar above -->
+    <div v-if="showRealXmarketBanner" class="ib-offer-bar" role="region" aria-label="realXmarket offer">
+      <div class="ib-offer-inner">
+        <!-- Terminal: purchased -->
+        <template v-if="realXmarketNegotiation.purchased">
+          <div class="ib-offer-head">
+            <BadgeCheck :size="18" class="ib-offer-icon" />
+            <div class="ib-offer-info">
+              <p class="ib-offer-title">Purchase complete</p>
+              <p v-if="realXmarketDisplayTerms" class="ib-offer-amount">
+                <template v-if="realXmarketDisplayTerms.priceLabel">
+                  <strong>{{ realXmarketDisplayTerms.priceLabel }}</strong> per token
+                </template>
+                <template v-if="realXmarketDisplayTerms.amount > 0">
+                  × {{ realXmarketDisplayTerms.amount }} {{ realXmarketDisplayTerms.amount === 1 ? "token" : "tokens" }}
+                </template>
+                <template v-if="realXmarketDisplayTerms.totalLabel">
+                  — total <strong>{{ realXmarketDisplayTerms.totalLabel }}</strong>
+                </template>
+              </p>
+            </div>
+          </div>
+          <div v-if="realXmarketPurchasedTxUrl" class="ib-offer-actions">
+            <a class="btn ib-offer-action" :href="realXmarketPurchasedTxUrl" target="_blank" rel="noopener">
+              View transaction
+            </a>
+          </div>
+        </template>
+
+        <!-- Agreed: terms + the native hand-off for the on-chain step -->
+        <template v-else-if="realXmarketNegotiation.agreed">
+          <div class="ib-offer-head">
+            <Handshake :size="18" class="ib-offer-icon" />
+            <div class="ib-offer-info">
+              <p class="ib-offer-title">Offer agreed</p>
+              <p v-if="realXmarketDisplayTerms" class="ib-offer-amount">
+                <template v-if="realXmarketDisplayTerms.priceLabel">
+                  <strong>{{ realXmarketDisplayTerms.priceLabel }}</strong> per token
+                </template>
+                <template v-if="realXmarketDisplayTerms.amount > 0">
+                  × {{ realXmarketDisplayTerms.amount }} {{ realXmarketDisplayTerms.amount === 1 ? "token" : "tokens" }}
+                </template>
+                <template v-if="realXmarketDisplayTerms.totalLabel">
+                  — total <strong>{{ realXmarketDisplayTerms.totalLabel }}</strong>
+                </template>
+              </p>
+            </div>
+          </div>
+          <div class="ib-offer-actions">
+            <template v-if="mauiMarketplaceBridge">
+              <button v-if="realXmarketViewerParty === 'buyer'" class="btn btn-primary ib-offer-action"
+                :disabled="!realXmarketNegotiation.agreed.pricePerToken || !realXmarketNegotiation.agreed.amount"
+                title="Buy at the agreed terms" @click="buyAgreedTerms">
+                <ShoppingCart :size="16" />
+                Buy
+              </button>
+              <template v-else-if="realXmarketViewerParty === 'seller'">
+                <button class="btn btn-primary ib-offer-action"
+                  :disabled="!realXmarketNegotiation.agreed.pricePerToken || !realXmarketNegotiation.agreed.amount"
+                  title="Delist and relist at the agreed price" @click="finalizeSellerRelist">
+                  Update price &amp; finalize
+                </button>
+                <span class="ib-offer-note">
+                  Relists the shares at the agreed price and finalizes the sale — use this when you listed
+                  at a different price than agreed.
+                </span>
+              </template>
+              <span v-else class="ib-offer-note">The sale completes in the realXmarket app.</span>
+            </template>
+            <span v-else class="ib-offer-note">
+              Terms agreed — open this bucket in the realXmarket app to complete the purchase.
+            </span>
+          </div>
+        </template>
+
+        <!-- Refused with nothing new on the table -->
+        <template v-else-if="realXmarketNegotiation.refused && !realXmarketNegotiation.latestOffer">
+          <div class="ib-offer-head">
+            <CircleX :size="18" class="ib-offer-icon" />
+            <div class="ib-offer-info">
+              <p class="ib-offer-title">Offer refused</p>
+              <p class="ib-offer-amount">The latest offer was refused.</p>
+            </div>
+          </div>
+        </template>
+
+        <!-- Open negotiation: the latest offer / counter-offer, whose move it is -->
+        <template v-else-if="realXmarketNegotiation.latestOffer">
+          <div class="ib-offer-head">
+            <HandCoins :size="18" class="ib-offer-icon" />
+            <div class="ib-offer-info">
+              <p class="ib-offer-title">
+                {{ realXmarketKindLabel(realXmarketNegotiation.latestOffer.payload.kind) }}
+                <template v-if="realXmarketLatestOfferIsMine"> you made</template>
+                <template v-else> from {{ realXmarketProposerLabel }}</template>
+              </p>
+              <p v-if="realXmarketDisplayTerms" class="ib-offer-amount">
+                <template v-if="realXmarketDisplayTerms.priceLabel">
+                  <strong>{{ realXmarketDisplayTerms.priceLabel }}</strong> per token
+                </template>
+                <template v-if="realXmarketDisplayTerms.amount > 0">
+                  × {{ realXmarketDisplayTerms.amount }} {{ realXmarketDisplayTerms.amount === 1 ? "token" : "tokens" }}
+                </template>
+                <template v-if="realXmarketDisplayTerms.totalLabel">
+                  — total <strong>{{ realXmarketDisplayTerms.totalLabel }}</strong>
+                </template>
+              </p>
+            </div>
+          </div>
+          <div v-if="realXmarketCanAct" class="ib-offer-actions">
+            <button class="btn ib-offer-action" :disabled="sending" @click="openCounterSheet">Counter</button>
+            <button class="btn ib-offer-action" :disabled="sending" @click="refuseLatestOffer">Refuse</button>
+            <button class="btn btn-primary ib-offer-action" :disabled="sending" @click="acceptLatestOffer">Accept</button>
+          </div>
+          <div v-else class="ib-offer-actions">
+            <span class="ib-offer-note">
+              {{ realXmarketViewerParty && realXmarketNegotiation.awaitingParty
+                && realXmarketNegotiation.awaitingParty !== realXmarketViewerParty
+                ? "Waiting for response"
+                : realXmarketStateLabel }}
+            </span>
+          </div>
+        </template>
       </div>
     </div>
 
@@ -2247,6 +2740,36 @@ onMounted(async () => {
             <button class="btn btn-primary" type="submit" :disabled="sending">
               {{ offerKind === "counterOffer" ? "Counter-offer" : "Place offer" }}
             </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- realXmarket counter-offer sheet: price per token in GBP + token amount -->
+    <div v-if="counterSheetOpen" class="ib-sheet-overlay" @click.self="closeCounterSheet">
+      <div class="card ib-offer-sheet" role="dialog" aria-modal="true" aria-label="Make a counter-offer">
+        <div class="ib-sheet-handle" aria-hidden="true"></div>
+        <h3 class="ib-sheet-title">Make a counter-offer</h3>
+        <p class="muted ib-sheet-desc">
+          Propose a different price per token or amount for the active offer.
+        </p>
+        <form class="ib-sheet-form" @submit.prevent="submitCounterOffer">
+          <div class="ib-sheet-price-row">
+            <div class="ib-sheet-field">
+              <label class="ib-sheet-label" for="ib-counter-price">Price per token (GBP)</label>
+              <input id="ib-counter-price" v-model="counterPrice" class="ib-sheet-input" type="number"
+                step="any" min="0" inputmode="decimal" placeholder="0.00" required :disabled="sending" />
+            </div>
+            <div class="ib-sheet-field">
+              <label class="ib-sheet-label" for="ib-counter-amount">Amount (tokens)</label>
+              <input id="ib-counter-amount" v-model="counterAmount" class="ib-sheet-input" type="number"
+                step="1" min="1" inputmode="numeric" placeholder="1" required :disabled="sending" />
+            </div>
+          </div>
+          <p v-if="counterError" class="ib-tl-error">{{ counterError }}</p>
+          <div class="ib-sheet-actions">
+            <button class="btn" type="button" :disabled="sending" @click="closeCounterSheet">Cancel</button>
+            <button class="btn btn-primary" type="submit" :disabled="sending">Send counter-offer</button>
           </div>
         </form>
       </div>

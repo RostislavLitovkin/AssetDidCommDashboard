@@ -10,6 +10,10 @@ declare global {
     }
     /** Slot for a key injected by the host before the app has booted. */
     __assetDidCommPendingX25519Key?: string | Record<string, unknown>
+    /** Injected by the realXmarket MAUI host for marketplace hand-offs (buy / relist). */
+    mauiMarketplace?: {
+      postMessage?: (message: string) => void
+    }
   }
 }
 

@@ -66,3 +66,64 @@ export function resolveKeyAccessState(input: {
   const decrypted = new Set(input.decryptedIds)
   return decrypted.has(latest.id) ? "ok" : "no-access"
 }
+
+/**
+ * The X25519 secret-JWK shape (kty/crv plus the public x and private d
+ * coordinates), checked without jose so this module stays dependency-free.
+ */
+export function isX25519SecretJwk(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  const candidate = value as Record<string, unknown>
+  return (
+    candidate.kty === "OKP" &&
+    candidate.crv === "X25519" &&
+    typeof candidate.x === "string" && candidate.x !== "" &&
+    typeof candidate.d === "string" && candidate.d !== ""
+  )
+}
+
+/**
+ * A key-sharing document that arrived as plaintext JSON rather than as a
+ * General JWE — the realXmarket app seeds offer buckets this way. `keys` holds
+ * only the entries that are valid X25519 secret JWKs, in document order.
+ */
+export interface PlaintextKeySharingBody {
+  id: string
+  from: string
+  to: string[]
+  keys: Array<Record<string, unknown>>
+}
+
+/**
+ * Validates a plaintext key-sharing body of shape
+ * {"id","from","to":[addresses],"keys":[secretJwk]}. Accepts the parsed object
+ * or the raw JSON string. Returns undefined for anything that does not match —
+ * callers then fall through to the JWE path. A General JWE can never
+ * accidentally match: it has no `keys` array of secret JWKs.
+ */
+export function parsePlaintextKeySharingBody(raw: unknown): PlaintextKeySharingBody | undefined {
+  let candidate: unknown = raw
+  if (typeof candidate === "string") {
+    if (candidate.trim() === "") return undefined
+    try {
+      candidate = JSON.parse(candidate)
+    } catch {
+      return undefined
+    }
+  }
+
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return undefined
+  const body = candidate as Record<string, unknown>
+
+  if (typeof body.id !== "string" || body.id.trim() === "") return undefined
+  if (typeof body.from !== "string" || body.from.trim() === "") return undefined
+  if (!Array.isArray(body.to)) return undefined
+  const to = body.to.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
+  if (to.length !== body.to.length) return undefined
+
+  if (!Array.isArray(body.keys)) return undefined
+  const keys = body.keys.filter(isX25519SecretJwk) as Array<Record<string, unknown>>
+  if (!keys.length) return undefined
+
+  return { id: body.id.trim(), from: body.from.trim(), to, keys }
+}
