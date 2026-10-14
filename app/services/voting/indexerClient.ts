@@ -55,6 +55,15 @@ export interface IndexerElection {
   quorumBps?: number;
 }
 
+export interface IndexerAgentVote {
+  /** Election round the vote was cast in. */
+  round: number;
+  /** Wallet of the candidacy the vote backs. */
+  choice: string;
+  /** Shares locked behind the vote. */
+  power?: number;
+}
+
 export interface IndexerShareHolding {
   amount: number;
   lockLawyerElection: number;
@@ -305,6 +314,36 @@ export async function fetchElection(assetId: string, options?: IndexerClientOpti
   const quorumBps = asNum(node.electionQuorumBps);
   if (quorumBps !== undefined) election.quorumBps = quorumBps;
   return election;
+}
+
+/** The voter's latest active agent-election vote for a letting, if any. */
+export async function fetchAgentVote(assetId: string, voter: string, options?: IndexerClientOptions): Promise<IndexerAgentVote | null> {
+  const data = await graphql<{ agentVotes: unknown }>(
+    `query AgentVotes($assetId: I64!, $voter: String!) {
+      agentVotes(assetId: $assetId, voter: $voter, active: true, first: 5, offset: 0) {
+        nodes { round choice power }
+      }
+    }`,
+    { assetId, voter },
+    options,
+  );
+
+  let best: IndexerAgentVote | null = null;
+  for (const node of asNodeList(data.agentVotes)) {
+    const round = asNum(node.round);
+    const choice = asStr(node.choice);
+    if (round === undefined || choice === undefined) {
+      continue;
+    }
+    // A revote moves the current round's vote; the highest round wins ties.
+    if (best && round <= best.round) {
+      continue;
+    }
+    best = { round, choice };
+    const power = asNum(node.power);
+    if (power !== undefined) best.power = power;
+  }
+  return best;
 }
 
 /** One owner's share ledger for a listing — used to prefill the vote amount. */

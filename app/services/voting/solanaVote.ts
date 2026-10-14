@@ -17,6 +17,7 @@ import {
   type AccountMeta,
 } from "@solana/web3.js";
 import { registeredSolanaWallets, type StandardWallet } from "../wallet/solanaWalletRegistry";
+import { fetchAgentVote, fetchElection, type IndexerClientOptions } from "./indexerClient";
 
 /** Program ids, taken from the deployed devnet IDLs' `address` fields. */
 export const MARKETPLACE_PROGRAM_ID = "dj9Q3CpHvDHwexCbkgJ5APDx4JsTxPssNebkvP15g1T";
@@ -271,19 +272,29 @@ export interface AgentVoteRequest {
   round: number | bigint;
   /** Candidate's wallet, base58 — identifies the candidacy account. */
   agent: string;
+  /**
+   * Candidate the voter's existing vote backs, base58. Required when a
+   * revote switches candidates, so the program can move the locked power off
+   * the old candidacy; omit for first votes and same-candidate top-ups.
+   */
+  previousAgent?: string;
   amount: number;
   voter: string;
 }
 
 /**
- * property::vote_on_agent — back one candidate in the live election. Only the
- * first-vote path is wired: changing an existing vote to a different
- * candidate additionally needs the previous candidacy account, which the
- * chat UI never produces (first votes only).
+ * property::vote_on_agent — back one candidate in the live election. First
+ * votes and same-candidate top-ups pass the program's own id as Anchor's None
+ * sentinel for previous_candidacy; a revote switching candidates passes the
+ * previously backed candidacy account instead. resolveAgentVoteRequest fills
+ * in `previousAgent` from the indexer.
  */
 export function buildVoteOnAgentTransaction(request: AgentVoteRequest): Transaction {
   const voter = new PublicKey(request.voter);
   const agent = new PublicKey(request.agent);
+  const previousAgent = request.previousAgent !== undefined && request.previousAgent !== request.agent
+    ? new PublicKey(request.previousAgent)
+    : null;
   const keys: AccountMeta[] = [
     signer(voter),
     signer(voter, true),
@@ -294,13 +305,43 @@ export function buildVoteOnAgentTransaction(request: AgentVoteRequest): Transact
     writable(agentCandidacyPda(request.assetId, request.round, agent)),
     // previous_candidacy is optional; Anchor's sentinel for None is the
     // program's own id.
-    readonly(propertyProgram),
+    previousAgent
+      ? writable(agentCandidacyPda(request.assetId, request.round, previousAgent))
+      : readonly(propertyProgram),
     readonly(cpiAuthPda()),
     readonly(marketplaceProgram),
     readonly(SystemProgram.programId),
   ];
   const data = concat(DISC_VOTE_ON_AGENT, u64le(request.assetId), u32le(request.amount));
   return instruction(propertyProgram, keys, data);
+}
+
+export interface AgentVoteLookup {
+  assetId: string | number | bigint;
+  /** Candidate's wallet, base58. */
+  agent: string;
+  amount: number;
+  voter: string;
+}
+
+/**
+ * Fills in the pieces of an agent vote the chat UI cannot know: the letting's
+ * current election round (propertyLettings) and, when the voter already backs
+ * a different candidate this round (agentVotes), that candidate so the
+ * builder passes its candidacy as previous_candidacy.
+ */
+export async function resolveAgentVoteRequest(lookup: AgentVoteLookup, options?: IndexerClientOptions): Promise<AgentVoteRequest> {
+  const assetId = String(lookup.assetId);
+  const election = await fetchElection(assetId, options);
+  if (!election || election.expiry === 0) {
+    throw new Error("NO_LIVE_AGENT_ELECTION");
+  }
+  const request: AgentVoteRequest = { ...lookup, round: election.round };
+  const existing = await fetchAgentVote(assetId, lookup.voter, options);
+  if (existing && existing.round === election.round && existing.choice !== lookup.agent) {
+    request.previousAgent = existing.choice;
+  }
+  return request;
 }
 
 interface StandardSignAndSendFeature {

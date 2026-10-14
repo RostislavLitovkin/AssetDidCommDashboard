@@ -19,12 +19,14 @@ import {
   listingPda,
   proposalPda,
   proposalVotePda,
+  resolveAgentVoteRequest,
   shareHoldingPda,
   voterRolePda,
 } from "../../app/services/voting/solanaVote";
 
 const VOTER = "4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofM";
 const AGENT = "Stake11111111111111111111111111111111111111";
+const PREVIOUS_AGENT = "SysvarRent111111111111111111111111111111111";
 
 async function sha256(text: string): Promise<number[]> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
@@ -199,12 +201,112 @@ describe("vote_on_agent transaction", () => {
     expect(ix.keys[7]!.isWritable).toBe(false);
   });
 
+  it("passes the previous candidacy PDA (writable) when switching candidates", () => {
+    const switched = buildVoteOnAgentTransaction({
+      assetId: 42,
+      round: 2,
+      agent: AGENT,
+      previousAgent: PREVIOUS_AGENT,
+      amount: 10,
+      voter: VOTER,
+    });
+    const key = switched.instructions[0]!.keys[7]!;
+    // Ground truth from the same pure-Python derivation as the PDA tests:
+    // ["agent-candidate", 42 LE, 2 LE, PREVIOUS_AGENT] under the property program.
+    expect(key.pubkey.toBase58()).toBe("FtEg58LToZq8tsq7zNqvKmF47PnE67Jj711LC2BE9S4Q");
+    expect(key.isWritable).toBe(true);
+    expect(key.isSigner).toBe(false);
+    // The rest of the account list is unchanged.
+    expect(switched.instructions[0]!.keys.map((k) => k.pubkey.toBase58())).toEqual(
+      ix.keys.map((k, i) => (i === 7 ? "FtEg58LToZq8tsq7zNqvKmF47PnE67Jj711LC2BE9S4Q" : k.pubkey.toBase58())),
+    );
+  });
+
+  it("keeps the None sentinel when the revote backs the same candidate", () => {
+    const topUp = buildVoteOnAgentTransaction({
+      assetId: 42,
+      round: 2,
+      agent: AGENT,
+      previousAgent: AGENT,
+      amount: 10,
+      voter: VOTER,
+    });
+    expect(topUp.instructions[0]!.keys[7]!.pubkey.toBase58()).toBe(PROPERTY_PROGRAM_ID);
+    expect(topUp.instructions[0]!.keys[7]!.isWritable).toBe(false);
+  });
+
   it("encodes discriminator + args", () => {
     expect(Array.from(ix.data)).toEqual([
       ...[203, 127, 40, 102, 254, 243, 11, 244],
       ...u64le(42),
       ...u32le(10),
     ]);
+  });
+});
+
+describe("resolveAgentVoteRequest", () => {
+  /** Stub fetcher dispatching on the GraphQL query's table name. */
+  function electionFetcher(lettingNode: unknown, voteNodes: unknown[]): typeof fetch {
+    return (async (_url: unknown, init: { body: string }) => {
+      const query = JSON.parse(init.body).query as string;
+      const data = query.includes("propertyLettings")
+        ? { propertyLettings: { nodes: lettingNode ? [lettingNode] : [] } }
+        : { agentVotes: { nodes: voteNodes } };
+      return { ok: true, status: 200, json: async () => ({ data }) };
+    }) as unknown as typeof fetch;
+  }
+
+  const liveLetting = { electionRound: "2", electionExpiry: "1760313600", electionCandidateCount: "3", electionQuorumBps: "1200" };
+
+  it("fills the round from the letting and keeps the None path on a first vote", async () => {
+    const request = await resolveAgentVoteRequest(
+      { assetId: 42, agent: AGENT, amount: 10, voter: VOTER },
+      { fetcher: electionFetcher(liveLetting, []) },
+    );
+    expect(request).toEqual({ assetId: 42, agent: AGENT, amount: 10, voter: VOTER, round: 2 });
+    const tx = buildVoteOnAgentTransaction(request);
+    expect(tx.instructions[0]!.keys[7]!.pubkey.toBase58()).toBe(PROPERTY_PROGRAM_ID);
+  });
+
+  it("passes the existing vote's candidate as previousAgent when switching", async () => {
+    const request = await resolveAgentVoteRequest(
+      { assetId: 42, agent: AGENT, amount: 10, voter: VOTER },
+      { fetcher: electionFetcher(liveLetting, [{ round: "2", choice: PREVIOUS_AGENT, power: "10" }]) },
+    );
+    expect(request.previousAgent).toBe(PREVIOUS_AGENT);
+    const tx = buildVoteOnAgentTransaction(request);
+    expect(tx.instructions[0]!.keys[7]!.pubkey.toBase58()).toBe("FtEg58LToZq8tsq7zNqvKmF47PnE67Jj711LC2BE9S4Q");
+  });
+
+  it("keeps the None path when the existing vote backs the same candidate", async () => {
+    const request = await resolveAgentVoteRequest(
+      { assetId: 42, agent: AGENT, amount: 10, voter: VOTER },
+      { fetcher: electionFetcher(liveLetting, [{ round: "2", choice: AGENT, power: "10" }]) },
+    );
+    expect(request.previousAgent).toBeUndefined();
+  });
+
+  it("ignores a stale vote from an earlier round", async () => {
+    const request = await resolveAgentVoteRequest(
+      { assetId: 42, agent: AGENT, amount: 10, voter: VOTER },
+      { fetcher: electionFetcher(liveLetting, [{ round: "1", choice: PREVIOUS_AGENT, power: "10" }]) },
+    );
+    expect(request.previousAgent).toBeUndefined();
+  });
+
+  it("throws when no election is live", async () => {
+    await expect(
+      resolveAgentVoteRequest(
+        { assetId: 42, agent: AGENT, amount: 10, voter: VOTER },
+        { fetcher: electionFetcher(null, []) },
+      ),
+    ).rejects.toThrow("NO_LIVE_AGENT_ELECTION");
+    await expect(
+      resolveAgentVoteRequest(
+        { assetId: 42, agent: AGENT, amount: 10, voter: VOTER },
+        { fetcher: electionFetcher({ ...liveLetting, electionExpiry: "0" }, []) },
+      ),
+    ).rejects.toThrow("NO_LIVE_AGENT_ELECTION");
   });
 });
 
