@@ -4,6 +4,7 @@ import {
   availableVotingShares,
   fetchActiveChallenge,
   fetchActiveProposal,
+  fetchAgentVote,
   fetchElection,
   fetchShareHolding,
   fetchSpvElection,
@@ -144,6 +145,42 @@ describe("fetchElection", () => {
   it("returns null when the property has no letting seat", async () => {
     const result = await fetchElection("42", { fetcher: stubFetcher({ data: { propertyLettings: { nodes: [] } } }) });
     expect(result).toBeNull();
+  });
+});
+
+describe("fetchAgentVote", () => {
+  it("parses the voter's active agent-election vote", async () => {
+    const node = { round: "2", choice: "AgentA", power: "10" };
+    const result = await fetchAgentVote("42", "voter", {
+      fetcher: stubFetcher({ data: { agentVotes: { nodes: [node] } } }),
+    });
+    expect(result).toEqual({ round: 2, choice: "AgentA", power: 10 });
+  });
+
+  it("picks the latest round when several active votes come back", async () => {
+    const nodes = [
+      { round: "1", choice: "OldAgent", power: "5" },
+      { round: "2", choice: "NewAgent", power: "10" },
+    ];
+    const result = await fetchAgentVote("42", "voter", {
+      fetcher: stubFetcher({ data: { agentVotes: { nodes } } }),
+    });
+    expect(result).toEqual({ round: 2, choice: "NewAgent", power: 10 });
+  });
+
+  it("returns null when the voter has no active agent vote", async () => {
+    const result = await fetchAgentVote("42", "voter", {
+      fetcher: stubFetcher({ data: { agentVotes: { nodes: [] } } }),
+    });
+    expect(result).toBeNull();
+  });
+
+  it("skips nodes without a usable round or choice", async () => {
+    const nodes = [{ round: "2" }, { choice: "AgentA" }, { round: "1", choice: "AgentB", power: "3" }];
+    const result = await fetchAgentVote("42", "voter", {
+      fetcher: stubFetcher({ data: { agentVotes: { nodes } } }),
+    });
+    expect(result).toEqual({ round: 1, choice: "AgentB", power: 3 });
   });
 });
 
