@@ -39,6 +39,8 @@ export interface ChatVotingInfo {
   /** Human "in 6h" / "2h 15m left" line; empty once closed or expired. */
   timeLeftLabel?: string
   documentsHash?: string
+  lawyer?: string
+  cluster?: "devnet" | "mainnet"
   yes?: number
   no?: number
   abstain?: number
@@ -266,12 +268,13 @@ function formatFileSize(base64: string): string {
               <template v-if="voting.round !== undefined">Round {{ voting.round }}</template>
               <template v-if="votingIsOpen && voting.timeLeftLabel"> · {{ voting.timeLeftLabel }}</template>
             </p>
+            <p v-if="voting.lawyer" class="chat-vote-sub">Lawyer: {{ voting.lawyer }}</p>
+            <p v-if="voting.cluster" class="chat-vote-sub">
+              {{ voting.cluster === 'mainnet' ? 'Solana Mainnet' : 'Solana Devnet' }}
+            </p>
             <template v-if="voting.yes !== undefined && voting.no !== undefined">
-              <div class="chat-vote-bar" role="img"
-                :aria-label="`${voting.yesLabel}: ${voting.yes}, ${voting.noLabel}: ${voting.no}`">
-                <div class="chat-vote-bar-yes" :style="{ width: `${voting.yesPct ?? 50}%` }"></div>
-                <div class="chat-vote-bar-no" :style="{ width: `${voting.noPct ?? 50}%` }"></div>
-              </div>
+              <progress class="chat-vote-bar" max="100" :value="voting.yesPct ?? 0"
+                :aria-label="`${voting.yesLabel}: ${voting.yes}, ${voting.noLabel}: ${voting.no}`"></progress>
               <div class="chat-vote-splits">
                 <span class="chat-vote-split-yes">
                   {{ voting.yesLabel }}<template v-if="voting.yesPct !== undefined"> {{ voting.yesPct }}%</template>
@@ -566,21 +569,31 @@ function formatFileSize(base64: string): string {
 }
 
 .chat-vote-bar {
-  display: flex;
-  height: 8px;
-  border-radius: 999px;
-  overflow: hidden;
-  background: var(--surface-hover, rgba(127, 127, 127, 0.16));
-}
-
-.chat-vote-bar-yes {
-  background: var(--primary, #3b4f74);
-  transition: width 0.3s ease;
-}
-
-.chat-vote-bar-no {
+  --progress-bar-radius: 999px;
+  appearance: none;
+  display: block;
+  inline-size: 100%;
+  block-size: 8px;
+  border: 0 solid;
+  border-radius: var(--progress-bar-radius);
+  overflow: clip;
   background: var(--error, #c62828);
-  transition: width 0.3s ease;
+}
+
+.chat-vote-bar::-webkit-progress-bar {
+  background: transparent;
+}
+
+.chat-vote-bar::-webkit-progress-value {
+  background: var(--primary, #3b4f74);
+  border-radius: var(--progress-bar-radius);
+  transition: inline-size 0.3s ease;
+}
+
+.chat-vote-bar::-moz-progress-bar {
+  background: var(--primary, #3b4f74);
+  border-radius: var(--progress-bar-radius);
+  transition: inline-size 0.3s ease;
 }
 
 .chat-vote-splits {

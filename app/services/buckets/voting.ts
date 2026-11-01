@@ -323,6 +323,50 @@ export function votingSideLabels(kind: VotingKind): { yes: string; no: string } 
   return kind === "terms" ? { yes: "Approve", no: "Not voted" } : { yes: "Yes", no: "No" };
 }
 
+export interface LawyerTermsBucketProperties {
+  listingId: string;
+  round?: number;
+  cluster: "devnet" | "mainnet";
+  lawyer: string;
+  candidacy: string;
+}
+
+/** Reads the on-chain vote target attached to an spv-lawyer-terms bucket. */
+export function parseLawyerTermsBucketProperties(
+  properties: string | null | undefined,
+): LawyerTermsBucketProperties | undefined {
+  if (typeof properties !== "string" || properties.trim() === "") {
+    return undefined;
+  }
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(properties);
+  } catch {
+    return undefined;
+  }
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return undefined;
+  }
+
+  const candidate = raw as Record<string, unknown>;
+  const listingId = asIdString(candidate.listing_id);
+  const lawyer = asNonEmptyString(candidate.lawyer);
+  const candidacy = asNonEmptyString(candidate.candidacy);
+  const cluster = candidate.cluster === undefined ? "devnet" : candidate.cluster;
+  if (!listingId || !lawyer || !candidacy || (cluster !== "devnet" && cluster !== "mainnet")) {
+    return undefined;
+  }
+
+  const result: LawyerTermsBucketProperties = { listingId, cluster, lawyer, candidacy };
+  const roundString = asIdString(candidate.round);
+  if (roundString !== undefined) {
+    const round = asRound(Number(roundString));
+    if (round !== undefined) result.round = round;
+  }
+  return result;
+}
+
 /**
  * Extracts the marketplace listing id a namespace was annotated with. The API
  * stores namespace properties as a JSON string; a realXmarket property

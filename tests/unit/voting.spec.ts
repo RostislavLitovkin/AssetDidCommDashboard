@@ -12,6 +12,7 @@ import {
   deriveVoteTallies,
   isVotingTag,
   parseNamespacePropertyId,
+  parseLawyerTermsBucketProperties,
   parseVotingPayload,
   voteKey,
   votingKindLabel,
@@ -321,5 +322,47 @@ describe("parseNamespacePropertyId", () => {
     expect(parseNamespacePropertyId(JSON.stringify(["42"]))).toBeUndefined();
     expect(parseNamespacePropertyId(JSON.stringify({ other: "42" }))).toBeUndefined();
     expect(parseNamespacePropertyId(JSON.stringify({ propertyId: "" }))).toBeUndefined();
+  });
+});
+
+describe("parseLawyerTermsBucketProperties", () => {
+  it("reads the exact property, cluster, lawyer, and candidacy", () => {
+    expect(parseLawyerTermsBucketProperties(JSON.stringify({
+      listing_id: "21",
+      round: "3",
+      cluster: "mainnet",
+      lawyer: "LawyerWallet111",
+      candidacy: "CandidacyPDA111",
+    }))).toEqual({
+      listingId: "21",
+      round: 3,
+      cluster: "mainnet",
+      lawyer: "LawyerWallet111",
+      candidacy: "CandidacyPDA111",
+    });
+  });
+
+  it("defaults legacy lawyer buckets to devnet", () => {
+    expect(parseLawyerTermsBucketProperties(JSON.stringify({
+      listing_id: 18,
+      lawyer: "LawyerWallet111",
+      candidacy: "CandidacyPDA111",
+    }))).toEqual({
+      listingId: "18",
+      cluster: "devnet",
+      lawyer: "LawyerWallet111",
+      candidacy: "CandidacyPDA111",
+    });
+  });
+
+  it("rejects malformed or incomplete lawyer metadata", () => {
+    expect(parseLawyerTermsBucketProperties("not json")).toBeUndefined();
+    expect(parseLawyerTermsBucketProperties(JSON.stringify({ listing_id: "21" }))).toBeUndefined();
+    expect(parseLawyerTermsBucketProperties(JSON.stringify({
+      listing_id: "21",
+      cluster: "testnet",
+      lawyer: "LawyerWallet111",
+      candidacy: "CandidacyPDA111",
+    }))).toBeUndefined();
   });
 });
