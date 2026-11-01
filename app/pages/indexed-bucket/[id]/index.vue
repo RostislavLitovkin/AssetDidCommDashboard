@@ -93,6 +93,7 @@ import {
   isVotingTag,
   parseVotingPayload,
   deriveActiveVote,
+  parseLawyerTermsBucketProperties,
   votingKindLabel,
   votingStatusLabel,
   votingPercentages,
@@ -713,11 +714,12 @@ const votingEntries = computed<VotingMessageEntry[]>(() =>
   }),
 )
 const activeVotes = computed(() => deriveActiveVote(votingEntries.value))
+const lawyerTermsMetadata = computed(() => parseLawyerTermsBucketProperties(bucket.value?.properties))
 
-/** The listing this bucket's votes belong to (the newest announcement wins). */
+/** The listing this bucket's votes belong to (bucket metadata first, announcement fallback). */
 const votingListingId = computed(() => {
   const newest = votingEntries.value[votingEntries.value.length - 1]
-  return newest?.payload.listingId
+  return lawyerTermsMetadata.value?.listingId ?? newest?.payload.listingId
 })
 
 /** The open vote a connected investor can act on right now, by urgency. */
@@ -884,15 +886,19 @@ async function submitVote(): Promise<void> {
   try {
     let tx
     if (active.payload.kind === "terms") {
-      const election = indexerSpvElection.value
-      const candidacy = election?.leadingCandidacy
-      if (!election || !candidacy) {
-        throw new Error("The indexer shows no SPV candidacy yet — try again in a moment.")
+      const metadata = lawyerTermsMetadata.value
+      const leading = indexerSpvElection.value?.leadingCandidacy
+      const lawyer = metadata?.lawyer ?? leading?.lawyer
+      const candidacy = metadata?.candidacy
+      const round = metadata?.round ?? active.payload.round ?? indexerSpvElection.value?.round
+      if (!lawyer || round === undefined || (!candidacy && !leading)) {
+        throw new Error("No SPV candidacy is available for this vote yet — try again in a moment.")
       }
       tx = buildVoteOnSpvLawyerTransaction({
         listingId: active.payload.listingId,
-        round: election.round,
-        lawyer: candidacy.lawyer,
+        round,
+        lawyer,
+        candidacy,
         amount,
         voter,
       })
@@ -1031,6 +1037,9 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
           round: votingPayload.round,
           id: votingPayload.id,
           documentsHash: votingPayload.documentsHash,
+          ...(votingPayload.kind === "terms" && lawyerTermsMetadata.value
+            ? { lawyer: lawyerTermsMetadata.value.lawyer, cluster: lawyerTermsMetadata.value.cluster }
+            : {}),
           expiresAt: votingPayload.status === "open" ? votingPayload.expiresAt : undefined,
           timeLeftLabel: votingPayload.status === "open" ? timeLeftLabel(votingPayload.expiresAt) : undefined,
           yes: tallies.yes,
@@ -2571,7 +2580,14 @@ onMounted(async () => {
           <Vote :size="18" class="ib-offer-icon" />
           <div class="ib-offer-info">
             <p class="ib-offer-title">{{ votingKindLabel(actionableVote.payload.kind) }}</p>
-            <p class="ib-offer-amount">{{ timeLeftLabel(actionableVote.payload.expiresAt) }}</p>
+            <template v-if="actionableVote.payload.kind === 'terms' && lawyerTermsMetadata">
+              <p class="ib-offer-amount">Lawyer: {{ lawyerTermsMetadata.lawyer }}</p>
+              <p class="ib-offer-amount">
+                {{ lawyerTermsMetadata.cluster === 'mainnet' ? 'Solana Mainnet' : 'Solana Devnet' }}
+                · {{ timeLeftLabel(actionableVote.payload.expiresAt) }}
+              </p>
+            </template>
+            <p v-else class="ib-offer-amount">{{ timeLeftLabel(actionableVote.payload.expiresAt) }}</p>
           </div>
         </div>
         <!-- Elections are approve-only: not voting is the on-chain "reject". -->

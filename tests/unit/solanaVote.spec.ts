@@ -130,6 +130,21 @@ describe("vote_on_spv_lawyer transaction", () => {
       "317ANy2HaG1Xp9JjcTQH4RZQomRWLYa1iCa2tTfwy3aN",
     );
   });
+
+  it("uses the exact candidacy PDA supplied by the lawyer bucket", () => {
+    const withMetadata = buildVoteOnSpvLawyerTransaction({
+      listingId: 42,
+      round: 1,
+      lawyer: AGENT,
+      candidacy: PREVIOUS_AGENT,
+      amount: 100,
+      voter: VOTER,
+    });
+    expect(withMetadata.instructions[0]!.keys[6]!.pubkey.toBase58()).toBe(PREVIOUS_AGENT);
+    expect(withMetadata.instructions[0]!.keys[6]!.pubkey.toBase58()).not.toBe(
+      lawyerCandidacyPda(42, 1, new PublicKey(AGENT)).toBase58(),
+    );
+  });
 });
 
 describe("vote_on_proposal transaction", () => {

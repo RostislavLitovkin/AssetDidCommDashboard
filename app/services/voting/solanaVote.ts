@@ -170,6 +170,8 @@ export interface SpvLawyerVoteRequest {
   round: number | bigint;
   /** The candidacy's lawyer wallet, base58 — the lawyer the vote backs. */
   lawyer: string;
+  /** Exact candidacy PDA from the lawyer bucket; derived from the lawyer when absent. */
+  candidacy?: string;
   /** Shares to lock behind the vote. */
   amount: number;
   /** Voter wallet, base58. Also fronts the vote record's rent. */
@@ -188,7 +190,9 @@ export function buildVoteOnSpvLawyerTransaction(request: SpvLawyerVoteRequest): 
     readonly(listing),
     writable(shareHoldingPda(request.listingId, voter)),
     writable(lawyerVoteRecordPda(request.listingId, request.round, voter)),
-    writable(lawyerCandidacyPda(request.listingId, request.round, lawyer)),
+    writable(request.candidacy
+      ? new PublicKey(request.candidacy)
+      : lawyerCandidacyPda(request.listingId, request.round, lawyer)),
     // previous_candidacy is optional; Anchor's sentinel for None is the
     // program's own id.
     readonly(marketplaceProgram),
