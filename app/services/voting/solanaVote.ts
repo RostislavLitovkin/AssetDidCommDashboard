@@ -456,8 +456,8 @@ function base58Encode(bytes: Uint8Array): string {
 
 /**
  * Fills in blockhash + fee payer, hands the transaction to the wallet, and
- * best-effort confirms it. Resolves to the base58 signature; a confirmation
- * that times out is NOT an error — the indexer poll reconciles tallies later.
+ * confirms it. Resolves to the base58 signature only after a successful
+ * confirmation; RPC failures and on-chain errors remain visible to the caller.
  */
 export async function castVoteOnChain(
   transaction: Transaction,
@@ -481,10 +481,12 @@ export async function castVoteOnChain(
   const signature = typeof rawSignature === "string" ? rawSignature : base58Encode(rawSignature);
 
   try {
-    await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
-  } catch {
-    // Submission already succeeded by the time a signature exists; a slow
-    // confirmation only means tallies settle a few seconds later.
+    const confirmation = await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed");
+    if (confirmation.value.err) {
+      throw new Error(JSON.stringify(confirmation.value.err));
+    }
+  } catch (error) {
+    throw new Error(`TRANSACTION_CONFIRMATION_FAILED: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   return { signature, walletName: bridge.name };

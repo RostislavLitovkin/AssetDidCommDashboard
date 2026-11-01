@@ -23,6 +23,11 @@ realXmessage dashboard for Asset DIDComm workflows on Xcavate Substrate.
 
 ## Environment
 - Set `.env` for local development.
+- Mainnet lawyer review requires `NUXT_PUBLIC_INDEXER_MAINNET_GRAPHQL_URL` to be set to the mainnet Indexer GraphQL endpoint before running or building the app. Missing configuration makes mainnet review unavailable; it never falls back to the devnet Indexer. Devnet uses the built-in devnet endpoint.
+
+## Lawyer document review
+
+The lawyer-review composable, services, and panel support `lawyer-document-review` buckets with property/cluster metadata, chain-derived two-seat verdicts, deterministic PDF revision hashing, stale-assignment protection, and wallet-signed review/settlement actions. See [the lawyer document review guide](./docs/lawyer-document-review.md) for the chat behavior, document hash format, configuration, and current integration status.
 
 ## Native host key injection
 Native shells (e.g. .NET MAUI `HybridWebView`) can inject the user's X25519

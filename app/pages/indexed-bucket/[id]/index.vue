@@ -14,8 +14,11 @@ import PageHeader from "../../../components/common/PageHeader.vue"
 import SubmitButton from "../../../components/common/SubmitButton.vue"
 import type { SubmitButtonLabels } from "../../../components/common/submitButtonView"
 import ChatMessageEntry, { type ChatMessageProps, type ChatMessageAttachment, type ChatMarketInfo, type ChatVotingInfo } from "../../../components/common/ChatMessageEntry.vue"
+import LawyerReviewPanel from "../../../components/lawyer/LawyerReviewPanel.vue"
 import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, Check, HandCoins, ChevronDown, Vote, Handshake, ShoppingCart, BadgeCheck, CircleX } from "lucide-vue-next"
 import { useAddress } from "../../../composables/useAddress"
+import { useLawyerReview, type LawyerDocumentSource } from "../../../composables/useLawyerReview"
+import { LAWYER_REVIEW_BUCKET_CATEGORY } from "../../../services/lawyer/reviewBucket"
 import { useWallet } from "../../../composables/useWallet"
 import { useSubmitState } from "../../../composables/useSubmitState"
 import { useAutoGrowTextarea } from "../../../composables/useAutoGrowTextarea"
@@ -156,7 +159,7 @@ const profileClient = new ProfileClient(String(config.public.profileApiUrl))
 
 const pinataGateway = computed(() => {
   const gw = String(config.public.pinataGateway || "https://gateway.pinata.cloud/ipfs")
-  return gw.replace(/\/+$/, "")
+  return gw.replace(/\/+$/, "").replace(/\/ipfs$/i, "")
 })
 
 const bucketId = computed(() => {
@@ -182,6 +185,59 @@ const payloadErrorById = ref<Record<string, string>>({})
 const decryptedById = ref<Record<string, string>>({})
 const decryptErrorById = ref<Record<string, string>>({})
 const attachmentById = ref<Record<string, ChatMessageAttachment>>({})
+
+const isLawyerReviewBucket = computed(() => bucket.value?.category === LAWYER_REVIEW_BUCKET_CATEGORY)
+const {
+  metadata: lawyerMetadata,
+  state: lawyerState,
+  documentSetHash: lawyerDocumentSetHash,
+  loading: lawyerLoading,
+  submitting: lawyerSubmitting,
+  executing: lawyerExecuting,
+  error: lawyerError,
+  documentError: lawyerDocumentError,
+  statusMessage: lawyerStatusMessage,
+  lawyerRole,
+  canSubmit: lawyerCanSubmit,
+  canExecute: lawyerCanExecute,
+  refresh: refreshLawyerReviewState,
+  submitVerdict: submitLawyerVerdictRequest,
+  executeDeal: executeLawyerDealRequest,
+} = useLawyerReview({
+  loadDocument: loadLawyerDocument,
+  legacyCluster: "devnet",
+})
+const lawyerPanelError = computed(() => lawyerState.value ? "" : lawyerError.value)
+const lawyerPanelActionError = computed(() =>
+  (lawyerState.value ? lawyerError.value : "") || lawyerDocumentError.value
+)
+const lawyerTransactionSignatures = ref<string[]>([])
+
+async function submitLawyerVerdict(approve: boolean): Promise<void> {
+  lawyerTransactionSignatures.value = []
+  const result = await submitLawyerVerdictRequest(approve)
+  if (result) lawyerTransactionSignatures.value = [result.signature]
+}
+
+async function executeLawyerDeal(): Promise<void> {
+  lawyerTransactionSignatures.value = []
+  const results = await executeLawyerDealRequest()
+  if (results) lawyerTransactionSignatures.value = results.map(result => result.signature)
+}
+
+async function refreshLawyerReview(): Promise<void> {
+  if (!isLawyerReviewBucket.value || !bucket.value) return
+  await refreshLawyerReviewState({
+    bucket: bucket.value,
+    messages: messages.value,
+    walletAddress: session.accountAddress || null,
+    hydratedAttachments: attachmentById.value,
+  })
+}
+
+watch(() => session.accountAddress, (address, previous) => {
+  if (address !== previous && isLawyerReviewBucket.value && !loading.value) void refreshLawyerReview()
+})
 
 // realXhub marketplace state — market + status messages are fetched by tag on
 // top of the main message list, so the active offer survives page reloads.
@@ -1145,6 +1201,7 @@ async function loadAll() {
 
     // 6. Resolve file attachments referenced by CID-pointer messages
     await hydrateAttachments(detail.messages)
+    await refreshLawyerReview()
 
     // 6b. Live vote tallies from the indexer (chain truth over the announcements)
     await refreshIndexerVotingState()
@@ -1482,6 +1539,7 @@ async function applyIncomingMessage(m: ApiMessage): Promise<void> {
     // under the previous key set.
     await decryptMessages(messages.value)
     await hydrateAttachments(messages.value)
+    await refreshLawyerReview()
     await loadSenderProfiles([m])
     viewersMissingKeyCount.value = null
     if (connectedAdmin.value) void checkViewerKeyAccess()
@@ -1522,6 +1580,7 @@ async function applyIncomingMessage(m: ApiMessage): Promise<void> {
   await hydratePayloads([m])
   await decryptMessages([m])
   await hydrateAttachments([m])
+  await refreshLawyerReview()
   await loadSenderProfiles([m])
 }
 
@@ -1643,6 +1702,36 @@ function base64ToBytes(b64: string): Uint8Array {
   const bytes = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
   return bytes
+}
+
+function requireDecryptedLawyerDocument(bytes: Uint8Array): Uint8Array {
+  const content = new TextDecoder().decode(bytes).trim()
+  if (looksLikeCompactJwe(content)) throw new Error("Lawyer document attachment could not be decrypted.")
+  return bytes
+}
+
+async function loadLawyerDocument(source: LawyerDocumentSource): Promise<Uint8Array> {
+  if (source.attachment) return requireDecryptedLawyerDocument(base64ToBytes(source.attachment.data))
+
+  const inline = source.message.ipfsContent?.trim()
+  if (inline) {
+    const encoded = inline.startsWith("data:") && inline.includes(",")
+      ? inline.slice(inline.indexOf(",") + 1)
+      : inline
+    if (looksLikeCompactJwe(encoded)) throw new Error("Lawyer document attachment could not be decrypted.")
+    try {
+      return requireDecryptedLawyerDocument(base64ToBytes(encoded))
+    } catch (cause) {
+      if (cause instanceof Error && cause.message === "Lawyer document attachment could not be decrypted.") throw cause
+      throw new Error("Inline lawyer document is not valid base64.")
+    }
+  }
+
+  const reference = source.reference?.trim()
+  if (!reference) throw new Error("Lawyer document bytes are unavailable.")
+  const response = await fetch(resolveUrl(reference))
+  if (!response.ok) throw new Error(`Lawyer document download failed with HTTP ${response.status}.`)
+  return requireDecryptedLawyerDocument(new Uint8Array(await response.arrayBuffer()))
 }
 
 // Signs and submits a pending entry's payload. On failure the entry stays in
@@ -2262,6 +2351,7 @@ watch(() => settings.x25519SecretJwk, async () => {
       await decryptMessages(realxmarketMessages.value)
     }
     await hydrateAttachments(messages.value)
+    await refreshLawyerReview()
   } finally {
     rekeying.value = false
     incomingPump.flush()
@@ -2524,6 +2614,39 @@ onMounted(async () => {
         </SubmitButton>
       </div>
       <p v-if="createKeyError && viewersMissingKeyCount" class="ib-error">{{ createKeyError }}</p>
+    </div>
+
+    <div v-if="isLawyerReviewBucket" class="ib-content-scroll">
+      <div class="ib-container">
+        <div v-if="!lawyerMetadata && !lawyerLoading" class="ib-error" role="alert">
+          <p>{{ lawyerPanelError || "Lawyer review metadata is unavailable." }}</p>
+          <button class="btn" type="button" @click="refreshLawyerReview">Retry review</button>
+        </div>
+        <LawyerReviewPanel
+          v-else-if="lawyerMetadata"
+          :metadata="lawyerMetadata"
+          :review="lawyerState"
+          :documents-hash="lawyerDocumentSetHash ?? ''"
+          :loading="lawyerLoading"
+          :error="lawyerPanelError"
+          :action-error="lawyerPanelActionError"
+          :notice="lawyerStatusMessage"
+          :transaction-signatures="lawyerTransactionSignatures"
+          :eligible-lawyer="Boolean(lawyerRole)"
+          :missing-documents="Boolean(lawyerDocumentError) || (!lawyerDocumentSetHash && !lawyerLoading)"
+          :can-upload="Boolean(lawyerRole && connectedAdminOrContributor && activeSecretJwk && keyAccessState === 'ok')"
+          :confirming="lawyerSubmitting"
+          :submission-allowed="lawyerCanSubmit"
+          :wallet-address="session.accountAddress"
+          :wallet-connected="Boolean(session.accountAddress && session.walletKind === 'solana')"
+          :execute-allowed="lawyerCanExecute || lawyerExecuting"
+          :executing="lawyerExecuting"
+          @confirm="submitLawyerVerdict"
+          @execute="executeLawyerDeal"
+          @upload="openFilePicker"
+          @retry="refreshLawyerReview"
+        />
+      </div>
     </div>
 
     <!-- Chat viewport -->
