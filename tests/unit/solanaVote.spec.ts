@@ -106,7 +106,7 @@ describe("vote_on_spv_lawyer transaction", () => {
       [VOTER, true, false], // voter
       [VOTER, true, true], // payer
       ["84PpSYsNmwY5HXSzHgEv7PccJMwjeHSrTjPdFkEbHHdS", false, false], // voter_role
-      ["Da9GJLvR88quSajqF6uuRWwakEFyUxvjxZu35UYRGqCS", false, false], // listing
+      ["Da9GJLvR88quSajqF6uuRWwakEFyUxvjxZu35UYRGqCS", false, true], // listing
       ["4R55F6bzJvHV8pPAyYhBNAaRLBumTRwVMD3aJ68EBqxR", false, true], // holding
       ["QSg6aHXsiSiBeTB4i6huUgNxQk8g1wqQXdA9Soa28SK", false, true], // vote_record
       ["2MPceHQnaZBFwhaP94cfHmHXYMJueEhMMyu7WWkMNz9B", false, true], // candidacy

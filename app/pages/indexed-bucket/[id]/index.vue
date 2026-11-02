@@ -1236,7 +1236,17 @@ async function loadAll() {
 // ── IPFS payload resolution ────────────────────────────────────────
 function resolveUrl(ref: string): string {
   const t = ref.trim()
-  if (/^https?:\/\//i.test(t)) return t
+  if (/^https?:\/\//i.test(t)) {
+    try {
+      const url = new URL(t)
+      const legacyTermsDocument = /^\/xcavate-profile\/terms-documents\/by-candidacy\/([^/]+)\.pdf$/.exec(url.pathname)
+      if (legacyTermsDocument) {
+        const profileApiUrl = String(config.public.profileApiUrl).replace(/\/+$/, "")
+        return `${profileApiUrl}/api/terms-documents/by-candidacy/${legacyTermsDocument[1]}`
+      }
+    } catch { /* retain the original reference */ }
+    return t
+  }
   return `${pinataGateway.value}/ipfs/${t}`
 }
 
@@ -1244,6 +1254,7 @@ async function hydratePayloads(msgs: ApiMessage[]) {
   const nextP: Record<string, string> = { ...payloadById.value }
   const nextE: Record<string, string> = { ...payloadErrorById.value }
   await Promise.all(msgs.map(async m => {
+    delete nextE[m.id]
     if (nextP[m.id]) return // already hydrated
     if (m.ipfsContent) { nextP[m.id] = tryBase64Decode(m.ipfsContent) ?? m.ipfsContent; return }
     if (!m.reference) return
@@ -1401,11 +1412,11 @@ async function decryptMessages(msgs: ApiMessage[]) {
     // No usable keys: clear plaintext and errors for these messages only.
     // Entries for other ids — attachment errors especially, which belong to
     // hydrateAttachments — must survive a partial-list call. Plaintext
-    // realXmarket seeds need no key at all, so they still surface as-is.
+    // realXmarket seeds and voting announcements need no key, so they surface as-is.
     for (const m of msgs) {
       delete nextD[m.id]
       delete nextE[m.id]
-      if (!isRealXmarketTag(m.tag)) continue
+      if (!isRealXmarketTag(m.tag) && !isVotingTag(m.tag)) continue
       const p = payloadById.value[m.id]
       if (p && (m.contentType?.trim().toLowerCase() === "application/json" || !looksLikeCompactJwe(p.trim()))) {
         nextD[m.id] = p
@@ -1418,10 +1429,10 @@ async function decryptMessages(msgs: ApiMessage[]) {
 
   await Promise.all(msgs.map(async m => {
     if (m.tag === KEY_SHARING_MESSAGE_TAG) return
-    // realXmarket negotiation messages are text even when their contentType
-    // says application/json — the seeded first offer is plaintext JSON, and
-    // the file-message classifier would otherwise route it to attachments.
-    if (isFileMessage(m) && !isRealXmarketTag(m.tag)) return
+    // realXmarket and voting lanes are text even when their contentType says
+    // application/json; the generic file classifier would otherwise route them
+    // to attachments.
+    if (isFileMessage(m) && !isRealXmarketTag(m.tag) && !isVotingTag(m.tag)) return
     const p = payloadById.value[m.id]
     if (!p) return
     const t = p.trim()
@@ -1466,9 +1477,8 @@ async function hydrateAttachments(msgs: ApiMessage[]) {
   await Promise.all(msgs.map(async m => {
     if (next[m.id]) return
     if (!isFileMessage(m)) return
-    // realXmarket messages can carry an application/json contentType while
-    // being plaintext negotiation payloads — never encrypted attachments.
-    if (isRealXmarketTag(m.tag)) return
+    // Negotiation and voting payloads are messages, never encrypted attachments.
+    if (isRealXmarketTag(m.tag) || isVotingTag(m.tag)) return
     const fileJwe = payloadById.value[m.id]?.trim()
     if (!fileJwe) return
     try {

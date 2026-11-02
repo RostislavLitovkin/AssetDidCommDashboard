@@ -187,7 +187,7 @@ export function buildVoteOnSpvLawyerTransaction(request: SpvLawyerVoteRequest): 
     signer(voter),
     signer(voter, true), // payer == voter on the self-service path
     readonly(voterRolePda(voter)),
-    readonly(listing),
+    writable(listing),
     writable(shareHoldingPda(request.listingId, voter)),
     writable(lawyerVoteRecordPda(request.listingId, request.round, voter)),
     writable(request.candidacy
