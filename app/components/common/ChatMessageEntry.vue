@@ -36,11 +36,8 @@ export interface ChatVotingInfo {
   round?: number
   id?: string
   expiresAt?: string
-  /** Human "in 6h" / "2h 15m left" line; empty once closed or expired. */
-  timeLeftLabel?: string
   documentsHash?: string
   lawyer?: string
-  cluster?: "devnet" | "mainnet"
   yes?: number
   no?: number
   abstain?: number
@@ -88,13 +85,14 @@ export interface ChatMessageAttachment {
 </script>
 
 <script setup lang="ts">
-import { computed, ref } from "vue"
+import { computed, onMounted, onUnmounted, ref, watch } from "vue"
 import { Paperclip, KeyRound } from "lucide-vue-next"
 import { useSettingsStore } from "../../stores/settings"
 import {
   formatPriceAmount,
   marketKindLabel
 } from "../../services/buckets/realxhub"
+import { votingTimeLeftLabel } from "../../services/buckets/voting"
 import { isLawyerTermsApprovedTag } from "../../services/buckets/lawyerTerms"
 import GlitchParticles from "./GlitchParticles.vue"
 
@@ -158,6 +156,46 @@ const marketPrice = computed(() =>
 // the outcome chip; tallies may be absent (no indexer read back them yet).
 const voting = computed(() => props.message.voting ?? null)
 const votingIsOpen = computed(() => voting.value?.status === "open")
+const votingNow = ref(Date.now())
+const votingStatusText = computed(() => {
+  const current = voting.value
+  if (!current) return ""
+  if (current.status !== "open" || !current.expiresAt) return current.statusLabel
+  return votingTimeLeftLabel(current.expiresAt, votingNow.value)
+})
+const votingHasClosed = computed(() => votingIsOpen.value && votingStatusText.value === "Closed")
+let votingClock: ReturnType<typeof setInterval> | undefined
+let stopVotingClockWatcher: (() => void) | undefined
+
+function stopVotingClock() {
+  if (votingClock !== undefined) clearInterval(votingClock)
+  votingClock = undefined
+}
+
+function updateVotingClock() {
+  votingNow.value = Date.now()
+  if (!votingIsOpen.value || votingHasClosed.value) stopVotingClock()
+}
+
+onMounted(() => {
+  stopVotingClockWatcher = watch(
+    [votingIsOpen, () => voting.value?.expiresAt],
+    ([isOpen, expiresAt]) => {
+      stopVotingClock()
+      votingNow.value = Date.now()
+      if (isOpen && expiresAt && !votingHasClosed.value) {
+        votingClock = setInterval(updateVotingClock, 1000)
+      }
+    },
+    { immediate: true },
+  )
+})
+
+onUnmounted(() => {
+  stopVotingClockWatcher?.()
+  stopVotingClock()
+})
+
 function downloadAttachment() {
   const a = attachment.value
   if (!a) return
@@ -259,21 +297,20 @@ function formatFileSize(base64: string): string {
 
         <!-- Governance voting message: split-bar card with status -->
         <template v-else-if="voting">
-          <div class="chat-vote-card">
+          <div class="chat-vote-card" :class="{ 'chat-vote-card-terms': voting.kind === 'terms' }">
             <div class="chat-vote-head">
               <span class="chat-vote-kind">{{ voting.kindLabel }}</span>
-              <span class="chat-vote-status" :class="`chat-vote-status-${voting.status}`">
-                {{ voting.statusLabel }}
+              <span class="chat-vote-status" :class="[
+                `chat-vote-status-${voting.status}`,
+                { 'chat-vote-status-closed': votingHasClosed }
+              ]">
+                {{ votingStatusText }}
               </span>
             </div>
-            <p class="chat-vote-sub">
-              <template v-if="voting.id !== undefined">#{{ voting.id }} · </template>
-              <template v-if="voting.round !== undefined">Round {{ voting.round }}</template>
-              <template v-if="votingIsOpen && voting.timeLeftLabel"> · {{ voting.timeLeftLabel }}</template>
-            </p>
-            <p v-if="voting.lawyer" class="chat-vote-sub">Lawyer: {{ voting.lawyer }}</p>
-            <p v-if="voting.cluster" class="chat-vote-sub">
-              {{ voting.cluster === 'mainnet' ? 'Solana Mainnet' : 'Solana Devnet' }}
+            <p v-if="voting.id !== undefined" class="chat-vote-sub">#{{ voting.id }}</p>
+            <p v-if="voting.lawyer" class="chat-vote-sub chat-vote-lawyer">
+              <span>Lawyer:</span>
+              <span class="chat-vote-lawyer-name" :title="voting.lawyer">{{ voting.lawyer }}</span>
             </p>
             <template v-if="voting.yes !== undefined && voting.no !== undefined">
               <progress class="chat-vote-bar" max="100" :value="voting.yesPct ?? 0"
@@ -529,7 +566,9 @@ function formatFileSize(base64: string): string {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  min-width: 240px;
+  width: 100%;
+  min-width: min(240px, 100%);
+  max-width: 100%;
 }
 
 .chat-vote-head {
@@ -548,17 +587,24 @@ function formatFileSize(base64: string): string {
 }
 
 .chat-vote-status {
+  flex-shrink: 0;
   font-size: 11px;
   font-weight: 700;
   padding: 2px 8px;
   border-radius: 999px;
   background: var(--surface-hover, rgba(127, 127, 127, 0.16));
   color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 .chat-vote-status-open {
   color: var(--primary, #3b4f74);
   background: color-mix(in srgb, var(--primary, #3b4f74) 14%, transparent);
+}
+
+.chat-vote-status-closed {
+  color: var(--text-secondary);
+  background: var(--surface-hover, rgba(127, 127, 127, 0.16));
 }
 
 .chat-vote-status-ratified,
@@ -579,6 +625,24 @@ function formatFileSize(base64: string): string {
   color: var(--text-secondary);
 }
 
+.chat-vote-lawyer {
+  display: flex;
+  gap: 0.25rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.chat-vote-lawyer > span:first-child {
+  flex-shrink: 0;
+}
+
+.chat-vote-lawyer-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chat-vote-bar {
   --progress-bar-radius: 999px;
   appearance: none;
@@ -589,6 +653,10 @@ function formatFileSize(base64: string): string {
   border-radius: var(--progress-bar-radius);
   overflow: clip;
   background: var(--error, #c62828);
+}
+
+.chat-vote-card-terms .chat-vote-bar {
+  background: var(--border-default, #9e9e9e);
 }
 
 .chat-vote-bar::-webkit-progress-bar {
@@ -610,6 +678,7 @@ function formatFileSize(base64: string): string {
 .chat-vote-splits {
   display: flex;
   justify-content: space-between;
+  gap: 1.5rem;
   font-size: 13px;
   font-weight: 600;
 }
@@ -620,6 +689,10 @@ function formatFileSize(base64: string): string {
 
 .chat-vote-split-no {
   color: var(--error, #c62828);
+}
+
+.chat-vote-card-terms .chat-vote-split-no {
+  color: var(--text-secondary);
 }
 
 .chat-market-header {

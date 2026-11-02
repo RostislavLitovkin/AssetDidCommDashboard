@@ -19,6 +19,7 @@ import {
   votingPercentages,
   votingSideLabels,
   votingStatusLabel,
+  votingTimeLeftLabel,
   type VotingMessageEntry,
   type VotingOpenPayload,
   type VotingResultPayload,
@@ -307,6 +308,21 @@ describe("labels and percentages", () => {
     expect(votingPercentages(1, 2)).toEqual({ yesPct: 33, noPct: 67 });
     expect(votingPercentages(0, 0)).toBeUndefined();
     expect(votingPercentages(undefined, 5)).toBeUndefined();
+  });
+});
+
+describe("votingTimeLeftLabel", () => {
+  const now = Date.parse("2026-10-10T09:45:00.000Z");
+
+  it("formats the remaining voting time in minutes, hours, or days", () => {
+    expect(votingTimeLeftLabel("2026-10-10T10:10:00.000Z", now)).toBe("25m left");
+    expect(votingTimeLeftLabel("2026-10-10T12:00:00.000Z", now)).toBe("2h 15m left");
+    expect(votingTimeLeftLabel("2026-10-13T09:45:00.000Z", now)).toBe("3d left");
+  });
+
+  it("shows Closed at the deadline and after it", () => {
+    expect(votingTimeLeftLabel("2026-10-10T09:45:00.000Z", now)).toBe("Closed");
+    expect(votingTimeLeftLabel("2026-10-10T09:44:59.000Z", now)).toBe("Closed");
   });
 });
 

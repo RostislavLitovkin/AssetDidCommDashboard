@@ -6,6 +6,7 @@ import {
   XCAVATE_WHITELIST_PROGRAM_ID,
   agentCandidacyPda,
   agentVotePda,
+  buildFinalizeSpvElectionTransaction,
   buildVoteOnAgentTransaction,
   buildVoteOnChallengeTransaction,
   buildVoteOnProposalTransaction,
@@ -14,9 +15,11 @@ import {
   challengeVotePda,
   cpiAuthPda,
   lawyerCandidacyPda,
+  lawyerRegistryPda,
   lawyerVoteRecordPda,
   lettingPda,
   listingPda,
+  propertyPda,
   proposalPda,
   proposalVotePda,
   resolveAgentVoteRequest,
@@ -144,6 +147,58 @@ describe("vote_on_spv_lawyer transaction", () => {
     expect(withMetadata.instructions[0]!.keys[6]!.pubkey.toBase58()).not.toBe(
       lawyerCandidacyPda(42, 1, new PublicKey(AGENT)).toBase58(),
     );
+  });
+});
+
+describe("finalize_spv_election transaction", () => {
+  const tx = buildFinalizeSpvElectionTransaction({
+    listingId: 42,
+    round: 1,
+    winner: AGENT,
+    candidates: [AGENT, PREVIOUS_AGENT],
+    cranker: VOTER,
+  });
+  const ix = tx.instructions[0]!;
+
+  it("derives the property and winner registry PDAs", () => {
+    expect(propertyPda(42).toBase58()).toBe("EYzsprEpwDcAQ4tCPQaMGqP4L2k2acWirrtkhzMWM3Nz");
+    expect(lawyerRegistryPda(new PublicKey(AGENT)).toBase58()).toBe("4HkFdbVSoKpYQGnfzY8aAtiz1uoYQNcn1X93EXdN2LQ1");
+  });
+
+  it("lays out fixed and remaining accounts in on-chain order with correct flags", () => {
+    const expected: [string, boolean, boolean][] = [
+      [VOTER, true, false],
+      ["Da9GJLvR88quSajqF6uuRWwakEFyUxvjxZu35UYRGqCS", false, true],
+      ["EYzsprEpwDcAQ4tCPQaMGqP4L2k2acWirrtkhzMWM3Nz", false, false],
+      ["4HkFdbVSoKpYQGnfzY8aAtiz1uoYQNcn1X93EXdN2LQ1", false, true],
+      ["2MPceHQnaZBFwhaP94cfHmHXYMJueEhMMyu7WWkMNz9B", false, true],
+      ["EvJ1om4o1K2RT4CvST9RgBZECehBSB3Ht1hGA89xnkRn", false, true],
+    ];
+    expect(ix.programId.toBase58()).toBe(MARKETPLACE_PROGRAM_ID);
+    expect(ix.keys.map((key) => [key.pubkey.toBase58(), key.isSigner, key.isWritable])).toEqual(expected);
+  });
+
+  it("encodes the finalize discriminator and listing id", () => {
+    expect(Array.from(ix.data)).toEqual([
+      ...[2, 249, 39, 73, 224, 169, 145, 100],
+      ...u64le(42),
+    ]);
+  });
+
+  it("uses the program id None sentinel for a tied election and keeps every candidacy", () => {
+    const tied = buildFinalizeSpvElectionTransaction({
+      listingId: 42,
+      round: 1,
+      winner: null,
+      candidates: [AGENT, PREVIOUS_AGENT],
+      cranker: VOTER,
+    });
+    const keys = tied.instructions[0]!.keys;
+    expect(keys[3]).toMatchObject({ pubkey: new PublicKey(MARKETPLACE_PROGRAM_ID), isSigner: false, isWritable: false });
+    expect(keys.slice(4).map((key) => key.pubkey.toBase58())).toEqual([
+      "2MPceHQnaZBFwhaP94cfHmHXYMJueEhMMyu7WWkMNz9B",
+      "EvJ1om4o1K2RT4CvST9RgBZECehBSB3Ht1hGA89xnkRn",
+    ]);
   });
 });
 

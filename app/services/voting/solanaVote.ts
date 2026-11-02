@@ -33,12 +33,15 @@ export const SOLANA_RPC_URL = "https://api.devnet.solana.com";
 // Anchor instruction discriminators — sha256("global:<ix_name>")[0..8], as
 // pinned in the deployed IDLs (tests recompute the hash to prove parity).
 const DISC_VOTE_ON_SPV_LAWYER = Uint8Array.from([245, 181, 143, 227, 83, 159, 141, 147]);
+const DISC_FINALIZE_SPV_ELECTION = Uint8Array.from([2, 249, 39, 73, 224, 169, 145, 100]);
 const DISC_VOTE_ON_PROPOSAL = Uint8Array.from([188, 239, 13, 88, 119, 199, 251, 119]);
 const DISC_VOTE_ON_CHALLENGE = Uint8Array.from([19, 36, 128, 75, 123, 135, 79, 64]);
 const DISC_VOTE_ON_AGENT = Uint8Array.from([203, 127, 40, 102, 254, 243, 11, 244]);
 
 // PDA seeds, mirroring the on-chain constants.
 const SEED_LISTING = "listing";
+const SEED_PROPERTY = "property";
+const SEED_LAWYER = "lawyer";
 const SEED_LAWYER_VOTE = "lawyer-vote";
 const SEED_LAWYER_CANDIDATE = "lawyer-candidate";
 const SEED_SHARE = "share";
@@ -81,6 +84,14 @@ function pda(seeds: Uint8Array[], program: PublicKey): PublicKey {
 
 export function listingPda(listingId: string | number | bigint): PublicKey {
   return pda([textSeed(SEED_LISTING), u64le(listingId)], marketplaceProgram);
+}
+
+export function propertyPda(listingId: string | number | bigint): PublicKey {
+  return pda([textSeed(SEED_PROPERTY), u64le(listingId)], marketplaceProgram);
+}
+
+export function lawyerRegistryPda(lawyer: PublicKey): PublicKey {
+  return pda([textSeed(SEED_LAWYER), lawyer.toBytes()], marketplaceProgram);
 }
 
 export function shareHoldingPda(assetId: string | number | bigint, voter: PublicKey): PublicKey {
@@ -204,6 +215,34 @@ export function buildVoteOnSpvLawyerTransaction(request: SpvLawyerVoteRequest): 
     u32le(request.amount),
   );
   return instruction(marketplaceProgram, keys, data);
+}
+
+export interface FinalizeSpvElectionRequest {
+  listingId: string | number | bigint;
+  round: number | bigint;
+  winner: string | null;
+  candidates: readonly string[];
+  cranker: string;
+}
+
+/** marketplace::finalize_spv_election — settle an ended round with its complete candidate field. */
+export function buildFinalizeSpvElectionTransaction(request: FinalizeSpvElectionRequest): Transaction {
+  const keys: AccountMeta[] = [
+    signer(new PublicKey(request.cranker)),
+    writable(listingPda(request.listingId)),
+    readonly(propertyPda(request.listingId)),
+    request.winner
+      ? writable(lawyerRegistryPda(new PublicKey(request.winner)))
+      : readonly(marketplaceProgram),
+  ];
+  for (const candidate of request.candidates) {
+    keys.push(writable(lawyerCandidacyPda(request.listingId, request.round, new PublicKey(candidate))));
+  }
+  return instruction(
+    marketplaceProgram,
+    keys,
+    concat(DISC_FINALIZE_SPV_ELECTION, u64le(request.listingId)),
+  );
 }
 
 export interface ProposalVoteRequest {

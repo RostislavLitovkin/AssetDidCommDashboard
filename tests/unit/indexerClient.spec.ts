@@ -30,24 +30,60 @@ describe("fetchSpvElection", () => {
     { round: "2", lawyer: "LawyerB", costs: "300", votePower: "100" },
   ];
 
-  it("parses the election counters, sums vote power and picks the leading candidacy", async () => {
-    const result = await fetchSpvElection("42", {
-      fetcher: stubFetcher({
-        data: {
-          listings: { nodes: [listing] },
-          lawyerCandidacies: { nodes: candidacies },
-        },
-      }),
-    });
+  it("parses the election counters, finalization evidence, vote power and leading candidacy", async () => {
+    let requestBody = "";
+    const fetcher = (async (_url: unknown, init: { body: string }) => {
+      requestBody = init.body;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: {
+            listings: { nodes: [{ ...listing, spvElectionCandidateCount: "2" }] },
+            lawyerCandidacies: { nodes: candidacies },
+            pendingFinalizations: {
+              spvElection: { winner: "LawyerA", round: "2", candidates: ["LawyerA", "LawyerB"] },
+            },
+          },
+        }),
+      };
+    }) as unknown as typeof fetch;
+    const result = await fetchSpvElection("42", { fetcher });
     expect(result).toEqual({
       listingId: "42",
       round: 2,
       expiry: 1760227200,
-      candidateCount: 3,
+      candidateCount: 2,
       soldShareAmount: 1000,
       totalVotePower: 800,
       leadingCandidacy: { lawyer: "LawyerA", costs: 500, votePower: 700 },
+      finalization: { winner: "LawyerA", round: 2, candidates: ["LawyerA", "LawyerB"] },
     });
+    const request = JSON.parse(requestBody) as { query: string; variables: Record<string, unknown> };
+    expect(request.query).toContain("pendingFinalizations(assetId: $listingId, listingId: $listingId)");
+    expect(request.query).toContain("spvElection { winner round candidates }");
+    expect(request.variables).toEqual({ listingId: "42" });
+  });
+
+  it("omits stale or incomplete finalization evidence", async () => {
+    const evidence = [
+      { winner: "LawyerA", round: "1", candidates: ["LawyerA", "LawyerB"] },
+      { winner: "LawyerA", round: "2", candidates: ["LawyerA"] },
+      { winner: "LawyerA", round: "2", candidates: [] },
+      { winner: "LawyerC", round: "2", candidates: ["LawyerA", "LawyerB", "LawyerD"] },
+    ];
+    for (const spvElection of evidence) {
+      const result = await fetchSpvElection("42", {
+        fetcher: stubFetcher({
+          data: {
+            listings: { nodes: [listing] },
+            lawyerCandidacies: { nodes: candidacies },
+            pendingFinalizations: { spvElection },
+          },
+        }),
+      });
+      expect(result?.finalization).toBeUndefined();
+    }
   });
 
   it("ignores candidacies from other rounds and tolerates missing tallies", async () => {

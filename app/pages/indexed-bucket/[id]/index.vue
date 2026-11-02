@@ -98,11 +98,13 @@ import {
   votingStatusLabel,
   votingPercentages,
   votingSideLabels,
+  votingTimeLeftLabel,
   type VotingKind,
   type VotingOpenPayload,
   type VotingMessageEntry,
 } from "../../../services/buckets/voting"
 import {
+  buildFinalizeSpvElectionTransaction,
   buildVoteOnSpvLawyerTransaction,
   buildVoteOnProposalTransaction,
   buildVoteOnChallengeTransaction,
@@ -722,16 +724,21 @@ const votingListingId = computed(() => {
   return lawyerTermsMetadata.value?.listingId ?? newest?.payload.listingId
 })
 
-/** The open vote a connected investor can act on right now, by urgency. */
+/** The open vote or due SPV finalization a connected investor can act on, by urgency. */
 const actionableVote = computed(() => {
   for (const kind of ["terms", "challenge", "proposal"] as VotingKind[]) {
     const active = activeVotes.value[kind]
     if (!active || active.payload.status !== "open") continue
-    if (Date.parse(active.payload.expiresAt) <= Date.now()) continue
+    const finalizationDue = kind === "terms" && indexerSpvElection.value?.finalization
+    if (Date.parse(active.payload.expiresAt) <= Date.now() && !finalizationDue) continue
     return active
   }
   return undefined
 })
+
+const spvElectionFinalization = computed(() =>
+  actionableVote.value?.payload.kind === "terms" ? indexerSpvElection.value?.finalization : undefined
+)
 
 /** Elections are announced here but cast in the app (candidate choice UX). */
 const activeElection = computed(() => {
@@ -739,16 +746,6 @@ const activeElection = computed(() => {
   if (!active || active.payload.status !== "open") return undefined
   return Date.parse(active.payload.expiresAt) > Date.now() ? active : undefined
 })
-
-function timeLeftLabel(expiresAt: string): string {
-  const ms = Date.parse(expiresAt) - Date.now()
-  if (Number.isNaN(ms) || ms <= 0) return "closed"
-  const minutes = Math.ceil(ms / 60000)
-  if (minutes < 60) return `${minutes}m left`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 48) return `${hours}h ${minutes % 60}m left`
-  return `${Math.floor(hours / 24)}d left`
-}
 
 /** Live tallies for an open vote, chain-truth first via the indexer. */
 function liveTalliesFor(payload: VotingOpenPayload): { yes?: number; no?: number; abstain?: number } {
@@ -931,6 +928,43 @@ async function submitVote(): Promise<void> {
   }
 }
 
+async function finalizeSpvElection(): Promise<void> {
+  const active = actionableVote.value
+  const finalization = spvElectionFinalization.value
+  const voter = session.accountAddress
+  if (active?.payload.kind !== "terms" || !finalization || !voter || voteSubmitting.value) return
+
+  const bridge = voteBridge.value ?? findVoteBridge()
+  if (!bridge) {
+    voteError.value = "Finalize the SPV election in the realXmarket app — this wallet cannot send transactions."
+    return
+  }
+
+  voteSubmitting.value = true
+  voteError.value = ""
+  voteNotice.value = ""
+  try {
+    const tx = buildFinalizeSpvElectionTransaction({
+      listingId: active.payload.listingId,
+      round: finalization.round,
+      winner: finalization.winner,
+      candidates: finalization.candidates,
+      cranker: voter,
+    })
+    const { signature } = await castVoteOnChain(tx, voter, { bridge })
+    if (indexerSpvElection.value) {
+      indexerSpvElection.value = { ...indexerSpvElection.value, finalization: undefined }
+    }
+    voteNotice.value = `SPV election finalized (${signature.slice(0, 8)}…).`
+    window.setTimeout(() => { voteNotice.value = "" }, 15000)
+    window.setTimeout(() => void refreshIndexerVotingState(), 4000)
+  } catch (e) {
+    voteError.value = e instanceof Error ? e.message : "SPV election finalization failed"
+  } finally {
+    voteSubmitting.value = false
+  }
+}
+
 // ── Empty-bucket setup timeline ────────────────────────────────────
 const memberCount = computed(() => {
   const unique = new Set<string>()
@@ -1038,10 +1072,9 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
           id: votingPayload.id,
           documentsHash: votingPayload.documentsHash,
           ...(votingPayload.kind === "terms" && lawyerTermsMetadata.value
-            ? { lawyer: lawyerTermsMetadata.value.lawyer, cluster: lawyerTermsMetadata.value.cluster }
+            ? { lawyer: lawyerTermsMetadata.value.lawyer }
             : {}),
           expiresAt: votingPayload.status === "open" ? votingPayload.expiresAt : undefined,
-          timeLeftLabel: votingPayload.status === "open" ? timeLeftLabel(votingPayload.expiresAt) : undefined,
           yes: tallies.yes,
           no: tallies.no,
           abstain: tallies.abstain,
@@ -2574,7 +2607,7 @@ onMounted(async () => {
           <div class="ib-offer-info">
             <p class="ib-offer-title">Letting-agent election in progress</p>
             <p class="ib-offer-amount">
-              Round {{ activeElection.payload.round }} — {{ timeLeftLabel(activeElection.payload.expiresAt) }}
+              Round {{ activeElection.payload.round }} — {{ votingTimeLeftLabel(activeElection.payload.expiresAt) }}
             </p>
           </div>
         </div>
@@ -2591,21 +2624,21 @@ onMounted(async () => {
           <div class="ib-offer-info">
             <p class="ib-offer-title">{{ votingKindLabel(actionableVote.payload.kind) }}</p>
             <template v-if="actionableVote.payload.kind === 'terms' && lawyerTermsMetadata">
-              <p class="ib-offer-amount">Lawyer: {{ lawyerTermsMetadata.lawyer }}</p>
-              <p class="ib-offer-amount">
-                {{ lawyerTermsMetadata.cluster === 'mainnet' ? 'Solana Mainnet' : 'Solana Devnet' }}
-                · {{ timeLeftLabel(actionableVote.payload.expiresAt) }}
-              </p>
+              <p class="ib-offer-amount ib-offer-lawyer" :title="lawyerTermsMetadata.lawyer">Lawyer: {{ lawyerTermsMetadata.lawyer }}</p>
+              <p class="ib-offer-amount">{{ votingTimeLeftLabel(actionableVote.payload.expiresAt) }}</p>
             </template>
-            <p v-else class="ib-offer-amount">{{ timeLeftLabel(actionableVote.payload.expiresAt) }}</p>
+            <p v-else class="ib-offer-amount">{{ votingTimeLeftLabel(actionableVote.payload.expiresAt) }}</p>
           </div>
         </div>
-        <!-- Elections are approve-only: not voting is the on-chain "reject". -->
+        <!-- Open elections are approve-only: not voting is the on-chain "reject". -->
         <div v-if="actionableVote.payload.kind === 'terms'" class="ib-offer-actions">
-          <button class="btn btn-primary ib-offer-action" :disabled="voteSubmitting" @click="openVoteSheet('yes')">
+          <button v-if="spvElectionFinalization" class="btn btn-primary ib-offer-action" :disabled="voteSubmitting"
+            @click="finalizeSpvElection">
+            {{ voteSubmitting ? "Finalizing…" : "Finalize SPV election" }}
+          </button>
+          <button v-else class="btn btn-primary ib-offer-action" :disabled="voteSubmitting" @click="openVoteSheet('yes')">
             Approve terms
           </button>
-          <span class="ib-offer-note">Not voting counts as rejecting the terms.</span>
         </div>
         <div v-else class="ib-offer-actions">
           <button class="btn btn-primary ib-offer-action" :disabled="voteSubmitting" @click="openVoteSheet('yes')">
@@ -2620,6 +2653,7 @@ onMounted(async () => {
 
     <div class="ib-container">
       <p v-if="error" class="ib-error">{{ error }}</p>
+      <p v-if="voteError && !voteSheetOpen" class="ib-error" role="alert">{{ voteError }}</p>
       <p v-if="voteNotice" class="ib-vote-notice">{{ voteNotice }}</p>
 
       <!-- Admin-only: some viewers are missing from the latest key-sharing message -->
@@ -3696,6 +3730,12 @@ onMounted(async () => {
   margin: 0;
   font-size: 14px;
   color: var(--text-secondary);
+}
+
+.ib-offer-lawyer {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ib-offer-amount strong {

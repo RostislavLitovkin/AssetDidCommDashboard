@@ -302,6 +302,16 @@ export function votingStatusLabel(status: "open" | VotingResultStatus): string {
   }
 }
 
+export function votingTimeLeftLabel(expiresAt: string, now = Date.now()): string {
+  const ms = Date.parse(expiresAt) - now;
+  if (Number.isNaN(ms) || ms <= 0) return "Closed";
+  const minutes = Math.ceil(ms / 60_000);
+  if (minutes < 60) return `${minutes}m left`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h ${minutes % 60}m left`;
+  return `${Math.floor(hours / 24)}d left`;
+}
+
 /**
  * Yes/no split of a tally as whole percentages of the non-abstain votes.
  * Undefined while either side is unknown or nobody voted.

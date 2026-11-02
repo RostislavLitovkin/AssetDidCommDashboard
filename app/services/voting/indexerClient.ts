@@ -14,6 +14,12 @@ export interface IndexerClientOptions {
   fetcher?: typeof fetch;
 }
 
+export interface IndexerSpvElectionFinalization {
+  winner: string | null;
+  round: number;
+  candidates: string[];
+}
+
 /** SPV-lawyer election state as exposed by `listings` + `lawyerCandidacies`. */
 export interface IndexerSpvElection {
   listingId: string;
@@ -26,6 +32,7 @@ export interface IndexerSpvElection {
   totalVotePower?: number;
   /** The strongest candidacy (the one the "Approve" action votes for). */
   leadingCandidacy?: { lawyer: string; votePower?: number; costs?: number };
+  finalization?: IndexerSpvElectionFinalization;
 }
 
 export interface IndexerProposal {
@@ -140,15 +147,40 @@ function asNodeList(value: unknown): Record<string, unknown>[] {
   return [record];
 }
 
-/** The listing's live SPV-lawyer election round, or null when none is running. */
+function parseSpvFinalization(value: unknown): IndexerSpvElectionFinalization | undefined {
+  const node = asRecord(asRecord(value)?.spvElection);
+  if (!node) return undefined;
+  const round = asNum(node.round);
+  const winner = node.winner === null ? null : asStr(node.winner);
+  if (round === undefined || winner === undefined || !Array.isArray(node.candidates)) return undefined;
+  const candidates: string[] = [];
+  for (const value of node.candidates) {
+    const candidate = asStr(value);
+    if (!candidate) return undefined;
+    candidates.push(candidate);
+  }
+  if (
+    candidates.length === 0
+    || new Set(candidates).size !== candidates.length
+    || (winner !== null && !candidates.includes(winner))
+  ) {
+    return undefined;
+  }
+  return { winner, round, candidates };
+}
+
+/** The listing's SPV-lawyer election state and any due finalization. */
 export async function fetchSpvElection(listingId: string, options?: IndexerClientOptions): Promise<IndexerSpvElection | null> {
-  const data = await graphql<{ listings: unknown; lawyerCandidacies: unknown }>(
+  const data = await graphql<{ listings: unknown; lawyerCandidacies: unknown; pendingFinalizations: unknown }>(
     `query SpvElection($listingId: I64!) {
       listings(listingId: $listingId, first: 1, offset: 0) {
         nodes { spvElectionExpiry spvElectionRound spvElectionCandidateCount soldShareAmount }
       }
       lawyerCandidacies(listingId: $listingId, active: true, first: 5, offset: 0) {
         nodes { round lawyer costs votePower }
+      }
+      pendingFinalizations(assetId: $listingId, listingId: $listingId) {
+        spvElection { winner round candidates }
       }
     }`,
     { listingId },
@@ -197,6 +229,10 @@ export async function fetchSpvElection(listingId: string, options?: IndexerClien
   }
   if (anyPower) election.totalVotePower = total;
   if (leading) election.leadingCandidacy = leading;
+  const finalization = parseSpvFinalization(data.pendingFinalizations);
+  if (finalization?.round === round && finalization.candidates.length === candidateCount) {
+    election.finalization = finalization;
+  }
   return election;
 }
 

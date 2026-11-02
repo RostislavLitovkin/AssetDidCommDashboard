@@ -22,7 +22,15 @@ interface ReviewFixture {
   properties?: Record<string, unknown> | null
   messages?: ApiMessage[]
   listing?: Record<string, unknown>
+  lawyerCandidacies?: Record<string, unknown>[]
+  spvFinalization?: Record<string, unknown> | null
   settlement?: Record<string, unknown> | null
+}
+
+interface CapturedInstruction {
+  programId: string
+  data: number[]
+  keys: { pubkey: string; isSigner: boolean; isWritable: boolean }[]
 }
 
 function message(overrides: Partial<ApiMessage>): ApiMessage {
@@ -151,7 +159,11 @@ async function mockBackend(page: Page, fixture: ReviewFixture): Promise<{ indexe
       body: JSON.stringify({
         data: {
           listings: { nodes: [fixture.listing ?? listing()] },
-          pendingFinalizations: { executeDeal: fixture.settlement ?? null },
+          lawyerCandidacies: { nodes: fixture.lawyerCandidacies ?? [] },
+          pendingFinalizations: {
+            executeDeal: fixture.settlement ?? null,
+            spvElection: fixture.spvFinalization ?? null,
+          },
         },
       }),
     })
@@ -174,9 +186,10 @@ async function mockRpc(page: Page, beforeError?: () => Promise<void>): Promise<v
   })
 }
 
-async function mockSuccessfulRpc(page: Page): Promise<void> {
+async function mockSuccessfulRpc(page: Page, beforeBlockhash?: () => Promise<void>): Promise<void> {
   await page.route("https://api.devnet.solana.com/**", async (route) => {
     const body = route.request().postDataJSON() as { id: number; method: string }
+    if (body.method === "getLatestBlockhash" && beforeBlockhash) await beforeBlockhash()
     const value = body.method === "getLatestBlockhash"
       ? { blockhash: BLOCKHASH, lastValidBlockHeight: 100 }
       : body.method === "simulateTransaction"
@@ -210,15 +223,32 @@ async function installWallet(
       provider: "Phantom",
       kind: walletKind,
     }))
+    const target = window as unknown as { phantom: unknown; capturedInstructions: CapturedInstruction[] }
+    target.capturedInstructions = []
     const publicKey = { toBase58: () => walletAddress }
-    ;(window as unknown as { phantom: unknown }).phantom = {
+    target.phantom = {
       solana: {
         publicKey,
         connect: async () => ({ publicKey }),
         signMessage: async () => ({ signature: new Uint8Array(64).fill(9) }),
-        signAndSendTransaction: async () => {
-          if (signature) return { signature }
-          throw new Error("A real transaction must not be submitted by this test")
+        signAndSendTransaction: async (transaction: {
+          instructions: {
+            programId: { toBase58: () => string }
+            data: Uint8Array
+            keys: { pubkey: { toBase58: () => string }; isSigner: boolean; isWritable: boolean }[]
+          }[]
+        }) => {
+          if (!signature) throw new Error("A real transaction must not be submitted by this test")
+          target.capturedInstructions.push(...transaction.instructions.map((instruction) => ({
+            programId: instruction.programId.toBase58(),
+            data: Array.from(instruction.data),
+            keys: instruction.keys.map((key) => ({
+              pubkey: key.pubkey.toBase58(),
+              isSigner: key.isSigner,
+              isWritable: key.isWritable,
+            })),
+          })))
+          return { signature }
         },
       },
     }
@@ -455,6 +485,238 @@ test("renders plaintext voting JSON instead of treating it as an encrypted attac
 
   await expect(page.locator(".chat-vote-card")).toBeVisible()
   await expect(page.getByText("Unable to decrypt message", { exact: true })).toHaveCount(0)
+})
+
+test("keeps ordinary No vote styling red on non-SPV cards", async ({ page }) => {
+  const vote = message({
+    id: "proposal-result",
+    contributor: "system:voting",
+    tag: "voting/result",
+    description: null,
+    contentType: "application/json",
+    ipfsContent: JSON.stringify({
+      kind: "proposal",
+      id: "7",
+      listingId: "42",
+      status: "passed",
+      yes: 25,
+      no: 75,
+    }),
+  })
+  await mockBackend(page, { category: "property", properties: null, messages: [vote] })
+  await page.goto("/indexed-bucket/39")
+
+  const card = page.locator(".chat-vote-card")
+  await expect(card.locator(".chat-vote-split-no")).toHaveText("No75%")
+  const colors = await card.evaluate((element) => {
+    const probe = document.createElement("span")
+    probe.style.color = "var(--error, #c62828)"
+    element.append(probe)
+    const expectedNoColor = getComputedStyle(probe).color
+    probe.remove()
+    return {
+      expectedNoColor,
+      noColor: getComputedStyle(element.querySelector(".chat-vote-split-no")!).color,
+      barColor: getComputedStyle(element.querySelector(".chat-vote-bar")!).backgroundColor,
+    }
+  })
+  expect(colors.noColor).toBe(colors.expectedNoColor)
+  expect(colors.barColor).toBe(colors.expectedNoColor)
+})
+
+test("shows a compact SPV lawyer election banner and chat card with a live countdown", async ({ page }) => {
+  const lawyer = `Lawyer-${"LongNickname".repeat(24)}`
+  const vote = message({
+    id: "vote-spv",
+    messageId: "2",
+    contributor: "system:voting",
+    tag: "voting/terms",
+    description: null,
+    contentType: "application/json",
+    ipfsContent: JSON.stringify({
+      kind: "terms",
+      listingId: "42",
+      round: 1,
+      expiresAt: new Date(Date.now() + 15_000).toISOString(),
+      status: "open",
+    }),
+  })
+  await mockBackend(page, {
+    category: "spv-lawyer-terms",
+    properties: { listing_id: "42", cluster: "devnet", lawyer, candidacy: "CandidacyPDA111" },
+    listing: listing({ spvElectionRound: 1, soldShareAmount: 100 }),
+    lawyerCandidacies: [{ round: 1, lawyer, costs: 1, votePower: 100 }],
+    messages: [vote],
+  })
+  await page.goto("/indexed-bucket/39")
+
+  const card = page.locator(".chat-vote-card")
+  const status = card.locator(".chat-vote-status")
+  await expect(status).toHaveText("1m left")
+  await expect(card).not.toContainText("Round 1")
+  await expect(card).not.toContainText("Solana Devnet")
+  await expect(card.locator(".chat-vote-split-yes")).toHaveText("Approve100%")
+  await expect(card.locator(".chat-vote-split-no")).toHaveText("Not voted0%")
+
+  const lawyerName = card.locator(".chat-vote-lawyer-name")
+  await expect(lawyerName).toHaveAttribute("title", lawyer)
+  const lawyerStyle = await lawyerName.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return { overflow: style.textOverflow, whitespace: style.whiteSpace }
+  })
+  expect(lawyerStyle).toEqual({ overflow: "ellipsis", whitespace: "nowrap" })
+  expect(await card.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
+
+  const banner = page.getByRole("region", { name: "Governance vote" })
+  const bannerLawyer = banner.locator(".ib-offer-lawyer")
+  await expect(bannerLawyer).toHaveText(`Lawyer: ${lawyer}`)
+  await expect(bannerLawyer).toHaveAttribute("title", lawyer)
+  await expect(banner).toContainText("1m left")
+  await expect(banner).not.toContainText("Solana Devnet")
+  await expect(banner).not.toContainText("Not voting counts as rejecting the terms")
+  const bannerLawyerLayout = await bannerLawyer.evaluate((element) => {
+    const style = getComputedStyle(element)
+    const range = document.createRange()
+    range.selectNodeContents(element)
+    return {
+      overflow: style.overflow,
+      textOverflow: style.textOverflow,
+      whiteSpace: style.whiteSpace,
+      lineCount: new Set(Array.from(range.getClientRects(), (rect) => Math.round(rect.top))).size,
+      truncated: element.scrollWidth > element.clientWidth,
+    }
+  })
+  expect(bannerLawyerLayout).toEqual({
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    lineCount: 1,
+    truncated: true,
+  })
+
+  const splitStyle = await card.evaluate((element) => {
+    const probe = document.createElement("span")
+    probe.style.color = "var(--text-secondary)"
+    probe.style.backgroundColor = "var(--border-default)"
+    element.append(probe)
+    const expectedNoColor = getComputedStyle(probe).color
+    const expectedBarColor = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    const splits = element.querySelector(".chat-vote-splits")!
+    return {
+      gap: Number.parseFloat(getComputedStyle(splits).columnGap),
+      expectedNoColor,
+      expectedBarColor,
+      noColor: getComputedStyle(splits.querySelector(".chat-vote-split-no")!).color,
+      barColor: getComputedStyle(element.querySelector(".chat-vote-bar")!).backgroundColor,
+    }
+  })
+  expect(splitStyle.gap).toBeGreaterThanOrEqual(24)
+  expect(splitStyle.noColor).toBe(splitStyle.expectedNoColor)
+  expect(splitStyle.barColor).toBe(splitStyle.expectedBarColor)
+  await expect(page.getByRole("button", { name: "Approve terms", exact: true })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Finalize SPV election", exact: true })).toHaveCount(0)
+  await expect(status).toHaveText("Closed", { timeout: 20_000 })
+})
+
+async function mockFinalizableSpvElection(page: Page, winner: string | null, finalizationDue = true): Promise<void> {
+  const expiry = Math.floor(Date.now() / 1000) - 1
+  const vote = message({
+    id: "vote-spv-expired",
+    messageId: "2",
+    contributor: "system:voting",
+    tag: "voting/terms",
+    description: null,
+    contentType: "application/json",
+    ipfsContent: JSON.stringify({
+      kind: "terms",
+      listingId: "42",
+      round: 1,
+      expiresAt: new Date(expiry * 1000).toISOString(),
+      status: "open",
+    }),
+  })
+  await mockBackend(page, {
+    category: "spv-lawyer-terms",
+    properties: { listing_id: "42", cluster: "devnet", lawyer: SPV, candidacy: "CandidacyPDA111" },
+    listing: listing({ spvElectionRound: 1, spvElectionExpiry: expiry, spvElectionCandidateCount: 2, soldShareAmount: 100 }),
+    lawyerCandidacies: [
+      { round: 1, lawyer: SPV, costs: 1, votePower: 60 },
+      { round: 1, lawyer: DEVELOPER, costs: 1, votePower: 40 },
+    ],
+    spvFinalization: finalizationDue ? { winner, round: "1", candidates: [SPV, DEVELOPER] } : null,
+    messages: [vote],
+  })
+}
+
+test("hides an expired SPV election banner without finalization evidence", async ({ page }) => {
+  await mockFinalizableSpvElection(page, null, false)
+  await page.goto("/indexed-bucket/39")
+
+  await expect(page.locator(".chat-vote-status")).toHaveText("Closed")
+  await expect(page.getByRole("region", { name: "Governance vote" })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Approve terms", exact: true })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Finalize SPV election", exact: true })).toHaveCount(0)
+})
+
+test("finalizes an ended SPV election once from the banner", async ({ page }) => {
+  let releaseBlockhash!: () => void
+  const blockhashGate = new Promise<void>((resolve) => { releaseBlockhash = resolve })
+  await installWallet(page, OTHER, "solana", "1".repeat(64))
+  await mockFinalizableSpvElection(page, SPV)
+  await mockSuccessfulRpc(page, () => blockhashGate)
+  await page.goto("/indexed-bucket/39")
+
+  const finalize = page.getByRole("button", { name: "Finalize SPV election", exact: true })
+  await expect(finalize).toBeVisible()
+  await expect(page.getByRole("button", { name: "Approve terms", exact: true })).toHaveCount(0)
+  await finalize.evaluate((button: HTMLButtonElement) => {
+    button.click()
+    button.click()
+  })
+
+  const finalizing = page.getByRole("button", { name: "Finalizing…", exact: true })
+  await expect(finalizing).toBeVisible()
+  await expect(finalizing).toBeDisabled()
+  releaseBlockhash()
+  await expect(page.locator(".ib-vote-notice")).toContainText("SPV election finalized (11111111…)")
+  const instructions = await page.evaluate(() => (
+    (window as unknown as { capturedInstructions: CapturedInstruction[] }).capturedInstructions
+  ))
+  expect(instructions).toHaveLength(1)
+  expect(instructions[0]!.data.slice(0, 8)).toEqual([2, 249, 39, 73, 224, 169, 145, 100])
+  expect(instructions[0]!.keys[0]).toEqual({ pubkey: OTHER, isSigner: true, isWritable: false })
+})
+
+test("finalizes an ended SPV election with no winner on a tie", async ({ page }) => {
+  await installWallet(page, OTHER, "solana", "1".repeat(64))
+  await mockFinalizableSpvElection(page, null)
+  await mockSuccessfulRpc(page)
+  await page.goto("/indexed-bucket/39")
+
+  await page.getByRole("button", { name: "Finalize SPV election", exact: true }).click()
+  await expect(page.locator(".ib-vote-notice")).toContainText("SPV election finalized")
+  const instructions = await page.evaluate(() => (
+    (window as unknown as { capturedInstructions: CapturedInstruction[] }).capturedInstructions
+  ))
+  expect(instructions).toHaveLength(1)
+  expect(instructions[0]!.keys[3]).toEqual({
+    pubkey: "dj9Q3CpHvDHwexCbkgJ5APDx4JsTxPssNebkvP15g1T",
+    isSigner: false,
+    isWritable: false,
+  })
+  expect(instructions[0]!.keys).toHaveLength(6)
+})
+
+test("surfaces SPV election finalization errors without a success notice", async ({ page }) => {
+  await installWallet(page, OTHER)
+  await mockFinalizableSpvElection(page, SPV)
+  await mockRpc(page)
+  await page.goto("/indexed-bucket/39")
+
+  await page.getByRole("button", { name: "Finalize SPV election", exact: true }).click()
+  await expect(page.getByRole("alert").filter({ hasText: "Offline getLatestBlockhash failure" })).toBeVisible()
+  await expect(page.locator(".ib-vote-notice")).toHaveCount(0)
 })
 
 test("rejects large encrypted public documents instead of hashing ciphertext", async ({ page }) => {
