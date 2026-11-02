@@ -374,6 +374,89 @@ test("prefers existing hydrated attachments over downloading public references a
   expect(documentRequests).toHaveLength(0)
 })
 
+test("clears a transient PDF hydration error after a successful reload", async ({ page }) => {
+  const fixture = await encryptedDocumentFixture()
+  await mockBackend(page, {
+    messages: fixture.messages.map((entry) => entry.reference ? { ...entry, ipfsContent: null } : entry),
+  })
+  await page.addInitScript((jwk) => {
+    localStorage.setItem("asset-didcomm.x25519-secret-jwk", JSON.stringify(jwk))
+  }, fixture.secretJwk)
+  let spvAttempts = 0
+  await page.route("https://gateway.pinata.cloud/ipfs/spv-cid", async (route) => {
+    spvAttempts += 1
+    if (spvAttempts === 1) {
+      await route.abort("failed")
+      return
+    }
+    await route.fulfill({ contentType: "text/plain", body: fixture.messages[1]!.ipfsContent! })
+  })
+  await page.route("https://documents.example/developer.pdf", async (route) => {
+    await route.fulfill({ contentType: "text/plain", body: fixture.messages[2]!.ipfsContent! })
+  })
+  await page.goto("/indexed-bucket/39")
+
+  await expect(page.locator(".chat-warning").filter({ hasText: "Failed to fetch" })).toBeVisible()
+  await page.getByRole("button", { name: "Reload", exact: true }).click()
+
+  await expect(page.locator(".chat-attachment-file")).toHaveCount(2)
+  await expect(page.locator(".chat-warning").filter({ hasText: "Failed to fetch" })).toHaveCount(0)
+})
+
+test("hydrates legacy S3 terms-document references through ProfileApi", async ({ page }) => {
+  const fixture = await encryptedDocumentFixture()
+  const legacyReference = "https://objects.example/xcavate-profile/terms-documents/by-candidacy/candidate-1.pdf"
+  const profileApiUrl = "https://profile-api.xcavate.io/api/terms-documents/by-candidacy/candidate-1"
+  await mockBackend(page, {
+    messages: [
+      fixture.messages[0]!,
+      { ...fixture.messages[1]!, reference: legacyReference, ipfsContent: null },
+      fixture.messages[2]!,
+    ],
+  })
+  await page.addInitScript((jwk) => {
+    localStorage.setItem("asset-didcomm.x25519-secret-jwk", JSON.stringify(jwk))
+  }, fixture.secretJwk)
+  const profileApiRequests: string[] = []
+  const legacyRequests: string[] = []
+  await page.route(profileApiUrl, async (route) => {
+    profileApiRequests.push(route.request().url())
+    await route.fulfill({ contentType: "text/plain", body: fixture.messages[1]!.ipfsContent! })
+  })
+  await page.route(legacyReference, async (route) => {
+    legacyRequests.push(route.request().url())
+    await route.fulfill({ status: 404, body: "Legacy object unavailable" })
+  })
+  await page.goto("/indexed-bucket/39")
+
+  await expect(page.locator(".chat-attachment-file-name").filter({ hasText: "spv.pdf" })).toBeVisible()
+  expect(profileApiRequests).toEqual([profileApiUrl])
+  expect(legacyRequests).toHaveLength(0)
+})
+
+test("renders plaintext voting JSON instead of treating it as an encrypted attachment", async ({ page }) => {
+  const keyMessage = await installPlaintextKey(page)
+  const vote = message({
+    id: "vote-2",
+    messageId: "2",
+    tag: "voting/terms",
+    description: null,
+    contentType: "application/json",
+    ipfsContent: JSON.stringify({
+      kind: "terms",
+      listingId: "42",
+      round: 1,
+      expiresAt: "2030-01-01T00:00:00.000Z",
+      status: "open",
+    }),
+  })
+  await mockBackend(page, { messages: [keyMessage, vote] })
+  await page.goto("/indexed-bucket/39")
+
+  await expect(page.locator(".chat-vote-card")).toBeVisible()
+  await expect(page.getByText("Unable to decrypt message", { exact: true })).toHaveCount(0)
+})
+
 test("rejects large encrypted public documents instead of hashing ciphertext", async ({ page }) => {
   const largePdf = new Uint8Array(4096).fill(65)
   largePdf.set(SPV_PDF)
