@@ -95,6 +95,7 @@ import {
   formatPriceAmount,
   marketKindLabel
 } from "../../services/buckets/realxhub"
+import { isLawyerTermsApprovedTag } from "../../services/buckets/lawyerTerms"
 import GlitchParticles from "./GlitchParticles.vue"
 
 const KEY_SHARING_TAG = "didcomm/key-sharing-v1"
@@ -113,6 +114,7 @@ const settings = useSettingsStore()
 // Key-sharing messages are protocol events, not conversation — rendered as a
 // centered system notice with a separation line instead of a chat bubble.
 const isKeySharing = computed(() => props.message.tag === KEY_SHARING_TAG)
+const isTermsApproved = computed(() => isLawyerTermsApprovedTag(props.message.tag))
 
 // Per-instance: flip to the default avatar if the real picture URL fails to load.
 const avatarFailed = ref(false)
@@ -199,7 +201,8 @@ function formatFileSize(base64: string): string {
         {
           'chat-bubble-pending': message.pending,
           'chat-bubble-failed': message.failed,
-          'chat-bubble-undecryptable': message.decryptFailed
+          'chat-bubble-undecryptable': message.decryptFailed,
+          'chat-bubble-terms-approved': isTermsApproved
         }
       ]">
 
@@ -459,6 +462,14 @@ function formatFileSize(base64: string): string {
 .chat-bubble-outgoing {
   background: var(--color-primary);
   min-height: 44px;
+}
+
+.chat-bubble-terms-approved {
+  border-left: 3px solid var(--success, #2e7d32);
+}
+
+.chat-bubble-incoming.chat-bubble-terms-approved {
+  background: color-mix(in srgb, var(--success, #2e7d32) 10%, var(--color-white));
 }
 
 /* Undecryptable: the bubble collapses onto the glitch tile — no padding for the
