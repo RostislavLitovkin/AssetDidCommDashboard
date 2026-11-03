@@ -99,7 +99,6 @@ import {
 } from "../../services/buckets/realxhub"
 import { votingTimeLeftLabel } from "../../services/buckets/voting"
 import { isLawyerTermsApprovedTag, isLawyerTermsRejectedTag } from "../../services/buckets/lawyerTerms"
-import GlitchParticles from "./GlitchParticles.vue"
 
 const KEY_SHARING_TAG = "didcomm/key-sharing-v1"
 
@@ -256,7 +255,7 @@ function formatFileSize(base64: string): string {
       ]">
 
         <!-- Undecryptable: the ciphertext never reaches the DOM -->
-        <GlitchParticles v-if="message.decryptFailed" label="Unable to decrypt message" />
+        <p v-if="message.decryptFailed" class="chat-permission-notice">You do not have permission to read this message</p>
 
         <!-- Attachment rendering -->
         <template v-else-if="attachment">
@@ -350,7 +349,7 @@ function formatFileSize(base64: string): string {
           <p class="chat-text">{{ message.body }}</p>
         </template>
 
-        <!-- The glitch tile already states the failure, so no second warning. -->
+        <!-- The permission notice already states the failure, so no second warning. -->
         <p v-if="message.payloadError && !message.decryptFailed" class="chat-warning">⚠ {{ message.payloadError }}</p>
         <details v-if="settings.showMessageDebug && message.debugEntries?.length" class="chat-debug">
           <summary>Debug</summary>
@@ -553,22 +552,16 @@ function formatFileSize(base64: string): string {
   background: var(--error, #c62828);
 }
 
-/* Undecryptable: the bubble collapses onto the glitch tile — no padding for the
-   canvas to fight, and auto width so it hugs the notice instead of stretching
-   across the chat column the way a wall of ciphertext used to. */
 .chat-bubble-undecryptable {
   width: auto;
-  padding: 0;
-  overflow: hidden;
 }
 
-.chat-bubble-incoming.chat-bubble-undecryptable {
-  padding-left: 0;
-}
-
-/* --status-error is illegible against the primary-yellow outgoing bubble. */
-.chat-bubble-outgoing.chat-bubble-undecryptable {
-  --glitch-color: #ffffff;
+.chat-permission-notice {
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--text-secondary);
 }
 
 .chat-bubble-outgoing .chat-text,
@@ -580,7 +573,7 @@ function formatFileSize(base64: string): string {
 }
 
 .chat-bubble-outgoing .chat-warning {
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--text-secondary);
 }
 
 .chat-bubble-outgoing .chat-attachment-caption {
@@ -810,7 +803,7 @@ function formatFileSize(base64: string): string {
 .chat-warning {
   margin: 8px 0 0;
   font-size: 12px;
-  color: var(--status-error);
+  color: var(--text-secondary);
 }
 
 /* Attachments — media spans the full width of the bubble by bleeding past its padding */
@@ -988,8 +981,8 @@ function formatFileSize(base64: string): string {
 
 .chat-bubble-failed {
   opacity: 1;
-  border-color: var(--status-error);
-  box-shadow: 0 3px 8px color-mix(in srgb, var(--status-error) 18%, transparent);
+  border-color: var(--text-secondary);
+  box-shadow: 0 3px 8px color-mix(in srgb, var(--text-secondary) 18%, transparent);
 }
 
 .chat-timestamp-failed-row {
@@ -999,7 +992,7 @@ function formatFileSize(base64: string): string {
 }
 
 .chat-timestamp-failed {
-  color: var(--status-error);
+  color: var(--text-secondary);
   font-weight: 600;
 }
 

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ApiMessage } from "../../../../services/buckets/types"
 import { isFileMessage } from "../../../../services/buckets/valueCodecs"
+import { resolveProfileApiDocumentUrl } from "../../../../services/buckets/documentReferences"
 import BucketFileCard from "../../../../components/common/BucketFileCard.vue"
 import type { ChatMessageAttachment } from "../../../../components/common/ChatMessageEntry.vue"
 import ParticleLoader from "../../../../components/common/ParticleLoader.vue"
@@ -77,7 +78,14 @@ function bytesToBase64(bytes: Uint8Array): string {
 
 function resolveUrl(ref: string): string {
   const t = ref.trim()
-  if (/^https?:\/\//i.test(t)) return t
+  if (/^https?:\/\//i.test(t)) {
+    try {
+      const throughProfileApi = resolveProfileApiDocumentUrl(
+        String(config.public.profileApiUrl), new URL(t).pathname)
+      if (throughProfileApi) return throughProfileApi
+    } catch { /* retain the original reference */ }
+    return t
+  }
   return `${pinataGateway.value}/ipfs/${t}`
 }
 

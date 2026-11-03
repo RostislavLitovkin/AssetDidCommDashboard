@@ -1552,8 +1552,8 @@ async function setMemberStatus(address: string, status: MarketStatus): Promise<v
                 :style="{ padding: '4px 8px', borderRadius: '999px', fontSize: '11px', color: 'white', fontWeight: '600', textTransform: 'capitalize', background: 'var(--color-primary)', flexShrink: 0, whiteSpace: 'nowrap' }">
                 {{ role }}
               </span>
-              <button class="btn member-remove-btn" type="button" title="Remove"
-                :disabled="Boolean(removingMemberAddress) || !session.accountAddress"
+              <button v-if="connectedAdmin" class="btn member-remove-btn" type="button" title="Remove"
+                :disabled="Boolean(removingMemberAddress)"
                 @click="removeAllRoles(member)"
                 :style="{ background: 'var(--color-white)', flexShrink: 0, padding: '4px 6px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '3px', whiteSpace: 'nowrap', minWidth: 'auto', maxWidth: '120px', overflow: 'hidden' }">
                 <Trash2 v-if="removingMemberAddress !== member.address" :size="14" aria-hidden="true" />

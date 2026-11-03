@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { PublicKey } from "@solana/web3.js"
-import { expect, test, type Page } from "@playwright/test"
+import { expect, test, type Page, type Route } from "@playwright/test"
 import { CompactEncrypt, compactDecrypt, exportJWK, generateKeyPair, importJWK, type JWK } from "jose"
 import type { ApiBucket, ApiMessage } from "../../app/services/buckets/types"
 import { getLegalClusterConfig } from "../../app/services/lawyer/cluster"
@@ -457,11 +457,28 @@ test("clears a transient PDF hydration error after a successful reload", async (
   })
   await page.goto("/indexed-bucket/39")
 
-  await expect(page.locator(".chat-warning").filter({ hasText: "Failed to fetch" })).toBeVisible()
+  const warning = page.locator(".chat-warning").filter({ hasText: "Failed to fetch" })
+  await expect(warning).toBeVisible()
+  await expect(warning).toHaveCSS("color", "rgb(90, 90, 90)")
   await page.getByRole("button", { name: "Reload", exact: true }).click()
 
   await expect(page.locator(".chat-attachment-file")).toHaveCount(2)
   await expect(page.locator(".chat-warning").filter({ hasText: "Failed to fetch" })).toHaveCount(0)
+})
+
+test("shows undecryptable messages as neutral permission notices", async ({ page }) => {
+  const fixture = await encryptedDocumentFixture()
+  const wrongKeyMessage = await installPlaintextKey(page)
+  await mockBackend(page, { messages: [wrongKeyMessage, ...fixture.messages.slice(1)] })
+  await page.goto("/indexed-bucket/39")
+
+  const permissionBubble = page.locator(".chat-bubble-undecryptable").first()
+  const permissionNotice = page.getByText("You do not have permission to read this message", { exact: true }).first()
+  await expect(permissionNotice).toBeVisible()
+  await expect(permissionNotice).toHaveCSS("color", "rgb(90, 90, 90)")
+  await expect(permissionNotice).toHaveCSS("animation-name", "none")
+  await expect(permissionBubble.locator("canvas")).toHaveCount(0)
+  await expect(page.getByText("Unable to decrypt message", { exact: true })).toHaveCount(0)
 })
 
 test("hydrates legacy S3 terms-document references through ProfileApi", async ({ page }) => {
@@ -495,6 +512,75 @@ test("hydrates legacy S3 terms-document references through ProfileApi", async ({
   expect(legacyRequests).toHaveLength(0)
 })
 
+test("hydrates object-storage review snapshots through ProfileApi without the .pdf suffix", async ({ page }) => {
+  const fixture = await encryptedDocumentFixture()
+  const hash = "f7adfcd9aa4fc5aa1973fbca008e119ab9452184e9a34a2d9bf622bebc153c36"
+  const spvReference = `https://xcavate-profile.fsn1.your-objectstorage.com/terms-documents/by-listing/22/spv-lawyer-${hash}.pdf`
+  const developerReference = `https://objects.example/xcavate-profile/terms-documents/by-listing/22/developer-lawyer-${hash}.pdf`
+  const spvApiUrl = `https://profile-api.xcavate.io/api/terms-documents/by-listing/22/spv-lawyer-${hash}`
+  const developerApiUrl = `https://profile-api.xcavate.io/api/terms-documents/by-listing/22/developer-lawyer-${hash}`
+  await mockBackend(page, {
+    messages: [
+      fixture.messages[0]!,
+      { ...fixture.messages[1]!, reference: spvReference, ipfsContent: null },
+      { ...fixture.messages[2]!, reference: developerReference, ipfsContent: null },
+    ],
+  })
+  await page.addInitScript((jwk) => {
+    localStorage.setItem("asset-didcomm.x25519-secret-jwk", JSON.stringify(jwk))
+  }, fixture.secretJwk)
+  const profileApiRequests: string[] = []
+  const objectStorageRequests: string[] = []
+  const record = async (bucket: string[], route: Route, body: string) => {
+    bucket.push(route.request().url())
+    await route.fulfill({ contentType: "text/plain", body })
+  }
+  await page.route(spvApiUrl, (route) => record(profileApiRequests, route, fixture.messages[1]!.ipfsContent!))
+  await page.route(developerApiUrl, (route) => record(profileApiRequests, route, fixture.messages[2]!.ipfsContent!))
+  for (const origin of ["https://xcavate-profile.fsn1.your-objectstorage.com/**", "https://objects.example/**"]) {
+    await page.route(origin, (route) => record(objectStorageRequests, route, "Legacy object unavailable"))
+  }
+  await page.goto("/indexed-bucket/39")
+
+  await expect(page.locator(".document-hash code")).toHaveAttribute("title", expectedDocumentHash())
+  expect(profileApiRequests.sort()).toEqual([developerApiUrl, spvApiUrl].sort())
+  expect(objectStorageRequests).toHaveLength(0)
+})
+
+test("keeps fetching a review document that is not a hashed snapshot from its own origin", async ({ page }) => {
+  const fixture = await encryptedDocumentFixture()
+  const legacyReference = "https://xcavate-profile.fsn1.your-objectstorage.com/terms-documents/by-listing/22/spv-lawyer.pdf"
+  const rewrittenReference = "https://profile-api.xcavate.io/api/terms-documents/by-listing/22/spv-lawyer"
+  await mockBackend(page, {
+    messages: [
+      fixture.messages[0]!,
+      { ...fixture.messages[1]!, reference: legacyReference, ipfsContent: null },
+      fixture.messages[2]!,
+    ],
+  })
+  await page.addInitScript((jwk) => {
+    localStorage.setItem("asset-didcomm.x25519-secret-jwk", JSON.stringify(jwk))
+  }, fixture.secretJwk)
+  const objectStorageRequests: string[] = []
+  const profileApiRequests: string[] = []
+  await page.route(legacyReference, async (route) => {
+    objectStorageRequests.push(route.request().url())
+    await route.fulfill({ contentType: "text/plain", body: fixture.messages[1]!.ipfsContent! })
+  })
+  await page.route(rewrittenReference, async (route) => {
+    profileApiRequests.push(route.request().url())
+    await route.fulfill({ contentType: "text/plain", body: fixture.messages[1]!.ipfsContent! })
+  })
+  await page.route("https://documents.example/developer.pdf", async (route) => {
+    await route.fulfill({ contentType: "text/plain", body: fixture.messages[2]!.ipfsContent! })
+  })
+  await page.goto("/indexed-bucket/39")
+
+  await expect(page.locator(".chat-attachment-file-name").filter({ hasText: "spv.pdf" })).toBeVisible()
+  expect(objectStorageRequests).toEqual([legacyReference])
+  expect(profileApiRequests).toHaveLength(0)
+})
+
 test("renders plaintext voting JSON instead of treating it as an encrypted attachment", async ({ page }) => {
   const keyMessage = await installPlaintextKey(page)
   const vote = message({
@@ -515,7 +601,7 @@ test("renders plaintext voting JSON instead of treating it as an encrypted attac
   await page.goto("/indexed-bucket/39")
 
   await expect(page.locator(".chat-vote-card")).toBeVisible()
-  await expect(page.getByText("Unable to decrypt message", { exact: true })).toHaveCount(0)
+  await expect(page.getByText("You do not have permission to read this message", { exact: true })).toHaveCount(0)
 })
 
 test("keeps ordinary No vote styling red on non-SPV cards", async ({ page }) => {

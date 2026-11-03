@@ -19,6 +19,7 @@ import { Paperclip, X, SendHorizontal, Wallet, ShieldAlert, UserPlus, KeyRound, 
 import { useAddress } from "../../../composables/useAddress"
 import { useLawyerReview, type LawyerDocumentSource } from "../../../composables/useLawyerReview"
 import { LAWYER_REVIEW_BUCKET_CATEGORY } from "../../../services/lawyer/reviewBucket"
+import { resolveProfileApiDocumentUrl } from "../../../services/buckets/documentReferences"
 import { useWallet } from "../../../composables/useWallet"
 import { useSubmitState } from "../../../composables/useSubmitState"
 import { useAutoGrowTextarea } from "../../../composables/useAutoGrowTextarea"
@@ -1338,11 +1339,9 @@ function resolveUrl(ref: string): string {
   if (/^https?:\/\//i.test(t)) {
     try {
       const url = new URL(t)
-      const legacyTermsDocument = /^\/xcavate-profile\/terms-documents\/by-candidacy\/([^/]+)\.pdf$/.exec(url.pathname)
-      if (legacyTermsDocument) {
-        const profileApiUrl = String(config.public.profileApiUrl).replace(/\/+$/, "")
-        return `${profileApiUrl}/api/terms-documents/by-candidacy/${legacyTermsDocument[1]}`
-      }
+      const throughProfileApi = resolveProfileApiDocumentUrl(
+        String(config.public.profileApiUrl), url.pathname)
+      if (throughProfileApi) return throughProfileApi
     } catch { /* retain the original reference */ }
     return t
   }
