@@ -284,22 +284,112 @@ function assertTokenProgram(programId: PublicKey): void {
   }
 }
 
+interface SettlementListing {
+  developer: PublicKey;
+  developerLawyer: PublicKey;
+  spvLawyer: PublicKey;
+  legalDeadline: bigint;
+  collectedMints: PublicKey[];
+}
+
+function decodeSettlementListing(data: Buffer, listingId: number | bigint | string): SettlementListing {
+  if (data.length < 369 || data.readBigUInt64LE(8) !== BigInt(listingId)) {
+    throw new Error("INVALID_LISTING_ACCOUNT");
+  }
+  const collectedCount = data.readUInt32LE(343);
+  if (collectedCount > 4 || data.length < 369 + collectedCount * 56) {
+    throw new Error("INVALID_LISTING_ACCOUNT");
+  }
+  if (data[367 + collectedCount * 56] !== 3) {
+    throw new Error("LISTING_NOT_READY_FOR_SETTLEMENT");
+  }
+  return {
+    developer: readPublicKey(data, 16),
+    developerLawyer: readPublicKey(data, 147),
+    spvLawyer: readPublicKey(data, 220),
+    legalDeadline: data.readBigInt64LE(131),
+    collectedMints: Array.from({ length: collectedCount }, (_, index) => readPublicKey(data, 347 + index * 56)),
+  };
+}
+
+function skipBorshBytes(data: Buffer, offset: number): number {
+  if (offset + 4 > data.length) {
+    throw new Error("INVALID_PROPERTY_ACCOUNT");
+  }
+  const end = offset + 4 + data.readUInt32LE(offset);
+  if (end > data.length) {
+    throw new Error("INVALID_PROPERTY_ACCOUNT");
+  }
+  return end;
+}
+
+function decodePropertyRegion(data: Buffer): number {
+  if (data.length < 73) {
+    throw new Error("INVALID_PROPERTY_ACCOUNT");
+  }
+  let offset = skipBorshBytes(data, 16);
+  offset = skipBorshBytes(data, offset);
+  if (offset + 34 > data.length) {
+    throw new Error("INVALID_PROPERTY_ACCOUNT");
+  }
+  const regionId = data.readUInt16LE(offset + 32);
+  const remaining = skipBorshBytes(data, offset + 34);
+  if (remaining + 11 > data.length || data[remaining + 5] !== 0) {
+    throw new Error("LISTING_NOT_READY_FOR_SETTLEMENT");
+  }
+  return regionId;
+}
+
+function assertSettlementRequest(
+  request: ExecuteDealPreparationRequest,
+  listing: SettlementListing,
+  propertyRegion: number,
+): void {
+  const requestedMints = request.collectedMints.map(publicKey);
+  const matches = publicKey(request.developer).equals(listing.developer)
+    && publicKey(request.developerLawyer).equals(listing.developerLawyer)
+    && publicKey(request.spvLawyer).equals(listing.spvLawyer)
+    && request.regionId === propertyRegion
+    && requestedMints.length === listing.collectedMints.length
+    && requestedMints.every((mint, index) => mint.equals(listing.collectedMints[index]!));
+  if (!matches) {
+    throw new Error("SETTLEMENT_STATE_MISMATCH");
+  }
+}
+
 async function loadChainAccounts(
   request: ExecuteDealPreparationRequest,
   connection: Connection,
 ): Promise<ChainAccounts> {
   const configAddress = configPda(request.config);
-  const regionAddress = regionPda(request.regionId, request.config);
-  const mintAddresses = request.collectedMints.map(publicKey);
-  const accounts = await connection.getMultipleAccountsInfo([configAddress, regionAddress, ...mintAddresses]);
-  const configInfo = requiredAccount(accounts[0], "CONFIG");
-  const regionInfo = requiredAccount(accounts[1], "REGION");
+  const stateAccounts = await connection.getMultipleAccountsInfo([
+    configAddress,
+    listingPda(request.listingId, request.config),
+    propertyPda(request.listingId, request.config),
+  ]);
+  const configInfo = requiredAccount(stateAccounts[0], "CONFIG");
+  const listingInfo = requiredAccount(stateAccounts[1], "LISTING");
+  const propertyInfo = requiredAccount(stateAccounts[2], "PROPERTY");
   if (!configInfo.owner.equals(marketplaceProgram(request.config)) || configInfo.data.length < 41) {
     throw new Error("INVALID_CONFIG_ACCOUNT");
   }
-  if (!regionInfo.owner.equals(new PublicKey(request.config.regionsProgramId)) || regionInfo.data.length < 42) {
-    throw new Error("INVALID_REGION_ACCOUNT");
+  if (!listingInfo.owner.equals(marketplaceProgram(request.config))) {
+    throw new Error("INVALID_LISTING_ACCOUNT");
   }
+  if (!propertyInfo.owner.equals(marketplaceProgram(request.config))) {
+    throw new Error("INVALID_PROPERTY_ACCOUNT");
+  }
+  const listing = decodeSettlementListing(listingInfo.data, request.listingId);
+  const propertyRegion = decodePropertyRegion(propertyInfo.data);
+  assertSettlementRequest(request, listing, propertyRegion);
+  const blockTime = await connection.getBlockTime(await connection.getSlot("confirmed"));
+  if (blockTime === null) {
+    throw new Error("LEGAL_DEADLINE_UNAVAILABLE");
+  }
+  if (BigInt(blockTime) > listing.legalDeadline) {
+    throw new Error("LEGAL_PROCESS_EXPIRED");
+  }
+
   const pendingAuthorityTag = configInfo.data[40];
   if (pendingAuthorityTag !== 0 && pendingAuthorityTag !== 1) {
     throw new Error("INVALID_CONFIG_ACCOUNT");
@@ -308,31 +398,32 @@ async function loadChainAccounts(
   if (configInfo.data.length < xcavOffset + 64) {
     throw new Error("INVALID_CONFIG_ACCOUNT");
   }
-  if (regionInfo.data.readUInt16LE(8) !== request.regionId) {
-    throw new Error("REGION_ID_MISMATCH");
-  }
   const xcavMint = readPublicKey(configInfo.data, xcavOffset);
   const treasury = readPublicKey(configInfo.data, xcavOffset + 32);
+  const mintAddresses = listing.collectedMints;
+  const accounts = await connection.getMultipleAccountsInfo([
+    regionPda(propertyRegion, request.config),
+    xcavMint,
+    ...mintAddresses,
+  ]);
+  const regionInfo = requiredAccount(accounts[0], "REGION");
+  const xcavInfo = requiredAccount(accounts[1], "XCAV_MINT");
+  if (!regionInfo.owner.equals(new PublicKey(request.config.regionsProgramId)) || regionInfo.data.length < 42) {
+    throw new Error("INVALID_REGION_ACCOUNT");
+  }
+  if (regionInfo.data.readUInt16LE(8) !== propertyRegion) {
+    throw new Error("REGION_ID_MISMATCH");
+  }
   const regionOwner = readPublicKey(regionInfo.data, 10);
-  const mintOwners = new Map< string, PublicKey>();
+  assertTokenProgram(xcavInfo.owner);
+  const mintOwners = new Map<string, PublicKey>();
   for (const [index, mint] of mintAddresses.entries()) {
     const info = requiredAccount(accounts[index + 2], "MINT");
-    if (!mintOwners.has(mint.toBase58())) {
-      assertTokenProgram(info.owner);
-      mintOwners.set(mint.toBase58(), info.owner);
-    }
+    assertTokenProgram(info.owner);
+    mintOwners.set(mint.toBase58(), info.owner);
   }
-  const xcavInfo = requiredAccount(
-    (await connection.getMultipleAccountsInfo([xcavMint]))[0],
-    "XCAV_MINT",
-  );
-  assertTokenProgram(xcavInfo.owner);
   const paymentPrograms = [...new Set([...mintOwners.values()].map((owner) => owner.toBase58()))]
     .map((owner) => new PublicKey(owner));
-  const unsupported = paymentPrograms.find((program) => !program.equals(xcavInfo.owner) && paymentPrograms.length > 2);
-  if (unsupported) {
-    throw new Error("TOO_MANY_TOKEN_PROGRAMS");
-  }
   const paymentTokenProgram = paymentPrograms.find((program) => !program.equals(xcavInfo.owner))
     ?? paymentPrograms[0]
     ?? xcavInfo.owner;
@@ -443,9 +534,10 @@ async function prepareMissingTokenAccounts(
       });
     }
   }
-  const infos = await connection.getMultipleAccountsInfo(targets.map((target) => target.address));
+  const uniqueTargets = [...new Map(targets.map((target) => [target.address.toBase58(), target])).values()];
+  const infos = await connection.getMultipleAccountsInfo(uniqueTargets.map((target) => target.address));
   const instructions: TransactionInstruction[] = [];
-  for (const [index, target] of targets.entries()) {
+  for (const [index, target] of uniqueTargets.entries()) {
     const info = infos[index];
     if (!info) {
       instructions.push(createAtaInstruction(
@@ -558,7 +650,7 @@ interface StandardSignAndSendFeature {
 }
 
 interface LegacySignAndSendProvider {
-  signAndSendTransaction(transaction: Transaction): Promise<{ signature: string | Uint8Array } | string>;
+  signAndSendTransaction(transaction: LegalTransaction): Promise<{ signature: string | Uint8Array } | string>;
 }
 
 export interface LegalTransactionBridge {
@@ -594,9 +686,6 @@ function legacyBridge(name: string, provider: LegacySignAndSendProvider): LegalT
   return {
     name,
     async signAndSend(transaction) {
-      if (!(transaction instanceof Transaction)) {
-        throw new Error("VERSIONED_TRANSACTION_UNSUPPORTED");
-      }
       const result = await provider.signAndSendTransaction(transaction);
       return typeof result === "string" ? result : result.signature;
     },
@@ -725,6 +814,9 @@ export async function submitPreparedLegalTransactions(
       throw new Error(`TRANSACTION_SIMULATION_FAILED: ${JSON.stringify(simulation.value.err)}${logs ? `\n${logs}` : ""}`);
     }
     const rawSignature = await bridge.signAndSend(transaction, config.walletChain, signerKey);
+    if (typeof rawSignature !== "string" && rawSignature.length !== 64) {
+      throw new Error("WALLET_RETURNED_NO_SIGNATURE");
+    }
     const signature = typeof rawSignature === "string" ? rawSignature : base58Encode(rawSignature);
     if (!signature) {
       throw new Error("WALLET_RETURNED_NO_SIGNATURE");

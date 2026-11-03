@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, useId, watch } from "vue"
+import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from "vue"
+import { Vote } from "lucide-vue-next"
+import { votingTimeLeftLabel } from "../../services/buckets/voting"
 import type {
   LawyerListingStatus,
   LawyerReviewBucketMetadata,
   LawyerReviewState,
-  LawyerReviewTallies,
   LawyerSeatState,
 } from "../../services/lawyer/types"
 
@@ -51,9 +52,24 @@ const emit = defineEmits<{
   retry: []
 }>()
 
+type SheetAction = "approve" | "reject" | "execute"
+
 const id = useId()
-const selectedVerdict = ref<"approve" | "reject">("approve")
+const sheetAction = ref<SheetAction | null>(null)
+const sheetRef = ref<HTMLDialogElement | null>(null)
+const sheetGuidance = ref("")
 const confirmationSent = ref(false)
+const now = ref(Date.now())
+let deadlineTimer: ReturnType<typeof setInterval> | undefined
+
+onMounted(() => {
+  deadlineTimer = setInterval(() => { now.value = Date.now() }, 1000)
+})
+
+onUnmounted(() => {
+  if (deadlineTimer !== undefined) clearInterval(deadlineTimer)
+})
+
 const transactionLinks = computed(() => props.transactionSignatures.map((signature) => ({
   signature,
   url: `https://solscan.io/tx/${encodeURIComponent(signature)}${props.metadata.cluster === "devnet" ? "?cluster=devnet" : ""}`,
@@ -68,6 +84,20 @@ const closedReview = computed(() => props.review !== null && [
   "CANCELLED",
   "REFUNDING",
 ].includes(props.review.status))
+const deadlineExpired = computed(() =>
+  props.review !== null && Math.floor(now.value / 1000) > props.review.legalDeadline
+)
+/** ISO form of the on-chain deadline, undefined when the review has no usable one. */
+const deadlineExpiry = computed<string | undefined>(() => {
+  const seconds = props.review?.legalDeadline
+  if (seconds === undefined) return undefined
+  const ms = seconds * 1000
+  if (!Number.isFinite(ms) || Math.abs(ms) > 8.64e15) return undefined
+  return new Date(ms).toISOString()
+})
+/** The governance banner's relative countdown, driven by the panel's 1s clock. */
+const timeLeftLabel = computed(() => votingTimeLeftLabel(deadlineExpiry.value, now.value))
+const expiryMessage = "The legal review deadline has passed. Reload the review before taking another action."
 const confirmDisabled = computed(() =>
   props.loading
   || props.confirming
@@ -76,6 +106,7 @@ const confirmDisabled = computed(() =>
   || !hasDocumentSet.value
   || invalidReview.value
   || closedReview.value
+  || deadlineExpired.value
   || Boolean(props.error)
 )
 const executeEligible = computed(() =>
@@ -84,33 +115,47 @@ const executeEligible = computed(() =>
     && props.executeAllowed
     && props.review?.settlementReady
     && !invalidReview.value
+    && !deadlineExpired.value
     && !props.loading
     && !props.error
   )
 )
 const executionMessage = computed(() => {
+  if (deadlineExpired.value) return expiryMessage
   if (props.review?.settlementReady && props.executeAllowed && !invalidReview.value) {
     return props.walletConnected
       ? "The deal is ready. Any connected wallet can execute it."
       : "Connect a wallet to execute the ready deal."
   }
-  return "Execute deal is not ready. Both lawyer approvals and settlement evidence are required."
+  return "Finalize deal is not ready. Both lawyer approvals and settlement evidence are required."
 })
-
-const meters = computed(() => {
-  const entries: Array<{ key: keyof LawyerReviewTallies; label: string }> = [
-    { key: "approved", label: "Approved" },
-    { key: "rejected", label: "Rejected" },
-    { key: "pending", label: "Pending" },
-  ]
-  return entries.map(({ key, label }) => ({
-    key,
-    label,
-    id: `${id}-${key}`,
-    descriptionId: `${id}-${key}-value`,
-    count: props.review?.counts[key] ?? 0,
-    percentage: props.review?.percentages[key] ?? 0,
-  }))
+const sheetBusy = computed(() =>
+  sheetAction.value === "execute" ? props.executing : props.confirming
+)
+const sheetSubmitDisabled = computed(() =>
+  sheetBusy.value
+  || deadlineExpired.value
+  || (sheetAction.value === "execute" ? !executeEligible.value : confirmDisabled.value)
+)
+const sheetTitle = computed(() => {
+  switch (sheetAction.value) {
+    case "approve": return "Approve documents"
+    case "reject": return "Reject documents"
+    case "execute": return "Finalize deal"
+    default: return ""
+  }
+})
+const sheetDescription = computed(() => {
+  switch (sheetAction.value) {
+    case "approve":
+      return "I reviewed both current documents and approve this exact document set."
+    case "reject":
+      return "I reject this exact document set and request a revision."
+    case "execute":
+      return "Both assigned lawyers approved this document set. Execute the ready Solana settlement now."
+    default:
+      return ""
+  }
 })
 
 function formatStatus(status: LawyerListingStatus): string {
@@ -143,10 +188,49 @@ function seatLabel(seat: LawyerSeatState): string {
   return seat.role === "spv" ? "SPV lawyer" : "Developer lawyer"
 }
 
-function submitConfirmation(): void {
-  if (!props.eligibleLawyer || confirmDisabled.value) return
+async function openSheet(action: SheetAction): Promise<void> {
+  if (action === "execute") {
+    if (!executeEligible.value || props.executing) return
+  } else if (!props.eligibleLawyer || confirmDisabled.value) {
+    return
+  }
+  sheetGuidance.value = ""
+  sheetAction.value = action
+  await nextTick()
+  sheetRef.value?.showModal?.()
+}
+
+function finishSheet(): void {
+  sheetAction.value = null
+  sheetGuidance.value = ""
+}
+
+function closeSheet(): void {
+  if (sheetBusy.value) {
+    sheetGuidance.value = "Wait for the wallet transaction to finish before closing this sheet."
+    return
+  }
+  if (sheetRef.value?.open) sheetRef.value.close()
+  else finishSheet()
+}
+
+function onSheetCancel(event: Event): void {
+  if (!sheetBusy.value) return
+  event.preventDefault()
+  sheetGuidance.value = "Wait for the wallet transaction to finish before closing this sheet."
+}
+
+function submitSheet(): void {
+  const action = sheetAction.value
+  if (!action || sheetBusy.value) return
+  if (action === "execute") {
+    if (!executeEligible.value) return
+    emit("execute")
+    return
+  }
+  if (confirmDisabled.value) return
   confirmationSent.value = true
-  emit("confirm", selectedVerdict.value === "approve")
+  emit("confirm", action === "approve")
 }
 
 watch(() => props.actionError, (message) => {
@@ -156,187 +240,214 @@ watch(() => props.actionError, (message) => {
 watch(() => [props.documentsHash, props.review?.attempt, props.walletAddress], (current, previous) => {
   if (current.some((value, index) => value !== previous[index])) confirmationSent.value = false
 })
+
+watch(() => [props.confirming, props.executing], (current, previous) => {
+  const finished = (previous[0] && !current[0]) || (previous[1] && !current[1])
+  if (finished && !props.actionError && sheetRef.value?.open) sheetRef.value.close()
+})
 </script>
 
 <template>
-  <section class="card lawyer-review" :aria-labelledby="`${id}-title`" :aria-busy="props.loading">
-    <header class="review-header">
-      <div>
-        <h2 :id="`${id}-title`">Lawyer document review</h2>
-        <p class="review-property">Property {{ metadata.propertyId }} <span aria-hidden="true">·</span> {{ metadata.cluster }}</p>
+  <section class="lawyer-review-shell" :aria-busy="props.loading">
+    <div class="ib-offer-bar" role="region" aria-label="Lawyer document review">
+      <div class="ib-offer-inner">
+        <div class="ib-offer-head">
+          <Vote :size="18" class="ib-offer-icon" aria-hidden="true" />
+          <div class="ib-offer-info">
+            <h2 :id="`${id}-title`" class="ib-offer-title">Lawyer document review</h2>
+            <p class="ib-offer-amount review-property">Property {{ metadata.propertyId }} · {{ metadata.cluster }}</p>
+            <p v-if="review" class="ib-offer-amount review-status-line">
+              {{ formatStatus(review.status) }} ·
+              {{ review.counts.approved }} of 2 approved ({{ review.percentages.approved }}%) ·
+              {{ review.counts.rejected }} rejected ({{ review.percentages.rejected }}%) ·
+              {{ review.counts.pending }} pending ({{ review.percentages.pending }}%)
+            </p>
+            <p v-else class="ib-offer-amount">Two assigned lawyers review the current documents.</p>
+            <p v-if="review && deadlineExpiry" class="ib-offer-amount">{{ timeLeftLabel }}</p>
+          </div>
+        </div>
+
+        <p v-if="props.loading && !review" class="review-loading" role="status" aria-live="polite">
+          Loading lawyer review…
+        </p>
+        <p v-else-if="!review" class="review-loading" role="status">
+          {{ error ? "Review details could not be loaded." : "Lawyer review is unavailable." }}
+        </p>
+
+        <div v-if="error" class="review-error" role="alert">
+          <span>{{ error }}</span>
+          <button class="btn ib-offer-action" type="button" @click="emit('retry')">Retry review</button>
+        </div>
+
+        <p v-if="review?.staleAssignment" class="review-error" role="alert">
+          Lawyer assignments changed on-chain. This review bucket is stale; transactions are disabled.
+        </p>
+        <p v-else-if="review?.hashMismatch" class="review-error" role="alert">
+          The decided lawyer seats reference different document hashes. Transactions are disabled.
+        </p>
+        <p v-if="deadlineExpired && !sheetAction" class="review-error" role="alert">{{ expiryMessage }}</p>
+
+        <div v-if="!hasDocumentSet && review" class="review-error" role="alert">
+          <span>One or both lawyer documents are missing. The current document-set hash is unavailable.</span>
+          <button v-if="canUpload" class="btn ib-offer-action" type="button" @click="emit('upload')">
+            Upload replacement document
+          </button>
+        </div>
+
+        <div v-if="executeEligible" class="ib-offer-actions">
+          <button class="btn btn-primary ib-offer-action" type="button" :disabled="props.executing"
+            :aria-busy="props.executing" @click="openSheet('execute')">
+            {{ props.executing ? "Finalizing…" : "Finalize deal" }}
+          </button>
+        </div>
+        <div v-else-if="eligibleLawyer && review" class="ib-offer-actions">
+          <button class="btn btn-primary ib-offer-action" type="button" :disabled="confirmDisabled" @click="openSheet('approve')">
+            Approve documents
+          </button>
+          <button class="btn ib-vote-reject ib-offer-action" type="button" :disabled="confirmDisabled" @click="openSheet('reject')">
+            Reject documents
+          </button>
+        </div>
+        <p v-else-if="review" class="ib-offer-note">
+          Read-only review. Only the currently assigned SPV and developer lawyers can confirm documents.
+        </p>
+        <p v-if="review?.settlementReady && !executeEligible" class="ib-offer-note execution-guidance" role="status" aria-live="polite">
+          {{ executionMessage }}
+        </p>
+
+        <p v-if="notice" class="review-notice" role="status" aria-live="polite">{{ notice }}</p>
+        <p v-if="actionError && !sheetAction" class="review-error" role="alert">{{ actionError }}</p>
+        <ul v-if="transactionLinks.length" class="transaction-links" aria-label="Submitted transactions">
+          <li v-for="link in transactionLinks" :key="link.signature">
+            <a :href="link.url" target="_blank" rel="noopener">View transaction {{ link.signature }}</a>
+          </li>
+        </ul>
+
+        <details v-if="review" class="review-details">
+          <summary>Review details</summary>
+          <div class="review-details-body">
+            <dl class="review-summary">
+              <div><dt>Attempt</dt><dd>Attempt {{ review.attempt }} of 2</dd></div>
+              <div><dt>Status</dt><dd>{{ formatStatus(review.status) }}</dd></div>
+              <div><dt>Legal deadline</dt><dd>{{ formatDeadline(review.legalDeadline) }}</dd></div>
+            </dl>
+            <p v-if="review.attempt === 2" class="attempt-notice" role="status">
+              Second review attempt. Both lawyers must review the current document set.
+            </p>
+            <div class="document-hash">
+              <span>Current document-set hash</span>
+              <code v-if="hasDocumentSet" :title="documentsHash">{{ shortHash(documentsHash) }}</code>
+              <span v-else>Unavailable</span>
+            </div>
+            <ul class="seat-list" aria-label="Lawyer verdicts">
+              <li v-for="seat in [review.spv, review.developer]" :key="seat.role" class="seat-card">
+                <h3>{{ seatLabel(seat) }}</h3>
+                <p class="seat-verdict" :class="`verdict-${seat.verdict}`">{{ seat.verdict }}</p>
+                <code class="seat-wallet">{{ seat.wallet }}</code>
+                <span class="seat-hash">Document hash: <code>{{ seat.documentsHash }}</code></span>
+              </li>
+            </ul>
+            <p v-if="!review.settlementReady" class="execution-message">{{ executionMessage }}</p>
+          </div>
+        </details>
       </div>
-    </header>
-
-    <p v-if="notice" class="review-notice" role="status" aria-live="polite">{{ notice }}</p>
-    <ul v-if="transactionLinks.length" class="transaction-links" aria-label="Submitted transactions">
-      <li v-for="link in transactionLinks" :key="link.signature">
-        <a :href="link.url" target="_blank" rel="noopener">View transaction {{ link.signature }}</a>
-      </li>
-    </ul>
-    <div v-if="error" class="review-error" role="alert">
-      <p>{{ error }}</p>
-      <button class="btn" type="button" @click="emit('retry')">Retry review</button>
     </div>
-    <p v-if="actionError" class="review-error" role="alert">{{ actionError }}</p>
 
-    <p v-if="props.loading && !review" class="review-loading" role="status" aria-live="polite">
-      Loading lawyer review…
-    </p>
-    <p v-else-if="error && !review" class="muted">Review details could not be loaded.</p>
-    <p v-else-if="!review" class="review-loading" role="status">Lawyer review is unavailable.</p>
-
-    <template v-else>
-      <dl class="review-summary">
-        <div>
-          <dt>Attempt</dt>
-          <dd>Attempt {{ review.attempt }} of 2</dd>
-        </div>
-        <div>
-          <dt>Status</dt>
-          <dd>{{ formatStatus(review.status) }}</dd>
-        </div>
-        <div class="review-deadline">
-          <dt>Legal deadline</dt>
-          <dd>{{ formatDeadline(review.legalDeadline) }}</dd>
-        </div>
-      </dl>
-
-      <p v-if="review.attempt === 2" class="attempt-notice" role="status">
-        Second review attempt. Both lawyers must review the current document set.
+    <dialog
+      v-if="sheetAction"
+      ref="sheetRef"
+      class="card ib-offer-sheet"
+      closedby="any"
+      :aria-labelledby="`${id}-sheet-title`"
+      :aria-describedby="`${id}-sheet-description`"
+      @cancel="onSheetCancel"
+      @close="finishSheet"
+    >
+      <div class="ib-sheet-handle" aria-hidden="true"></div>
+      <h3 :id="`${id}-sheet-title`" class="ib-sheet-title">{{ sheetTitle }}</h3>
+      <p :id="`${id}-sheet-description`" class="muted ib-sheet-desc">{{ sheetDescription }}</p>
+      <p v-if="sheetAction !== 'execute' && hasDocumentSet" class="document-hash sheet-hash">
+        Document set: <code :title="documentsHash">{{ shortHash(documentsHash) }}</code>
       </p>
-      <p v-if="review.staleAssignment" class="review-error" role="alert">
-        Lawyer assignments changed on-chain. This review bucket is stale; transactions are disabled.
+      <p v-if="deadlineExpired" class="ib-sheet-error" role="alert">{{ expiryMessage }}</p>
+      <p v-if="actionError" class="ib-sheet-error" role="alert">{{ actionError }}</p>
+      <p v-if="sheetGuidance || sheetBusy" class="sheet-guidance" role="status" aria-live="polite">
+        {{ sheetGuidance || "Confirm the transaction in your wallet. This sheet stays open until submission finishes." }}
       </p>
-      <p v-else-if="review.hashMismatch" class="review-error" role="alert">
-        The approved seats reference different document hashes. Transactions are disabled.
-      </p>
-      <div v-if="!hasDocumentSet" class="missing-documents" role="alert">
-        <p>One or both lawyer documents are missing. The current document-set hash is unavailable.</p>
-        <button v-if="canUpload" class="btn" type="button" @click="emit('upload')">
-          Upload replacement document
+      <div class="ib-sheet-actions">
+        <button class="btn" type="button" autofocus :disabled="sheetBusy" @click="closeSheet">Cancel</button>
+        <button class="btn btn-primary" type="button" :disabled="sheetSubmitDisabled" @click="submitSheet">
+          {{ sheetBusy ? "Submitting…" : sheetAction === "execute" ? "Execute deal" : "Submit review" }}
         </button>
       </div>
-
-      <div class="document-hash">
-        <span>Current document-set hash</span>
-        <code v-if="hasDocumentSet" :title="documentsHash">{{ shortHash(documentsHash) }}</code>
-        <span v-else>Unavailable</span>
-      </div>
-
-      <ul class="seat-list" aria-label="Lawyer verdicts">
-        <li v-for="seat in [review.spv, review.developer]" :key="seat.role" class="seat-card">
-          <h3>{{ seatLabel(seat) }}</h3>
-          <p class="seat-verdict" :class="`verdict-${seat.verdict}`">{{ seat.verdict }}</p>
-          <code class="seat-wallet">{{ seat.wallet }}</code>
-          <span class="seat-hash">Document hash: <code>{{ seat.documentsHash }}</code></span>
-        </li>
-      </ul>
-
-      <div class="meter-list" aria-label="Two-seat review totals">
-        <div v-for="meter in meters" :key="meter.key" class="review-meter" :class="`meter-${meter.key}`">
-          <div class="meter-heading">
-            <label :for="meter.id">{{ meter.label }}</label>
-            <span :id="meter.descriptionId">{{ meter.count }} of 2 · {{ meter.percentage }}%</span>
-          </div>
-          <progress
-            :id="meter.id"
-            :value="meter.percentage"
-            max="100"
-            :aria-describedby="meter.descriptionId"
-          >{{ meter.percentage }}%</progress>
-        </div>
-      </div>
-
-      <p v-if="!eligibleLawyer" class="read-only">
-        Read-only review. Only the currently assigned SPV and developer lawyers can confirm documents.
-      </p>
-      <form v-else class="verdict-form" @submit.prevent="submitConfirmation">
-        <fieldset :disabled="confirmDisabled">
-          <legend>Document verdict</legend>
-          <p v-if="hasDocumentSet" class="hash-confirmation">
-            Confirm this exact document set: <code :title="documentsHash">{{ shortHash(documentsHash) }}</code>
-          </p>
-          <div class="verdict-options">
-            <label class="verdict-option">
-              <input
-                :name="`${id}-verdict`"
-                type="radio"
-                value="approve"
-                :checked="selectedVerdict === 'approve'"
-                required
-                @change="selectedVerdict = 'approve'"
-              >
-              Approve
-            </label>
-            <label class="verdict-option">
-              <input
-                :name="`${id}-verdict`"
-                type="radio"
-                value="reject"
-                :checked="selectedVerdict === 'reject'"
-                required
-                @change="selectedVerdict = 'reject'"
-              >
-              Reject
-            </label>
-          </div>
-          <button class="btn btn-primary verdict-submit" type="submit" :disabled="confirmDisabled" :aria-busy="props.confirming">
-            {{ props.confirming ? "Submitting review…" : confirmationSent ? "Submitted review" : "Submit document verdict" }}
-          </button>
-        </fieldset>
-      </form>
-
-      <div class="execute-deal">
-        <h3>Execute deal</h3>
-        <p>{{ executionMessage }}</p>
-        <button
-          v-if="executeEligible"
-          class="btn btn-primary"
-          type="button"
-          :disabled="props.executing"
-          :aria-busy="props.executing"
-          @click="emit('execute')"
-        >{{ props.executing ? "Executing deal…" : "Execute deal" }}</button>
-      </div>
-    </template>
+    </dialog>
   </section>
 </template>
 
 <style scoped>
-.lawyer-review {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  margin-bottom: 16px;
+.lawyer-review-shell {
+  flex-shrink: 0;
   color: var(--text-primary);
 }
 
-.review-header,
-.meter-heading {
+/* The banner (.ib-offer-*), the sheet (.ib-offer-sheet and its .ib-sheet-* parts)
+   and the plain success notice (shared with .ib-vote-notice) all live in
+   ~/assets/styles/ib-surfaces.css — the same rule set the SPV lawyer terms flow
+   wears. Only what the review flow's own content needs is left here. */
+
+/* The two-seat tally is one long line, so it has to break inside words. */
+.review-status-line {
+  overflow-wrap: anywhere;
+}
+
+/* Review errors surface inside the banner, where the reference flow shows none,
+   and several carry an inline action button — hence a boxed alert rather than the
+   sheet's bare .ib-sheet-error text. */
+.review-error {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.review-header h2,
-.seat-card h3,
-.execute-deal h3 {
+  flex-wrap: wrap;
+  gap: 8px;
   margin: 0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  background: color-mix(in srgb, var(--status-error) 8%, transparent);
+  color: var(--status-error);
 }
 
-.review-header h2 {
-  font-size: 20px;
-}
-
-.review-property,
 .review-loading,
 .attempt-notice,
-.read-only,
-.execute-deal p,
-.hash-confirmation {
-  margin: 4px 0 0;
+.execution-message {
+  margin: 0;
   color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.transaction-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 0;
+  padding-left: 20px;
+  font-size: 12px;
+}
+
+.review-details {
+  font-size: 13px;
+}
+
+.review-details summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.review-details-body {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
 }
 
 .review-summary {
@@ -344,10 +455,6 @@ watch(() => [props.documentsHash, props.review?.attempt, props.walletAddress], (
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin: 0;
-}
-
-.review-summary div {
-  min-width: 0;
 }
 
 .review-summary dt {
@@ -360,35 +467,6 @@ watch(() => [props.documentsHash, props.review?.attempt, props.walletAddress], (
   margin: 4px 0 0;
   overflow-wrap: anywhere;
   font-weight: 600;
-}
-
-.review-notice,
-.review-error,
-.missing-documents {
-  margin: 0;
-  border-radius: 8px;
-  padding: 12px;
-}
-
-.review-notice {
-  background: color-mix(in srgb, var(--status-success) 10%, transparent);
-  color: var(--status-success);
-}
-
-.review-error,
-.missing-documents {
-  background: color-mix(in srgb, var(--status-error) 8%, transparent);
-  color: var(--status-error);
-}
-
-.review-error p,
-.missing-documents p {
-  margin: 0;
-}
-
-.review-error .btn,
-.missing-documents .btn {
-  margin-top: 12px;
 }
 
 .document-hash {
@@ -406,8 +484,7 @@ code {
   -webkit-user-select: text;
 }
 
-.document-hash code,
-.hash-confirmation code {
+.document-hash code {
   color: var(--text-primary);
   font-weight: 600;
 }
@@ -424,39 +501,26 @@ code {
 .seat-card {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
-  border: 1px solid var(--border-default);
-  border-radius: 10px;
-  padding: 12px;
+  border-top: 1px solid var(--border-default);
+  padding-top: 8px;
 }
 
-.seat-card h3 {
-  font-size: 15px;
+.seat-card h3,
+.seat-verdict {
+  margin: 0;
+  font-size: 13px;
 }
 
 .seat-verdict {
-  align-self: flex-start;
-  margin: 0;
-  border-radius: 999px;
-  padding: 2px 8px;
-  background: var(--surface-bg);
-  font-size: 12px;
   font-weight: 700;
   text-transform: capitalize;
 }
 
-.verdict-approved {
-  color: var(--status-success);
-}
-
-.verdict-rejected {
-  color: var(--status-error);
-}
-
-.verdict-pending {
-  color: var(--status-warning);
-}
+.verdict-approved { color: var(--status-success); }
+.verdict-rejected { color: var(--status-error); }
+.verdict-pending { color: var(--status-warning); }
 
 .seat-wallet,
 .seat-hash {
@@ -468,137 +532,19 @@ code {
   color: var(--text-secondary);
 }
 
-.meter-list {
-  display: grid;
-  gap: 12px;
-}
-
-.review-meter {
-  display: grid;
-  gap: 6px;
-}
-
-.meter-heading {
-  font-size: 13px;
-}
-
-.meter-heading label {
-  font-weight: 600;
-}
-
-.meter-heading span {
+/* Guidance line inside the sheet — the reference sheet has no equivalent element. */
+.sheet-guidance {
+  margin: 0;
   color: var(--text-secondary);
+  font-size: 14px;
 }
 
-.review-meter progress {
-  display: block;
-  width: 100%;
-  height: 12px;
-  accent-color: var(--color-primary);
-}
-
-.meter-approved progress {
-  accent-color: var(--status-success);
-}
-
-.meter-rejected progress {
-  accent-color: var(--status-error);
-}
-
-.meter-pending progress {
-  accent-color: var(--status-warning);
-}
-
-.verdict-form fieldset {
-  min-width: 0;
-  margin: 0;
-  border: 0;
-  padding: 0;
-}
-
-.verdict-form legend {
-  padding: 0;
-  font-weight: 700;
-}
-
-.verdict-options {
-  display: flex;
-  gap: 12px;
-  margin: 12px 0;
-}
-
-.verdict-option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 48px;
-  min-height: 48px;
-  border: 1px solid var(--border-default);
-  border-radius: 8px;
-  padding: 10px 14px;
-  cursor: pointer;
-}
-
-.verdict-option:has(input:checked) {
-  border-color: var(--color-primary);
-  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
-}
-
-.verdict-option input {
-  width: 20px;
-  height: 20px;
-  margin: 0;
-}
-
-.lawyer-review .btn {
-  min-width: 48px;
-  min-height: 48px;
-  padding: 11px 16px;
-}
-
-.verdict-submit {
-  width: 100%;
-}
-
-.execute-deal {
-  border-top: 1px solid var(--border-default);
-  padding-top: 16px;
-}
-
-.execute-deal h3 {
-  font-size: 16px;
-}
-
-.execute-deal .btn {
-  width: 100%;
-  margin-top: 12px;
-}
-
+/* The review details grid, not part of the shared banner/sheet rule set. */
 @media (max-width: 640px) {
-  .review-summary {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 
-  .review-deadline {
-    grid-column: 1 / -1;
-  }
-
+  .review-summary,
   .seat-list {
     grid-template-columns: 1fr;
-  }
-
-  .verdict-options {
-    flex-direction: column;
-  }
-}
-
-@media (max-width: 380px) {
-  .review-summary {
-    grid-template-columns: 1fr;
-  }
-
-  .review-deadline {
-    grid-column: auto;
   }
 }
 </style>

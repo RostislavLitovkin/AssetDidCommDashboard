@@ -1,4 +1,5 @@
 import type { ApiMessage } from "../buckets/types";
+import { compareKeySharingMessages } from "../messages/keyAccess";
 import { addressesEqual } from "../wallet/addressUtils";
 
 export const LAWYER_TERMS_DOCUMENT_TAG = "lawyer/terms-document";
@@ -14,11 +15,7 @@ function isPdf(message: ApiMessage): boolean {
 }
 
 function sortComparator(a: ApiMessage, b: ApiMessage): number {
-  const timeA = Date.parse(a.createdAt);
-  const timeB = Date.parse(b.createdAt);
-  const normalizedA = Number.isNaN(timeA) ? 0 : timeA;
-  const normalizedB = Number.isNaN(timeB) ? 0 : timeB;
-  return normalizedA - normalizedB || Number(a.messageId) - Number(b.messageId);
+  return compareKeySharingMessages(a, b);
 }
 
 export function selectLawyerDocumentRevisionCandidates(
@@ -33,6 +30,7 @@ export function selectLawyerDocumentRevisionCandidates(
     const candidates = initialDocument ? [initialDocument] : [];
     for (const message of sorted) {
       if (initialIds.has(message.id) || !isPdf(message) || !addressesEqual(message.contributor, wallet)) continue;
+      if (initialDocument && sortComparator(message, initialDocument) <= 0) continue;
       candidates.push(message);
     }
     return candidates.reverse();

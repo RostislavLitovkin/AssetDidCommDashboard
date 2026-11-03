@@ -18,7 +18,9 @@ export default defineNuxtConfig({
   ssr: false,
   devtools: { enabled: true },
   modules: ["@pinia/nuxt", "@nuxtjs/color-mode"],
-  css: ["~/assets/styles/tokens.css", "~/assets/styles/globals.css"],
+  // ib-surfaces.css holds the banner/sheet rules shared by the indexed-bucket page
+  // and its child panels, and must load after globals.css so it wins the cascade.
+  css: ["~/assets/styles/tokens.css", "~/assets/styles/globals.css", "~/assets/styles/ib-surfaces.css"],
   app: {
     baseURL: process.env.NUXT_APP_BASE_URL || "/",
     head: {

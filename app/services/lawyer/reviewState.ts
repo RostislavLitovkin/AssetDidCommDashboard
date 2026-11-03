@@ -35,10 +35,13 @@ export function deriveLawyerReviewState(
   const staleAssignment =
     !addressesEqual(listing.spvLawyer, bucket.spvLawyer) ||
     !addressesEqual(listing.developerLawyer, bucket.developerLawyer);
-  const hashMismatch =
-    listing.spvVerdict === "approved" &&
-    listing.developerVerdict === "approved" &&
+  const bothDecided = listing.spvVerdict !== "pending" && listing.developerVerdict !== "pending";
+  const bothApproved = listing.spvVerdict === "approved" && listing.developerVerdict === "approved";
+  const hashMismatch = bothDecided &&
     normalizeHash(listing.spvDocumentsHash) !== normalizeHash(listing.developerDocumentsHash);
+  const settlementSeatsMatch = settlement !== null &&
+    addressesEqual(settlement.spvLawyer, listing.spvLawyer) &&
+    addressesEqual(settlement.developerLawyer, listing.developerLawyer);
 
   return {
     listingId: listing.listingId,
@@ -62,7 +65,7 @@ export function deriveLawyerReviewState(
     percentages,
     staleAssignment,
     hashMismatch,
-    settlementReady: listing.status === "LEGAL" && settlement !== null && !staleAssignment && !hashMismatch,
+    settlementReady: listing.status === "LEGAL" && bothApproved && settlementSeatsMatch && !staleAssignment && !hashMismatch,
     settlement,
   };
 }

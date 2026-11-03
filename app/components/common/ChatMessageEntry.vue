@@ -1,4 +1,6 @@
 <script lang="ts">
+import type { VotingResultStatus } from "../../services/buckets/voting"
+
 export interface ChatMessageProps {
   id: string
   body: string
@@ -31,20 +33,23 @@ export interface ChatMessageProps {
 export interface ChatVotingInfo {
   kind: "terms" | "election" | "proposal" | "challenge"
   kindLabel: string
-  status: "open" | "ratified" | "rejected" | "passed" | "failed"
+  status: "open" | VotingResultStatus
   statusLabel: string
   round?: number
   id?: string
   expiresAt?: string
   documentsHash?: string
+  review?: boolean
   lawyer?: string
   yes?: number
   no?: number
   abstain?: number
   yesPct?: number
   noPct?: number
+  pendingPct?: number
   yesLabel: string
   noLabel: string
+  pendingLabel?: string
 }
 
 export interface ChatMarketInfo {
@@ -93,7 +98,7 @@ import {
   marketKindLabel
 } from "../../services/buckets/realxhub"
 import { votingTimeLeftLabel } from "../../services/buckets/voting"
-import { isLawyerTermsApprovedTag } from "../../services/buckets/lawyerTerms"
+import { isLawyerTermsApprovedTag, isLawyerTermsRejectedTag } from "../../services/buckets/lawyerTerms"
 import GlitchParticles from "./GlitchParticles.vue"
 
 const KEY_SHARING_TAG = "didcomm/key-sharing-v1"
@@ -113,6 +118,7 @@ const settings = useSettingsStore()
 // centered system notice with a separation line instead of a chat bubble.
 const isKeySharing = computed(() => props.message.tag === KEY_SHARING_TAG)
 const isTermsApproved = computed(() => isLawyerTermsApprovedTag(props.message.tag))
+const isTermsRejected = computed(() => isLawyerTermsRejectedTag(props.message.tag))
 
 // Per-instance: flip to the default avatar if the real picture URL fails to load.
 const avatarFailed = ref(false)
@@ -224,7 +230,11 @@ function formatFileSize(base64: string): string {
 
   <div v-else class="chat-row" :class="[
     message.outgoing ? 'chat-row-outgoing' : 'chat-row-incoming',
-    { 'chat-row-has-avatar': showAvatars && !message.outgoing }
+    {
+      'chat-row-has-avatar': showAvatars && !message.outgoing,
+      'chat-row-terms-approved': isTermsApproved,
+      'chat-row-terms-rejected': isTermsRejected
+    }
   ]">
     <div v-if="showAvatars && !message.outgoing" class="chat-avatar-unit">
       <img v-if="!avatarFailed && message.avatarUrl" class="chat-avatar" :src="message.avatarUrl"
@@ -240,7 +250,8 @@ function formatFileSize(base64: string): string {
           'chat-bubble-pending': message.pending,
           'chat-bubble-failed': message.failed,
           'chat-bubble-undecryptable': message.decryptFailed,
-          'chat-bubble-terms-approved': isTermsApproved
+          'chat-bubble-terms-approved': isTermsApproved,
+          'chat-bubble-terms-rejected': isTermsRejected
         }
       ]">
 
@@ -297,7 +308,10 @@ function formatFileSize(base64: string): string {
 
         <!-- Governance voting message: split-bar card with status -->
         <template v-else-if="voting">
-          <div class="chat-vote-card" :class="{ 'chat-vote-card-terms': voting.kind === 'terms' }">
+          <div class="chat-vote-card" :class="{
+            'chat-vote-card-terms': voting.kind === 'terms' && !voting.review,
+            'chat-vote-card-review': voting.review
+          }">
             <div class="chat-vote-head">
               <span class="chat-vote-kind">{{ voting.kindLabel }}</span>
               <span class="chat-vote-status" :class="[
@@ -314,13 +328,16 @@ function formatFileSize(base64: string): string {
             </p>
             <template v-if="voting.yes !== undefined && voting.no !== undefined">
               <progress class="chat-vote-bar" max="100" :value="voting.yesPct ?? 0"
-                :aria-label="`${voting.yesLabel}: ${voting.yes}, ${voting.noLabel}: ${voting.no}`"></progress>
-              <div class="chat-vote-splits">
+                :aria-label="`${voting.yesLabel}: ${voting.yes}, ${voting.noLabel}: ${voting.no}${voting.abstain !== undefined ? `, ${voting.pendingLabel ?? 'Pending'}: ${voting.abstain}` : ''}`"></progress>
+              <div class="chat-vote-splits" :class="{ 'chat-vote-splits-pending': Boolean(voting.pendingLabel) }">
                 <span class="chat-vote-split-yes">
-                  {{ voting.yesLabel }}<template v-if="voting.yesPct !== undefined"> {{ voting.yesPct }}%</template>
+                  {{ voting.yesLabel }}<template v-if="voting.yesPct !== undefined">&nbsp;{{ voting.yesPct }}%</template>
                 </span>
                 <span class="chat-vote-split-no">
-                  {{ voting.noLabel }}<template v-if="voting.noPct !== undefined"> {{ voting.noPct }}%</template>
+                  {{ voting.noLabel }}<template v-if="voting.noPct !== undefined">&nbsp;{{ voting.noPct }}%</template>
+                </span>
+                <span v-if="voting.pendingLabel" class="chat-vote-split-pending">
+                  {{ voting.pendingLabel }}<template v-if="voting.pendingPct !== undefined">&nbsp;{{ voting.pendingPct }}%</template>
                 </span>
               </div>
             </template>
@@ -444,9 +461,10 @@ function formatFileSize(base64: string): string {
   background: var(--surface-bg);
 }
 
-/* Primary-colored tail: base overlaps the bubble edge by 1px so it stays
-   seamlessly joined to the bubble (and its primary border-left) at any
-   scroll position, with the point aimed at the sticky avatar. */
+/* Tail: base overlaps the bubble edge by 1px so it stays seamlessly joined to
+   the bubble (and its border-left) at any scroll position, with the point aimed
+   at the sticky avatar. Colored like the bubble edge — green on terms-approved
+   bubbles, primary otherwise. */
 .chat-avatar-arrow {
   width: 0;
   height: 0;
@@ -455,6 +473,14 @@ function formatFileSize(base64: string): string {
   border-bottom: 6px solid transparent;
   border-right: 7px solid var(--color-primary);
   margin-right: -1px;
+}
+
+.chat-row-terms-approved .chat-avatar-arrow {
+  border-right-color: var(--success, #2e7d32);
+}
+
+.chat-row-terms-rejected .chat-avatar-arrow {
+  border-right-color: var(--error, #c62828);
 }
 
 .chat-message {
@@ -507,6 +533,24 @@ function formatFileSize(base64: string): string {
 
 .chat-bubble-incoming.chat-bubble-terms-approved {
   background: color-mix(in srgb, var(--success, #2e7d32) 10%, var(--color-white));
+}
+
+/* Approvals read as solid green rather than the primary-yellow outgoing fill;
+   the white outgoing text stays legible on it. */
+.chat-bubble-outgoing.chat-bubble-terms-approved {
+  background: var(--success, #2e7d32);
+}
+
+.chat-bubble-terms-rejected {
+  border-left: 3px solid var(--error, #c62828);
+}
+
+.chat-bubble-incoming.chat-bubble-terms-rejected {
+  background: color-mix(in srgb, var(--error, #c62828) 10%, var(--color-white));
+}
+
+.chat-bubble-outgoing.chat-bubble-terms-rejected {
+  background: var(--error, #c62828);
 }
 
 /* Undecryptable: the bubble collapses onto the glitch tile — no padding for the
@@ -608,7 +652,8 @@ function formatFileSize(base64: string): string {
 }
 
 .chat-vote-status-ratified,
-.chat-vote-status-passed {
+.chat-vote-status-passed,
+.chat-vote-status-finalized {
   color: var(--success, #2e7d32);
   background: color-mix(in srgb, var(--success, #2e7d32) 14%, transparent);
 }
@@ -617,6 +662,14 @@ function formatFileSize(base64: string): string {
 .chat-vote-status-failed {
   color: var(--error, #c62828);
   background: color-mix(in srgb, var(--error, #c62828) 14%, transparent);
+}
+
+/* Dead without a verdict of its own: same neutral read as a closed round. */
+.chat-vote-status-cancelled,
+.chat-vote-status-expired,
+.chat-vote-status-refunded {
+  color: var(--text-secondary);
+  background: var(--surface-hover, rgba(127, 127, 127, 0.16));
 }
 
 .chat-vote-sub {
@@ -655,7 +708,10 @@ function formatFileSize(base64: string): string {
   background: var(--error, #c62828);
 }
 
-.chat-vote-card-terms .chat-vote-bar {
+/* Terms and review announcements share one card design: both grey variants come
+   from the same rule set so the two cards cannot drift apart again. */
+.chat-vote-card-terms .chat-vote-bar,
+.chat-vote-card-review .chat-vote-bar {
   background: var(--border-default, #9e9e9e);
 }
 
@@ -678,9 +734,18 @@ function formatFileSize(base64: string): string {
 .chat-vote-splits {
   display: flex;
   justify-content: space-between;
-  gap: 1.5rem;
+  gap: 3rem;
   font-size: 13px;
   font-weight: 600;
+}
+
+/* A third label never fits alongside the 3rem two-label gap, so the pending
+   variant tightens the columns and lets the row wrap instead of pushing past
+   the bubble edge. The two-label card keeps its gap untouched. */
+.chat-vote-splits-pending {
+  column-gap: 1rem;
+  row-gap: 2px;
+  flex-wrap: wrap;
 }
 
 .chat-vote-split-yes {
@@ -691,7 +756,9 @@ function formatFileSize(base64: string): string {
   color: var(--error, #c62828);
 }
 
-.chat-vote-card-terms .chat-vote-split-no {
+.chat-vote-card-terms .chat-vote-split-no,
+.chat-vote-card-review .chat-vote-split-no,
+.chat-vote-split-pending {
   color: var(--text-secondary);
 }
 

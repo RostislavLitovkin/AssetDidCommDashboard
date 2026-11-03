@@ -24,11 +24,13 @@ New and redelivered buckets retain `listing_id` for compatibility. Metadata back
 
 ## Chat review experience
 
-The panel presents the property ID, cluster, review attempt, listing status, legal deadline, both lawyer wallets and verdicts, per-seat document hashes, and the current shared document-set hash. It also provides separate Approved, Rejected, and Pending progress meters.
+A compact banner above the chat presents the property ID, cluster, listing status, legal deadline, and exact Approved, Rejected, and Pending two-seat counts and percentages. Its expandable Review details section contains the review attempt, both lawyer wallets and verdicts, per-seat document hashes, and the current shared document-set hash. Eligible lawyers confirm Approve or Reject in native modal bottom sheets; settlement uses the same sheet pattern for finalization. The sheets provide native focus handling, Escape dismissal and focus return, visible busy/error/expiry feedback, and duplicate-submission protection. Banner and sheet actions also disable locally when the legal deadline passes, even before the next Indexer refresh.
 
-Only the currently assigned SPV and developer lawyer wallets can submit an Approve or Reject verdict. Other viewers receive read-only review state. A verdict submission uses the connected wallet and the current shared hash; it does not create a chat message that pretends to be a chain vote. After submission, the composable reloads Indexer state instead of treating wallet submission alone as final chain state.
+Only the currently assigned SPV and developer lawyer wallets can submit an Approve or Reject verdict. Other viewers receive read-only review state. A verdict submission uses the connected wallet and the current shared hash; it does not create a chat message that pretends to be a chain vote. After submission, the composable reloads Indexer state instead of treating wallet submission alone as final chain state, and the page refreshes its tagged announcements without clearing transaction links.
 
-Both approvals with the same hash move the review toward the Legal state. The model also represents the first split verdict/second attempt, reset and cancellation states, and pending seats. When Indexer reports Legal status and settlement evidence is available, any connected wallet may execute the deal before the legal deadline. Wallet, simulation, and confirmation failures must be surfaced rather than reported as success.
+Admin-originated review announcements use the canonical Terms contracts: `voting/terms` and `voting/result` with `kind: "terms"`, including the legal `expiresAt` on open payloads. Lawyer approvals and rejections use `lawyer/terms-approved` and `lawyer/terms-rejected`, encrypted with the current bucket key like other chat messages. These messages are announcements only: the two Indexer lawyer seats remain authoritative for eligibility, counts, hashes, and settlement state. In a review bucket, the cards show the lawyer verdict split rather than investor election tallies or investor actions.
+
+Both approvals with the same hash move the review toward the Legal state. The model also represents the first split verdict/second attempt, reset and cancellation states, and pending seats. When Indexer reports Legal status and settlement evidence is available, any connected wallet may execute the deal before the legal deadline. Wallet, simulation, confirmation, and late-expiry failures must be surfaced rather than reported as success.
 
 ## Two-seat counts and percentages
 
@@ -40,7 +42,7 @@ Percentages are derived locally from the two Indexer lawyer seats, with each sea
 | 1 | 1 of 2 | 50% |
 | 2 | 2 of 2 | 100% |
 
-This calculation is applied independently to Approved, Rejected, and Pending. The panel also handles two error states explicitly: differing hashes on two approved seats disable transactions, and stale lawyer assignments disable transactions as described below.
+This calculation is applied independently to Approved, Rejected, and Pending. The panel also handles two error states explicitly: differing hashes on decided lawyer seats disable transactions, and stale lawyer assignments disable transactions as described below.
 
 ## Current PDF revisions and document-set hash
 

@@ -30,6 +30,14 @@ describe("latestKeySharingMessage", () => {
     expect(latestKeySharingMessage([tenth, ninth])).toBe(tenth)
   })
 
+  it("compares the full 64-bit messageId when timestamps tie", () => {
+    const older = keySharing("ks-older", "2026-07-20T10:00:00Z", "9007199254740992")
+    const newest = keySharing("ks-newest", "2026-07-20T10:00:00Z", "9007199254740993")
+
+    expect(latestKeySharingMessage([newest, older])).toBe(newest)
+    expect(latestKeySharingMessage([older, newest])).toBe(newest)
+  })
+
   it("ignores messages whose createdAt cannot be parsed rather than returning NaN ordering", () => {
     const broken = keySharing("ks-broken", "not-a-date", "1")
 

@@ -153,6 +153,40 @@ describe("deriveLawyerReviewState", () => {
   it("does not treat executeDeal evidence as ready for a non-Legal listing", () => {
     expect(deriveLawyerReviewState(listing(), bucket, settlement).settlementReady).toBe(false);
   });
+
+  it("does not treat a Legal label with pending verdicts as settlement-ready", () => {
+    const state = deriveLawyerReviewState(listing({ status: "LEGAL" }), bucket, settlement);
+
+    expect(state.settlementReady).toBe(false);
+  });
+
+  it("disables settlement when execution evidence names a different lawyer seat", () => {
+    const approved = listing({
+      spvVerdict: "approved",
+      spvDocumentsHash: "0xabc",
+      developerVerdict: "approved",
+      developerDocumentsHash: "0xabc",
+      status: "LEGAL",
+    });
+    const state = deriveLawyerReviewState(approved, bucket, {
+      ...settlement,
+      developerLawyer: "ReplacementWallet",
+    });
+
+    expect(state.settlementReady).toBe(false);
+  });
+
+  it("flags a hash mismatch between any two decided seats, not only approvals", () => {
+    const state = deriveLawyerReviewState(listing({
+      spvVerdict: "rejected",
+      spvDocumentsHash: "0xaaa",
+      developerVerdict: "rejected",
+      developerDocumentsHash: "0xbbb",
+      status: "CANCELLED",
+    }), bucket, null);
+
+    expect(state.hashMismatch).toBe(true);
+  });
 });
 
 describe("loadLawyerReviewState", () => {

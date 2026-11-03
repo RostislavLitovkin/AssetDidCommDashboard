@@ -1,15 +1,14 @@
 /**
  * Value codecs shared by the buckets service layer: fixed-32-byte key
  * normalization, utf-8 sha256 hashing, and file/text message classification.
- *
- * Ported verbatim from `app/services/papi/didCommRepository.ts` (normalizeFixed32ByteKey,
- * sha256HexUtf8, and their private helpers) and `app/services/indexer/subqueryClient.ts`
- * (the content-type constants and isFileMessage) so output formats keep matching data
- * already stored by the old backend. Do not "clean up" the logic here without also
- * re-verifying every caller of the old locations, which are slated for deletion.
+ * Key normalization and hashing retain the legacy backend's wire formats.
  */
 
 import { base64url } from "jose"
+import { isLawyerTermsVerdictTag } from "./lawyerTerms"
+import { isRealXhubTag } from "./realxhub"
+import { isRealXmarketTag } from "./realxmarket"
+import { isVotingTag } from "./voting"
 
 // -- sha256HexUtf8 (ported from app/services/papi/didCommRepository.ts:2641) --
 
@@ -158,18 +157,20 @@ export const TEXT_CONTENT_TYPE = "text/plain;charset=utf-8"
 export const KEY_SHARING_CONTENT_TYPE = "application/didcomm-encrypted+json"
 export const KEY_SHARING_MESSAGE_TAG = "didcomm/key-sharing-v1"
 
-/**
- * True when an indexed message is a file/image attachment (not a text message or a
- * key-sharing event). Mirrors the server-side filter so callers can guard against
- * any unexpected rows.
- */
+/** Tagged plaintext protocol messages are not attachments, even when their MIME is JSON. */
 export function isFileMessage(message: { contentType: string | null; tag: string | null }): boolean {
-  if (message.tag === KEY_SHARING_MESSAGE_TAG) {
+  if (
+    message.tag === KEY_SHARING_MESSAGE_TAG
+    || isVotingTag(message.tag)
+    || isRealXhubTag(message.tag)
+    || isRealXmarketTag(message.tag)
+    || isLawyerTermsVerdictTag(message.tag)
+  ) {
     return false
   }
 
-  const contentType = message.contentType?.trim()
-  return Boolean(contentType && contentType !== TEXT_CONTENT_TYPE && contentType !== KEY_SHARING_CONTENT_TYPE)
+  const contentType = message.contentType?.split(";", 1)[0]?.trim().toLowerCase()
+  return Boolean(contentType && contentType !== "text/plain" && contentType !== KEY_SHARING_CONTENT_TYPE)
 }
 
 export { normalizeFixed32ByteKey, normalizeX25519ToJwkX, sha256HexUtf8 }

@@ -74,6 +74,33 @@ describe("selectCurrentLawyerDocuments", () => {
     const text = message({ contributor: seats.spvLawyer, contentType: "text/plain", createdAt: "2026-11-02T12:00:00.000Z" });
     expect(selectCurrentLawyerDocuments([text, lower, spv!, developer!, higher], seats).spv).toBe(higher);
   });
+
+  it("does not let a lawyer PDF older than the initial snapshot replace that baseline", () => {
+    const olderRevision = message({ contributor: seats.spvLawyer, description: "outdated.pdf" });
+    const [spv, developer] = initialDocuments();
+
+    expect(selectCurrentLawyerDocuments([spv!, developer!, olderRevision], seats)).toEqual({
+      spv,
+      developer,
+    });
+  });
+
+  it("breaks same-timestamp revision ties with the full 64-bit message id", () => {
+    const [spv, developer] = initialDocuments();
+    const timestamp = "2026-11-02T12:00:00.000Z";
+    const newest = message({
+      contributor: seats.spvLawyer,
+      messageId: "9007199254740993",
+      createdAt: timestamp,
+    });
+    const older = message({
+      contributor: seats.spvLawyer,
+      messageId: "9007199254740992",
+      createdAt: timestamp,
+    });
+
+    expect(selectCurrentLawyerDocuments([newest, older, spv!, developer!], seats).spv).toBe(newest);
+  });
 });
 
 describe("computeDocumentSetHash", () => {

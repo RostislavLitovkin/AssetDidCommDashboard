@@ -36,10 +36,31 @@ export type VotingKind = "terms" | "election" | "proposal" | "challenge";
 
 const VOTING_KINDS: readonly string[] = ["terms", "election", "proposal", "challenge"];
 
-/** Terminal outcomes a result message can carry, shared across kinds. */
-export type VotingResultStatus = "ratified" | "rejected" | "passed" | "failed";
+/**
+ * Terminal outcomes a result message can carry, shared across kinds. The
+ * document-review lane reports its own vocabulary (`finalized`, `cancelled`,
+ * `expired`, `refunded`) instead of collapsing into `ratified` / `rejected`.
+ */
+export type VotingResultStatus =
+  | "ratified"
+  | "rejected"
+  | "passed"
+  | "failed"
+  | "cancelled"
+  | "finalized"
+  | "expired"
+  | "refunded";
 
-const VOTING_RESULT_STATUSES: readonly string[] = ["ratified", "rejected", "passed", "failed"];
+const VOTING_RESULT_STATUSES: readonly string[] = [
+  "ratified",
+  "rejected",
+  "passed",
+  "failed",
+  "cancelled",
+  "finalized",
+  "expired",
+  "refunded",
+];
 
 /** An open (or refreshed) vote announcement posted by the API system identity. */
 export interface VotingOpenPayload {
@@ -52,8 +73,12 @@ export interface VotingOpenPayload {
   round?: number;
   /** Terms vote: hash of the documents under ratification. */
   documentsHash?: string;
-  /** ISO-8601 voting deadline. */
-  expiresAt: string;
+  /**
+   * ISO-8601 voting deadline. The API only fills it from its listing mirror,
+   * which lags behind a verdict, so a round-open announcement can arrive
+   * without it — the card then renders with no countdown line.
+   */
+  expiresAt?: string;
   quorumBps?: number;
   thresholdBps?: number;
   status: "open";
@@ -65,6 +90,8 @@ export interface VotingResultPayload {
   listingId: string;
   id?: string;
   round?: number;
+  /** The document set the closed round ruled on, when the lane has one. */
+  documentsHash?: string;
   status: VotingResultStatus;
   yes?: number;
   no?: number;
@@ -157,12 +184,17 @@ export function parseVotingPayload(body: string | null | undefined): VotingPaylo
   }
 
   if (candidate.status === "open") {
-    // An open vote without a usable deadline can never display meaningfully.
-    const expiresAt = candidate.expiresAt;
-    if (typeof expiresAt !== "string" || expiresAt.trim() === "" || Number.isNaN(Date.parse(expiresAt))) {
-      return undefined;
+    const open: VotingOpenPayload = { ...common, ...parseOptionals(candidate), status: "open" };
+    // The deadline comes from the API's listing mirror, which lags behind a
+    // verdict: a round opened right after one is announced without it. Keep the
+    // announcement — the card simply drops its countdown line. A deadline that
+    // is present but unreadable is treated the same way, never as a reason to
+    // drop the message.
+    const expiresAt = asNonEmptyString(candidate.expiresAt);
+    if (expiresAt !== undefined && !Number.isNaN(Date.parse(expiresAt))) {
+      open.expiresAt = expiresAt;
     }
-    return { ...common, ...parseOptionals(candidate), expiresAt: expiresAt.trim(), status: "open" };
+    return open;
   }
 
   if (typeof candidate.status === "string" && VOTING_RESULT_STATUSES.includes(candidate.status)) {
@@ -174,6 +206,8 @@ export function parseVotingPayload(body: string | null | undefined): VotingPaylo
     if (id !== undefined) result.id = id;
     const round = asRound(candidate.round);
     if (round !== undefined) result.round = round;
+    const documentsHash = asNonEmptyString(candidate.documentsHash);
+    if (documentsHash !== undefined) result.documentsHash = documentsHash;
     const yes = asPower(candidate.yes);
     if (yes !== undefined) result.yes = yes;
     const no = asPower(candidate.no);
@@ -299,10 +333,20 @@ export function votingStatusLabel(status: "open" | VotingResultStatus): string {
       return "Passed";
     case "failed":
       return "Failed";
+    case "cancelled":
+      return "Cancelled";
+    case "finalized":
+      return "Finalized";
+    case "expired":
+      return "Expired";
+    case "refunded":
+      return "Refunded";
   }
 }
 
-export function votingTimeLeftLabel(expiresAt: string, now = Date.now()): string {
+/** Undefined when the announcement carried no usable deadline — nothing left to count down. */
+export function votingTimeLeftLabel(expiresAt: string | undefined, now = Date.now()): string {
+  if (expiresAt === undefined) return "Closed";
   const ms = Date.parse(expiresAt) - now;
   if (Number.isNaN(ms) || ms <= 0) return "Closed";
   const minutes = Math.ceil(ms / 60_000);

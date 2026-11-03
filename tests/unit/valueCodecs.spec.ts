@@ -69,6 +69,18 @@ describe("isFileMessage", () => {
     expect(isFileMessage({ contentType: KEY_SHARING_CONTENT_TYPE, tag: null })).toBe(false)
     expect(isFileMessage({ contentType: null, tag: null })).toBe(false)
   })
+  it("normalizes text MIME case and parameters instead of treating text as an attachment", () => {
+    expect(isFileMessage({ contentType: " Text/Plain; Charset=UTF-8 ", tag: null })).toBe(false)
+  })
+  it("rejects tagged system JSON while preserving tagged PDFs and ordinary JSON files", () => {
+    expect(isFileMessage({ contentType: "application/json", tag: "voting/terms" })).toBe(false)
+    expect(isFileMessage({ contentType: "application/json", tag: "realXmarket/offer" })).toBe(false)
+    expect(isFileMessage({ contentType: "application/json", tag: "realXhub/offer" })).toBe(false)
+    expect(isFileMessage({ contentType: "application/json", tag: "lawyer/terms-approved" })).toBe(false)
+    expect(isFileMessage({ contentType: "application/json", tag: "lawyer/terms-rejected" })).toBe(false)
+    expect(isFileMessage({ contentType: "application/pdf", tag: "lawyer/terms-document" })).toBe(true)
+    expect(isFileMessage({ contentType: "application/json", tag: null })).toBe(true)
+  })
   it("accepts real file content types", () => {
     expect(isFileMessage({ contentType: "image/png", tag: null })).toBe(true)
   })

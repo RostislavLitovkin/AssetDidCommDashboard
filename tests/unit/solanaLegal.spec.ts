@@ -13,6 +13,7 @@ import {
 import {
   buildExecuteDealInstruction,
   buildLawyerConfirmDocumentsTransaction,
+  findLegalBridge,
   lawyerRolePda,
   prepareExecuteDealTransactions,
   submitLawyerConfirmDocuments,
@@ -73,6 +74,7 @@ function account(data: Buffer, owner: PublicKey): AccountInfo<Buffer> {
 
 function configAccount(): AccountInfo<Buffer> {
   const data = Buffer.alloc(105);
+  Buffer.from([155, 12, 170, 224, 30, 250, 204, 130]).copy(data, 0);
   DEVELOPER.toBuffer().copy(data, 8);
   data[40] = 0;
   XCAV_MINT.toBuffer().copy(data, 41);
@@ -80,11 +82,53 @@ function configAccount(): AccountInfo<Buffer> {
   return account(data, new PublicKey(DEVNET.marketplaceProgramId));
 }
 
-function regionAccount(regionId = 1): AccountInfo<Buffer> {
+function regionAccount(regionId = 1, owner = REGION_OWNER): AccountInfo<Buffer> {
   const data = Buffer.alloc(42);
+  Buffer.from([80, 47, 23, 41, 58, 147, 227, 165]).copy(data, 0);
   data.writeUInt16LE(regionId, 8);
-  REGION_OWNER.toBuffer().copy(data, 10);
+  owner.toBuffer().copy(data, 10);
   return account(data, new PublicKey(DEVNET.regionsProgramId));
+}
+
+function settlementListingAccount(
+  collectedMints: PublicKey[],
+  overrides: { developer?: PublicKey; developerLawyer?: PublicKey; spvLawyer?: PublicKey; status?: number } = {},
+): AccountInfo<Buffer> {
+  const data = Buffer.alloc(369 + collectedMints.length * 56);
+  Buffer.from([218, 32, 50, 73, 43, 134, 26, 58]).copy(data, 0);
+  data.writeBigUInt64LE(42n, 8);
+  (overrides.developer ?? DEVELOPER).toBuffer().copy(data, 16);
+  data.writeBigInt64LE(4_000_000_000n, 131);
+  (overrides.developerLawyer ?? DEVELOPER_LAWYER).toBuffer().copy(data, 147);
+  data[187] = 1;
+  (overrides.spvLawyer ?? SPV_LAWYER).toBuffer().copy(data, 220);
+  data[260] = 1;
+  data.writeUInt32LE(collectedMints.length, 343);
+  for (const [index, mint] of collectedMints.entries()) {
+    mint.toBuffer().copy(data, 347 + index * 56);
+  }
+  data[367 + collectedMints.length * 56] = overrides.status ?? 3;
+  return account(data, new PublicKey(DEVNET.marketplaceProgramId));
+}
+
+function propertyAccount(regionId = 1): AccountInfo<Buffer> {
+  const name = Buffer.from("123 Main Street");
+  const metadata = Buffer.from("ipfs://property-metadata");
+  const location = Buffer.from("AB12CD");
+  const data = Buffer.alloc(73 + name.length + metadata.length + location.length);
+  Buffer.from([214, 19, 51, 205, 216, 85, 134, 173]).copy(data, 0);
+  data.writeBigUInt64LE(42n, 8);
+  let offset = 16;
+  for (const value of [name, metadata]) {
+    data.writeUInt32LE(value.length, offset);
+    value.copy(data, offset + 4);
+    offset += 4 + value.length;
+  }
+  offset += 32;
+  data.writeUInt16LE(regionId, offset);
+  data.writeUInt32LE(location.length, offset + 2);
+  location.copy(data, offset + 6);
+  return account(data, new PublicKey(DEVNET.marketplaceProgramId));
 }
 
 function tokenAccount(mint: PublicKey, owner: PublicKey): AccountInfo<Buffer> {
@@ -107,16 +151,23 @@ function prepareRequest(collectedMints: PublicKey[]) {
   };
 }
 
-function fakePreparationConnection(mints: PublicKey[], existing = new Map<string, AccountInfo<Buffer>>()) {
+function fakePreparationConnection(
+  mints: PublicKey[],
+  existing = new Map<string, AccountInfo<Buffer>>(),
+  overrides: { listing?: AccountInfo<Buffer>; property?: AccountInfo<Buffer>; region?: AccountInfo<Buffer> } = {},
+) {
   const accounts = new Map(existing);
   accounts.set("FvypPqraGoYskTM9jiUywfsdfTeoqkXg2RdPHuw5S7aK", configAccount());
-  accounts.set("5qDQzydw8oSw7uCPThUihyo6yc1NZcWQkhhebDKpC6Cn", regionAccount());
+  accounts.set("5qDQzydw8oSw7uCPThUihyo6yc1NZcWQkhhebDKpC6Cn", overrides.region ?? regionAccount());
+  accounts.set("Da9GJLvR88quSajqF6uuRWwakEFyUxvjxZu35UYRGqCS", overrides.listing ?? settlementListingAccount(mints));
+  accounts.set("EYzsprEpwDcAQ4tCPQaMGqP4L2k2acWirrtkhzMWM3Nz", overrides.property ?? propertyAccount());
   for (const mint of [XCAV_MINT, ...mints]) {
     accounts.set(mint.toBase58(), account(Buffer.alloc(82), TOKEN_PROGRAM_ID));
   }
   return {
     getMultipleAccountsInfo: vi.fn(async (keys: PublicKey[]) => keys.map((key) => accounts.get(key.toBase58()) ?? null)),
     getSlot: vi.fn(async () => 100),
+    getBlockTime: vi.fn(async () => 4_000_000_000),
   } as unknown as Connection;
 }
 
@@ -301,6 +352,64 @@ describe("execute_deal preparation", () => {
     })).rejects.toThrow("INVALID_TOKEN_ACCOUNT");
   });
 
+  it("rejects preparation before ATA queries when the chain listing is not Legal", async () => {
+    const mint = key(21);
+    const connection = fakePreparationConnection([mint], new Map(), {
+      listing: settlementListingAccount([mint], { status: 2 }),
+    });
+    await expect(prepareExecuteDealTransactions(prepareRequest([mint]), { connection }))
+      .rejects.toThrow("LISTING_NOT_READY_FOR_SETTLEMENT");
+    expect(connection.getMultipleAccountsInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an expired Legal listing before ATA preparation", async () => {
+    const mint = key(21);
+    const connection = fakePreparationConnection([mint]);
+    vi.mocked(connection.getBlockTime).mockResolvedValue(4_000_000_001);
+    await expect(prepareExecuteDealTransactions(prepareRequest([mint]), { connection }))
+      .rejects.toThrow("LEGAL_PROCESS_EXPIRED");
+    expect(connection.getMultipleAccountsInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a stale lawyer seat before ATA preparation", async () => {
+    const mint = key(21);
+    const connection = fakePreparationConnection([mint], new Map(), {
+      listing: settlementListingAccount([mint], { developerLawyer: PAYER }),
+    });
+    await expect(prepareExecuteDealTransactions(prepareRequest([mint]), { connection }))
+      .rejects.toThrow("SETTLEMENT_STATE_MISMATCH");
+    expect(connection.getMultipleAccountsInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects collected mints that differ from the chain listing", async () => {
+    const chainMint = key(21);
+    const staleMint = key(22);
+    const connection = fakePreparationConnection([chainMint, staleMint], new Map(), {
+      listing: settlementListingAccount([chainMint]),
+    });
+    await expect(prepareExecuteDealTransactions(prepareRequest([staleMint]), { connection }))
+      .rejects.toThrow("SETTLEMENT_STATE_MISMATCH");
+    expect(connection.getMultipleAccountsInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates each missing ATA only once when payee wallets overlap", async () => {
+    const mint = key(21);
+    const connection = fakePreparationConnection([mint], new Map(), {
+      region: regionAccount(1, DEVELOPER),
+    });
+    const prepared = await prepareExecuteDealTransactions(prepareRequest([mint]), { connection });
+    const created = prepared.transactions.flatMap((transaction) =>
+      transaction instanceof Transaction ? transaction.instructions : [],
+    ).filter((instruction) => instruction.programId.equals(ASSOCIATED_TOKEN_PROGRAM_ID));
+    expect(created.map((instruction) => instruction.keys[1]!.pubkey.toBase58())).toEqual([
+      ata(DEVELOPER, XCAV_MINT).toBase58(),
+      ata(DEVELOPER, mint).toBase58(),
+      ata(DEVELOPER_LAWYER, mint).toBase58(),
+      ata(SPV_LAWYER, mint).toBase58(),
+      ata(TREASURY, mint).toBase58(),
+    ]);
+  });
+
   it("uses versioned settlement and a created address lookup table instead of dropping accounts", async () => {
     const mints = [21, 22, 23, 24].map(key);
     const prepared = await prepareExecuteDealTransactions(prepareRequest(mints), {
@@ -373,6 +482,34 @@ describe("transaction submission", () => {
     expect(connection.confirmTransaction).toHaveBeenCalledTimes(1);
     expect(result).toHaveLength(1);
     expect(result[0]!.signature).toMatch(/^[1-9A-HJ-NP-Za-km-z]+$/);
+  });
+
+  it("rejects an empty byte-array wallet signature instead of confirming signature 1", async () => {
+    const { connection, bridge } = successfulSubmission();
+    vi.mocked(bridge.signAndSend).mockResolvedValue(new Uint8Array());
+    const tx = buildLawyerConfirmDocumentsTransaction({
+      config: DEVNET, listingId: 42, lawyer: LAWYER, approve: true, documentsHash: new Uint8Array(32).fill(1),
+    });
+    await expect(submitPreparedLegalTransactions({ transactions: [tx] }, LAWYER, DEVNET, { connection, bridge }))
+      .rejects.toThrow("WALLET_RETURNED_NO_SIGNATURE");
+    expect(connection.confirmTransaction).not.toHaveBeenCalled();
+  });
+
+  it("passes versioned settlements to legacy Phantom-style wallets", async () => {
+    const provider = { signAndSendTransaction: vi.fn(async () => ({ signature: "legacy-signature" })) };
+    vi.stubGlobal("window", { solana: provider });
+    try {
+      const bridge = findLegalBridge()!;
+      const transaction = new VersionedTransaction(new TransactionMessage({
+        payerKey: PAYER,
+        recentBlockhash: BLOCKHASH,
+        instructions: [],
+      }).compileToV0Message());
+      await expect(bridge.signAndSend(transaction, "solana:devnet", PAYER)).resolves.toBe("legacy-signature");
+      expect(provider.signAndSendTransaction).toHaveBeenCalledWith(transaction);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("waits for a new lookup table to activate, then recompiles and submits the versioned settlement", async () => {

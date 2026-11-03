@@ -3,10 +3,60 @@ import { fileURLToPath } from "node:url";
 import { compileScript, compileTemplate, parse } from "@vue/compiler-sfc";
 import { createRenderer, h, nextTick, reactive, type Component } from "vue";
 import { transformWithEsbuild } from "vite";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { votingTimeLeftLabel } from "../../app/services/buckets/voting";
 import type { LawyerReviewBucketMetadata, LawyerReviewState } from "../../app/services/lawyer/types";
 
 const HASH = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+const panelPath = fileURLToPath(new URL("../../app/components/lawyer/LawyerReviewPanel.vue", import.meta.url));
+const pagePath = fileURLToPath(new URL("../../app/pages/indexed-bucket/[id]/index.vue", import.meta.url));
+const sharedStylesPath = fileURLToPath(new URL("../../app/assets/styles/ib-surfaces.css", import.meta.url));
+
+/** Every rule of the status banner and the bottom sheet both flows must share. */
+const SHARED_SURFACE_SELECTORS = [
+  ".ib-offer-bar",
+  ".ib-offer-inner",
+  ".ib-offer-head",
+  ".ib-offer-icon",
+  ".ib-offer-info",
+  ".ib-offer-title",
+  ".ib-offer-amount",
+  ".ib-offer-actions",
+  ".ib-offer-action",
+  ".ib-offer-note",
+  ".ib-vote-notice",
+  ".review-notice",
+  ".ib-vote-reject",
+  ".ib-sheet-overlay",
+  ".ib-sheet-handle",
+  ".ib-sheet-title",
+  ".ib-sheet-desc",
+  ".ib-sheet-error",
+  ".ib-sheet-actions",
+  ".ib-sheet-actions .btn",
+  ".ib-sheet-actions .btn-primary",
+];
+
+/** Just the trailing <style> block of an SFC: the rest of the file is not CSS. */
+function styleBlock(source: string): string {
+  return source.slice(source.lastIndexOf("<style"), source.lastIndexOf("</style>"));
+}
+
+/** Selector → declarations, with comments dropped and at-rules skipped. */
+function ruleBodies(css: string): Map<string, string> {
+  const bodies = new Map<string, string>();
+  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  for (const match of stripped.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selector = match[1]!.trim();
+    if (selector.startsWith("@") || selector.startsWith("from") || selector.startsWith("to")) continue;
+    for (const part of selector.split(",")) {
+      const key = part.trim().replace(/\s+/g, " ");
+      bodies.set(key, `${bodies.get(key) ?? ""}${match[2]}`);
+    }
+  }
+  return bodies;
+}
 
 interface HostNode {
   type: string;
@@ -67,7 +117,7 @@ const renderer = createRenderer<HostNode, HostNode>({
 let Panel: Component;
 
 beforeAll(async () => {
-  const filename = fileURLToPath(new URL("../../app/components/lawyer/LawyerReviewPanel.vue", import.meta.url));
+  const filename = panelPath;
   const source = readFileSync(filename, "utf8");
   const { descriptor, errors } = parse(source, { filename });
   if (errors.length) throw errors[0];
@@ -83,9 +133,21 @@ beforeAll(async () => {
     template.code.replace("export function render", "function render")
   }\n__sfc__.render = render;\nexport default __sfc__;`;
   const transformed = await transformWithEsbuild(combined, filename, { loader: "ts", target: "es2022" });
-  const code = transformed.code.replace(/from\s+["']vue["']/g, `from ${JSON.stringify(import.meta.resolve("vue"))}`);
+  // The component under test is evaluated as a data: URL module, so relative
+  // specifiers have no base to resolve against: pin every runtime import it makes.
+  const code = transformed.code
+    .replace(/from\s+["']vue["']/g, `from ${JSON.stringify(import.meta.resolve("vue"))}`)
+    .replace(/from\s+["']lucide-vue-next["']/g, `from ${JSON.stringify(import.meta.resolve("lucide-vue-next"))}`)
+    .replace(
+      /from\s+["']\.\.\/\.\.\/services\/buckets\/voting["']/g,
+      `from ${JSON.stringify(import.meta.resolve("../../app/services/buckets/voting.ts"))}`,
+    );
   const module = await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
   Panel = module.default;
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 const metadata: LawyerReviewBucketMetadata = {
@@ -103,7 +165,7 @@ function review(overrides: Partial<LawyerReviewState> = {}): LawyerReviewState {
     developer: { role: "developer", wallet: "DeveloperWallet", verdict: "pending", documentsHash: "0xdeveloper" },
     attempt: 1,
     status: "SOLD_OUT",
-    legalDeadline: 1_700_000_000,
+    legalDeadline: 1_900_000_000,
     counts: { approved: 0, rejected: 0, pending: 2 },
     percentages: { approved: 0, rejected: 0, pending: 100 },
     staleAssignment: false,
@@ -166,105 +228,79 @@ function mountPanel(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function submit(form: HostNode) {
-  (form.props.onSubmit as (event: unknown) => void)({ preventDefault() {} });
+function click(root: HostNode, label: string): HostNode {
+  const button = findOne(root, (node) => node.type === "button" && text(node) === label);
+  (button.props.onClick as () => void)();
+  return button;
+}
+
+async function openSheet(root: HostNode, label: "Approve documents" | "Reject documents" | "Finalize deal"): Promise<HostNode> {
+  click(root, label);
+  await nextTick();
+  return findOne(root, (node) => node.type === "dialog");
 }
 
 describe("LawyerReviewPanel", () => {
-  it("renders property, cluster, attempt, status, and deadline", () => {
-    const { root } = mountPanel({ review: review({ attempt: 2 }) });
-    const content = text(root);
-    expect(content).toContain("Property 42");
-    expect(content).toContain("devnet");
-    expect(content).toContain("Attempt 2");
-    expect(content).toContain("Sold out");
-    expect(content).toContain("2023-11-14 22:13:20 UTC");
-  });
-
-  it("renders both seat wallets, verdicts, and document hashes", () => {
+  it("renders property, cluster, attempt, status, deadline, and both seat hashes in compact details", () => {
     const { root } = mountPanel({
       review: review({
+        attempt: 2,
         spv: { role: "spv", wallet: "SpvWallet", verdict: "approved", documentsHash: "0xspv-approved" },
         developer: { role: "developer", wallet: "DeveloperWallet", verdict: "rejected", documentsHash: "0xdev-rejected" },
       }),
     });
     const content = text(root);
-    expect(content).toContain("SPV lawyer");
-    expect(content).toContain("SpvWallet");
-    expect(content).toContain("approved");
+    expect(content).toContain("Property 42 · devnet");
+    expect(content).toContain("Attempt 2 of 2");
+    expect(content).toContain("Sold out");
+    expect(content).toContain("2030-03-17 17:46:40 UTC");
+    expect(content).toContain("SPV lawyer approved SpvWallet");
     expect(content).toContain("0xspv-approved");
-    expect(content).toContain("Developer lawyer");
-    expect(content).toContain("DeveloperWallet");
-    expect(content).toContain("rejected");
+    expect(content).toContain("Developer lawyer rejected DeveloperWallet");
     expect(content).toContain("0xdev-rejected");
   });
 
-  it("uses labelled native progress meters for zero approval, rejection, and full pending", () => {
-    const { root } = mountPanel();
-    const meters = byType(root, "progress");
-    expect(meters).toHaveLength(3);
-    expect(meters.map((meter) => [meter.props.value, meter.props.max])).toEqual([[0, "100"], [0, "100"], [100, "100"]]);
-    for (const label of byType(root, "label").filter((node) => ["Approved", "Rejected", "Pending"].includes(text(node)))) {
-      const meter = findOne(root, (node) => node.type === "progress" && node.props.id === label.props.for);
-      expect(meter).toBeDefined();
-    }
-    expect(text(root)).toContain("0 of 2 · 0%");
-    expect(text(root)).toContain("2 of 2 · 100%");
-  });
+  it("shows exact zero, half, and full two-seat counts and percentages without investor voting power", () => {
+    const zero = mountPanel();
+    expect(text(zero.root)).toContain("0 of 2 approved (0%) · 0 rejected (0%) · 2 pending (100%)");
 
-  it("renders 50 percent approved and pending meters", () => {
-    const { root } = mountPanel({
+    const half = mountPanel({
       review: review({
-        spv: { role: "spv", wallet: "SpvWallet", verdict: "approved", documentsHash: HASH },
         counts: { approved: 1, rejected: 0, pending: 1 },
         percentages: { approved: 50, rejected: 0, pending: 50 },
       }),
     });
-    expect(byType(root, "progress").map((meter) => meter.props.value)).toEqual([50, 0, 50]);
-    expect(text(root)).toContain("1 of 2 · 50%");
-  });
+    expect(text(half.root)).toContain("1 of 2 approved (50%) · 0 rejected (0%) · 1 pending (50%)");
 
-  it("renders full approval and rejection meters at 100 percent", () => {
     const approved = mountPanel({
       review: review({
         counts: { approved: 2, rejected: 0, pending: 0 },
         percentages: { approved: 100, rejected: 0, pending: 0 },
       }),
     });
-    expect(byType(approved.root, "progress").map((meter) => meter.props.value)).toEqual([100, 0, 0]);
-    const rejected = mountPanel({
-      review: review({
-        status: "CANCELLED",
-        counts: { approved: 0, rejected: 2, pending: 0 },
-        percentages: { approved: 0, rejected: 100, pending: 0 },
-      }),
-    });
-    expect(byType(rejected.root, "progress").map((meter) => meter.props.value)).toEqual([0, 100, 0]);
+    expect(text(approved.root)).toContain("2 of 2 approved (100%) · 0 rejected (0%) · 0 pending (0%)");
   });
 
-  it("announces loading without rendering review controls", () => {
+  it("announces loading without rendering review actions or details", () => {
     const { root } = mountPanel({ review: null, loading: true });
-    const section = byType(root, "section")[0]!;
-    expect(section.props["aria-busy"]).toBe(true);
+    expect(byType(root, "section")[0]!.props["aria-busy"]).toBe(true);
     expect(findOne(root, (node) => node.props.role === "status").children.length).toBeGreaterThan(0);
     expect(text(root)).toContain("Loading lawyer review");
-    expect(byType(root, "form")).toHaveLength(0);
-    expect(byType(root, "progress")).toHaveLength(0);
+    expect(byType(root, "dialog")).toHaveLength(0);
+    expect(byType(root, "details")).toHaveLength(0);
   });
 
   it("announces loading errors and emits retry", () => {
     const { root, emitted } = mountPanel({ review: null, error: "Indexer unavailable" });
-    const alert = findOne(root, (node) => node.props.role === "alert");
-    expect(text(alert)).toContain("Indexer unavailable");
-    const retry = findOne(root, (node) => node.type === "button" && text(node) === "Retry review");
-    (retry.props.onClick as () => void)();
+    expect(text(findOne(root, (node) => node.props.role === "alert"))).toContain("Indexer unavailable");
+    click(root, "Retry review");
     expect(emitted.retry).toEqual([[]]);
   });
 
   it("shows an unavailable state when no active review exists", () => {
     const { root } = mountPanel({ review: null });
     expect(text(root)).toContain("Lawyer review is unavailable");
-    expect(byType(root, "form")).toHaveLength(0);
+    expect(byType(root, "dialog")).toHaveLength(0);
   });
 
   it("fails closed for stale assignments even if other props look actionable", () => {
@@ -274,31 +310,37 @@ describe("LawyerReviewPanel", () => {
       review: review({ staleAssignment: true, settlementReady: true }),
     });
     expect(text(root)).toContain("Lawyer assignments changed");
-    expect(byType(root, "fieldset")[0]!.props.disabled).toBe(true);
-    expect(byType(root, "button").some((button) => text(button).includes("Execute deal"))).toBe(false);
+    expect(findOne(root, (node) => node.type === "button" && text(node) === "Approve documents").props.disabled).toBe(true);
+    expect(byType(root, "button").some((button) => text(button).includes("Finalize deal"))).toBe(false);
+  });
+
+  it("describes hash mismatches across all decided lawyer seats", () => {
+    const { root } = mountPanel({ review: review({ hashMismatch: true }) });
+    expect(text(root)).toContain("The decided lawyer seats reference different document hashes");
+    expect(text(root)).not.toContain("The approved seats reference different document hashes");
   });
 
   it("disables confirmation for missing documents and emits the optional upload action", () => {
     const { root, emitted } = mountPanel({ eligibleLawyer: true, missingDocuments: true, canUpload: true });
     expect(text(root)).toContain("One or both lawyer documents are missing");
     expect(text(root)).toContain("hash is unavailable");
-    expect(byType(root, "fieldset")[0]!.props.disabled).toBe(true);
-    const upload = findOne(root, (node) => node.type === "button" && text(node) === "Upload replacement document");
-    (upload.props.onClick as () => void)();
+    expect(findOne(root, (node) => node.type === "button" && text(node) === "Approve documents").props.disabled).toBe(true);
+    click(root, "Upload replacement document");
     expect(emitted.upload).toEqual([[]]);
   });
 
-  it("shows the shortened current document-set hash with the full hash available", () => {
+  it("keeps the full document-set hash available in details and on the approval sheet", async () => {
     const { root } = mountPanel({ eligibleLawyer: true });
     const hash = findOne(root, (node) => node.props.title === HASH);
     expect(text(hash)).toBe("0x01234567…89abcdef");
-    expect(text(root)).toContain("Confirm this exact document set");
+    const dialog = await openSheet(root, "Approve documents");
+    expect(text(dialog)).toContain("approve this exact document set");
+    expect(findOne(dialog, (node) => node.props.title === HASH)).toBeDefined();
   });
 
   it("exposes action errors assertively and notices politely", () => {
     const { root } = mountPanel({ actionError: "Wallet rejected the request", notice: "Review refreshed" });
-    const alert = findOne(root, (node) => node.props.role === "alert");
-    expect(text(alert)).toContain("Wallet rejected the request");
+    expect(text(findOne(root, (node) => node.props.role === "alert"))).toContain("Wallet rejected the request");
     const status = findOne(root, (node) => node.props.role === "status" && text(node).includes("Review refreshed"));
     expect(status.props["aria-live"]).toBe("polite");
   });
@@ -307,144 +349,166 @@ describe("LawyerReviewPanel", () => {
     const { root } = mountPanel({ eligibleLawyer: false });
     expect(text(root)).toContain("Read-only review");
     expect(text(root)).toContain("currently assigned SPV and developer lawyers");
+    expect(byType(root, "button").some((button) => text(button) === "Approve documents")).toBe(false);
+  });
+
+  it("opens a native approval sheet from the compact banner instead of rendering an inline verdict form", async () => {
+    const { root, emitted } = mountPanel({ eligibleLawyer: true });
+    const region = findOne(root, (node) => node.props.role === "region" && node.props["aria-label"] === "Lawyer document review");
+    expect(region).toBeDefined();
     expect(byType(root, "form")).toHaveLength(0);
-  });
 
-  it("renders an eligible lawyer form with explicit required radio controls", () => {
-    const { root } = mountPanel({ eligibleLawyer: true });
-    expect(byType(root, "form")).toHaveLength(1);
-    expect(text(byType(root, "legend")[0]!)).toBe("Document verdict");
-    const radios = byType(root, "input").filter((input) => input.props.type === "radio");
-    expect(radios.map((radio) => radio.props.value)).toEqual(["approve", "reject"]);
-    expect(radios.every((radio) => Object.hasOwn(radio.props, "required"))).toBe(true);
-    expect(new Set(radios.map((radio) => radio.props.name)).size).toBe(1);
-    expect(byType(root, "label").some((label) => text(label) === "Approve")).toBe(true);
-    expect(byType(root, "label").some((label) => text(label) === "Reject")).toBe(true);
-  });
+    const dialog = await openSheet(root, "Approve documents");
+    expect(dialog.props["aria-labelledby"]).toBeTruthy();
+    expect(dialog.props.role).toBeUndefined();
+    expect(dialog.props["aria-modal"]).toBeUndefined();
+    expect(text(dialog)).toContain("Approve documents");
+    expect(findOne(dialog, (node) => node.type === "button" && text(node) === "Cancel").props.autofocus).toBe("");
 
-  it("emits confirm(true) for approval", () => {
-    const { root, emitted } = mountPanel({ eligibleLawyer: true });
-    submit(byType(root, "form")[0]!);
+    click(dialog, "Submit review");
     expect(emitted.confirm).toEqual([[true]]);
-    expect(emitted.execute).toEqual([]);
   });
 
-  it("emits confirm(false) after selecting rejection", async () => {
+  it("emits rejection from its own confirmation sheet", async () => {
     const { root, emitted } = mountPanel({ eligibleLawyer: true });
-    const reject = findOne(root, (node) => node.type === "input" && node.props.value === "reject");
-    (reject.props.onChange as () => void)();
-    await nextTick();
-    submit(byType(root, "form")[0]!);
+    const dialog = await openSheet(root, "Reject documents");
+    expect(text(dialog)).toContain("Reject documents");
+    click(dialog, "Submit review");
     expect(emitted.confirm).toEqual([[false]]);
   });
 
   it("locks confirmation immediately after submission to prevent duplicates", async () => {
     const { root, emitted } = mountPanel({ eligibleLawyer: true });
-    submit(byType(root, "form")[0]!);
+    const dialog = await openSheet(root, "Approve documents");
+    click(dialog, "Submit review");
     await nextTick();
-    const button = findOne(root, (node) => node.type === "button" && text(node).includes("Submit"));
-    expect(button.props.disabled).toBe(true);
-    submit(byType(root, "form")[0]!);
+    expect(findOne(root, (node) => node.type === "button" && text(node) === "Approve documents").props.disabled).toBe(true);
+    click(dialog, "Submit review");
     expect(emitted.confirm).toEqual([[true]]);
   });
 
   it("keeps confirmation locked when the Indexer reflects the submitted verdict", async () => {
     const { root, emitted, update } = mountPanel({ eligibleLawyer: true });
-    submit(byType(root, "form")[0]!);
+    const dialog = await openSheet(root, "Approve documents");
+    click(dialog, "Submit review");
     await update({
-      review: review({
-        spv: { role: "spv", wallet: "SpvWallet", verdict: "approved", documentsHash: HASH },
-      }),
+      review: review({ spv: { role: "spv", wallet: "SpvWallet", verdict: "approved", documentsHash: HASH } }),
       confirming: false,
     });
-    const button = findOne(root, (node) => node.type === "button" && text(node).includes("Submit"));
-    expect(button.props.disabled).toBe(true);
-    submit(byType(root, "form")[0]!);
+    expect(findOne(root, (node) => node.type === "button" && text(node) === "Approve documents").props.disabled).toBe(true);
+    click(dialog, "Submit review");
     expect(emitted.confirm).toEqual([[true]]);
   });
 
   it("keeps an already-decided lawyer disabled without showing a submitted state", () => {
-    const { root, emitted } = mountPanel({
+    const { root } = mountPanel({
       eligibleLawyer: true,
       submissionAllowed: false,
-      review: review({
-        spv: { role: "spv", wallet: "SpvWallet", verdict: "approved", documentsHash: HASH },
-      }),
+      review: review({ spv: { role: "spv", wallet: "SpvWallet", verdict: "approved", documentsHash: HASH } }),
     });
-    const button = findOne(root, (node) => node.type === "button" && text(node).includes("Submit"));
-    expect(button.props.disabled).toBe(true);
-    expect(text(button)).toBe("Submit document verdict");
-    submit(byType(root, "form")[0]!);
-    expect(emitted.confirm).toEqual([]);
+    expect(findOne(root, (node) => node.type === "button" && text(node) === "Approve documents").props.disabled).toBe(true);
+    expect(text(root)).not.toContain("Submitted review");
   });
 
   it("resets the confirmation lock when the acting wallet changes", async () => {
     const { root, emitted, update } = mountPanel({ eligibleLawyer: true });
-    submit(byType(root, "form")[0]!);
+    const dialog = await openSheet(root, "Approve documents");
+    click(dialog, "Submit review");
     await update({
       walletAddress: metadata.developerLawyer,
-      review: review({
-        spv: { role: "spv", wallet: "SpvWallet", verdict: "approved", documentsHash: HASH },
-      }),
+      review: review({ spv: { role: "spv", wallet: "SpvWallet", verdict: "approved", documentsHash: HASH } }),
       confirming: false,
     });
-    const button = findOne(root, (node) => node.type === "button" && text(node).includes("Submit"));
-    expect(text(button)).toBe("Submit document verdict");
-    expect(button.props.disabled).toBe(false);
-    submit(byType(root, "form")[0]!);
+    expect(findOne(root, (node) => node.type === "button" && text(node) === "Approve documents").props.disabled).toBe(false);
+    click(dialog, "Submit review");
     expect(emitted.confirm).toEqual([[true], [true]]);
   });
 
-  it("allows confirmation for a new review attempt", async () => {
-    const { root, update } = mountPanel({ eligibleLawyer: true });
-    submit(byType(root, "form")[0]!);
-    await update({ review: review({ attempt: 2 }) });
-    const button = findOne(root, (node) => node.type === "button" && text(node).includes("Submit"));
-    expect(button.props.disabled).toBe(false);
-  });
+  it("allows confirmation for a new review attempt or document set", async () => {
+    const attempt = mountPanel({ eligibleLawyer: true });
+    const attemptDialog = await openSheet(attempt.root, "Approve documents");
+    click(attemptDialog, "Submit review");
+    await attempt.update({ review: review({ attempt: 2 }) });
+    expect(findOne(attempt.root, (node) => node.type === "button" && text(node) === "Approve documents").props.disabled).toBe(false);
 
-  it("allows confirmation for a new document set", async () => {
-    const { root, update } = mountPanel({ eligibleLawyer: true });
-    submit(byType(root, "form")[0]!);
-    await update({ documentsHash: `0x${"ab".repeat(32)}` });
-    const button = findOne(root, (node) => node.type === "button" && text(node).includes("Submit"));
-    expect(button.props.disabled).toBe(false);
+    const documents = mountPanel({ eligibleLawyer: true });
+    const documentsDialog = await openSheet(documents.root, "Approve documents");
+    click(documentsDialog, "Submit review");
+    await documents.update({ documentsHash: `0x${"ab".repeat(32)}` });
+    expect(findOne(documents.root, (node) => node.type === "button" && text(node) === "Approve documents").props.disabled).toBe(false);
   });
 
   it("allows confirmation retry after an action error", async () => {
-    const { root, update } = mountPanel({ eligibleLawyer: true });
-    submit(byType(root, "form")[0]!);
+    const { root, emitted, update } = mountPanel({ eligibleLawyer: true });
+    const dialog = await openSheet(root, "Approve documents");
+    click(dialog, "Submit review");
     await update({ actionError: "Transaction failed", confirming: false });
-    const button = findOne(root, (node) => node.type === "button" && text(node).includes("Submit"));
-    expect(button.props.disabled).toBe(false);
+    expect(byType(root, "dialog")).toHaveLength(1);
+    expect(findOne(root, (node) => node.type === "button" && text(node) === "Approve documents").props.disabled).toBe(false);
+    expect(text(dialog)).toContain("Transaction failed");
+    expect(findOne(dialog, (node) => node.type === "button" && text(node) === "Submit review").props.disabled).toBe(false);
+    click(dialog, "Submit review");
+    expect(emitted.confirm).toEqual([[true], [true]]);
   });
 
-  it("links submitted signatures to the devnet explorer with an escaped signature", () => {
-    const { root } = mountPanel({ transactionSignatures: ["signature/one"] });
-    const link = findOne(root, (node) => node.type === "a" && text(node).includes("signature/one"));
-    expect(link.props.href).toBe("https://solscan.io/tx/signature%2Fone?cluster=devnet");
-    expect(link.props.target).toBe("_blank");
-    expect(link.props.rel).toBe("noopener");
+  it("reacts to the legal deadline without a refresh and blocks late sheet actions with visible feedback", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_899_999_999_000);
+    const { root, emitted } = mountPanel({ eligibleLawyer: true });
+    const dialog = await openSheet(root, "Approve documents");
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await nextTick();
+    expect(findOne(root, (node) => node.type === "button" && text(node) === "Approve documents").props.disabled).toBe(true);
+    expect(findOne(dialog, (node) => node.type === "button" && text(node) === "Submit review").props.disabled).toBe(true);
+    expect(text(dialog)).toContain("The legal review deadline has passed");
+    click(dialog, "Submit review");
+    expect(emitted.confirm).toEqual([]);
+
+    click(dialog, "Cancel");
+    await nextTick();
+    expect(byType(root, "dialog")).toHaveLength(0);
+    click(root, "Approve documents");
+    await nextTick();
+    expect(byType(root, "dialog")).toHaveLength(0);
+    expect(text(root)).toContain("The legal review deadline has passed");
   });
 
-  it("links submitted signatures to mainnet without a devnet cluster override", () => {
-    const { root } = mountPanel({
+  it("prevents Escape dismissal during submission and explains the delay in a live status", async () => {
+    const { root, update } = mountPanel({ eligibleLawyer: true });
+    const dialog = await openSheet(root, "Approve documents");
+    await update({ confirming: true });
+    let prevented = false;
+    (dialog.props.onCancel as (event: { preventDefault: () => void }) => void)({ preventDefault: () => { prevented = true } });
+    await nextTick();
+    expect(prevented).toBe(true);
+    expect(text(dialog)).toContain("Wait for the wallet transaction to finish");
+    expect(findOne(dialog, (node) => node.props.role === "status").props["aria-live"]).toBe("polite");
+  });
+
+  it("links submitted signatures to the correct cluster explorer", () => {
+    const devnet = mountPanel({ transactionSignatures: ["signature/one"] });
+    const devnetLink = findOne(devnet.root, (node) => node.type === "a" && text(node).includes("signature/one"));
+    expect(devnetLink.props.href).toBe("https://solscan.io/tx/signature%2Fone?cluster=devnet");
+    expect(devnetLink.props.target).toBe("_blank");
+    expect(devnetLink.props.rel).toBe("noopener");
+
+    const mainnet = mountPanel({
       metadata: { ...metadata, cluster: "mainnet" },
       transactionSignatures: ["mainnet-signature"],
     });
-    const link = findOne(root, (node) => node.type === "a" && text(node).includes("mainnet-signature"));
-    expect(link.props.href).toBe("https://solscan.io/tx/mainnet-signature");
+    expect(findOne(mainnet.root, (node) => node.type === "a").props.href).toBe("https://solscan.io/tx/mainnet-signature");
   });
 
-  it("shows execute deal only to a connected wallet when settlement is ready", async () => {
+  it("shows the finalize trigger only to a connected wallet when settlement is ready", async () => {
     const { root, update } = mountPanel({ walletConnected: true });
-    expect(byType(root, "button").some((button) => text(button).includes("Execute deal"))).toBe(false);
+    expect(byType(root, "button").some((button) => text(button).includes("Finalize deal"))).toBe(false);
     expect(text(root)).toContain("not ready");
     await update({ review: review({ status: "LEGAL", settlementReady: true }), walletConnected: false });
-    expect(byType(root, "button").some((button) => text(button).includes("Execute deal"))).toBe(false);
+    expect(byType(root, "button").some((button) => text(button).includes("Finalize deal"))).toBe(false);
     expect(text(root)).toContain("Connect a wallet");
     await update({ walletConnected: true });
-    expect(byType(root, "button").some((button) => text(button) === "Execute deal")).toBe(true);
+    expect(byType(root, "button").some((button) => text(button) === "Finalize deal")).toBe(true);
   });
 
   it("honors the orchestration-derived execute gate for deadlines and eligibility", () => {
@@ -453,30 +517,85 @@ describe("LawyerReviewPanel", () => {
       executeAllowed: false,
       review: review({ status: "LEGAL", settlementReady: true }),
     });
-    expect(byType(root, "button").some((button) => text(button).includes("Execute deal"))).toBe(false);
+    expect(byType(root, "button").some((button) => text(button).includes("Finalize deal"))).toBe(false);
     expect(text(root)).toContain("not ready");
   });
 
-  it("lets a read-only connected wallet emit execute when ready", () => {
+  it("confirms execution through a finalize sheet titled like its trigger", async () => {
     const { root, emitted } = mountPanel({
       eligibleLawyer: false,
       walletConnected: true,
       review: review({ status: "LEGAL", settlementReady: true }),
     });
-    const execute = findOne(root, (node) => node.type === "button" && text(node) === "Execute deal");
-    (execute.props.onClick as () => void)();
+    const dialog = await openSheet(root, "Finalize deal");
+    expect(text(findOne(dialog, (node) => node.type === "h3"))).toBe("Finalize deal");
+    click(dialog, "Execute deal");
     expect(emitted.execute).toEqual([[]]);
     expect(emitted.confirm).toEqual([]);
   });
 
-  it("disables execution and announces its busy state while executing", () => {
+  it("disables finalization and announces its busy state while executing", () => {
     const { root } = mountPanel({
       walletConnected: true,
       executing: true,
       review: review({ status: "LEGAL", settlementReady: true }),
     });
-    const execute = findOne(root, (node) => node.type === "button" && text(node).includes("Executing deal"));
-    expect(execute.props.disabled).toBe(true);
-    expect(execute.props["aria-busy"]).toBe(true);
+    const finalize = findOne(root, (node) => node.type === "button" && text(node) === "Finalizing…");
+    expect(finalize.props.disabled).toBe(true);
+    expect(finalize.props["aria-busy"]).toBe(true);
+  });
+
+  it("counts the legal deadline down in the governance banner's relative format", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-10T10:00:00.000Z"));
+    const legalDeadline = Date.parse("2026-10-10T12:15:00.000Z") / 1000;
+    const { root } = mountPanel({ review: review({ legalDeadline }) });
+    expect(text(root)).toContain(votingTimeLeftLabel(new Date(legalDeadline * 1000).toISOString()));
+    expect(text(root)).toContain("2h 15m left");
+
+    await vi.advanceTimersByTimeAsync(3 * 60 * 60 * 1000);
+    await nextTick();
+    expect(text(root)).toContain("Closed");
+  });
+
+  it("wears the shared banner and sheet rule set instead of a per-component copy", () => {
+    const shared = ruleBodies(readFileSync(sharedStylesPath, "utf8"));
+    const panel = ruleBodies(styleBlock(readFileSync(panelPath, "utf8")));
+    const page = ruleBodies(styleBlock(readFileSync(pagePath, "utf8")));
+    for (const selector of SHARED_SURFACE_SELECTORS) {
+      expect(shared.get(selector) ?? "", `shared rule for ${selector}`).not.toBe("");
+      expect(panel.has(selector), `panel re-declares ${selector}`).toBe(false);
+      expect(page.has(selector), `page re-declares ${selector}`).toBe(false);
+    }
+
+    // The panel styles nothing of the shared surface itself.
+    expect([...panel.keys()].filter((selector) => selector.includes(".ib-"))).toEqual([]);
+    // The page keeps only its drag-to-dismiss extras on the shared sheet.
+    expect(page.get(".ib-offer-sheet")).toContain("touch-action: none");
+    expect(page.get(".ib-offer-sheet")).not.toContain("padding");
+
+    // The values the panel had drifted on, taken from the reference flow.
+    expect(shared.get(".ib-offer-inner")).toContain("gap: 12px");
+    expect(shared.get(".ib-offer-inner")).toContain("padding: 16px 48px");
+    expect(shared.get(".ib-offer-amount")).toContain("font-size: 14px");
+    expect(shared.get(".ib-offer-note")).toContain("font-size: 12px");
+    expect(shared.get(".ib-offer-note")).toContain("text-align: center");
+    expect(shared.get(".ib-offer-action")).toContain("white-space: nowrap");
+    expect(shared.get(".ib-offer-action")).not.toContain("min-height");
+    expect(shared.get(".ib-sheet-actions .btn")).not.toContain("min-height");
+    expect(shared.get(".review-notice")).toBe(shared.get(".ib-vote-notice"));
+    expect(shared.get(".ib-vote-notice")).toContain("font-size: 14px");
+    expect(shared.get(".ib-vote-notice")).not.toContain("background");
+    expect(shared.get(".ib-sheet-error")).toContain("font-size: 13px");
+    expect(shared.get(".ib-sheet-error")).not.toContain("background");
+
+    // Buttons stack at the chat column width in both flows.
+    expect(readFileSync(sharedStylesPath, "utf8")).toMatch(
+      /@media \(max-width: 840px\)[\s\S]*?\.ib-offer-actions\s*\{[^}]*flex-direction: column/,
+    );
+
+    const panelSource = readFileSync(panelPath, "utf8");
+    expect(panelSource).toContain('class="review-notice"');
+    expect(panelSource).toContain('class="ib-sheet-error"');
   });
 });

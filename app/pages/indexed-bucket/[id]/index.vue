@@ -3,7 +3,7 @@ import type { ApiBucket, ApiMessage, OperationUpdate } from "../../../services/b
 import { isFileMessage, KEY_SHARING_MESSAGE_TAG, normalizeX25519ToJwkX } from "../../../services/buckets/valueCodecs"
 import { ProfileClient } from "../../../services/profile/profileClient"
 import { findViewersWithoutKeyAccess } from "../../../services/messages/keySharingCoverage"
-import { latestKeySharingMessage, parsePlaintextKeySharingBody, resolveKeyAccessState, type KeyAccessState } from "../../../services/messages/keyAccess"
+import { compareKeySharingMessages, latestKeySharingMessage, parsePlaintextKeySharingBody, resolveKeyAccessState, type KeyAccessState } from "../../../services/messages/keyAccess"
 import { withoutClaimedMessages } from "../../../services/messages/pendingMessageReconciliation"
 import { connectBucketMessagesSocket, type BucketMessagesSocket } from "../../../services/buckets/bucketMessagesSocket"
 import { createIncomingMessagePump } from "../../../services/messages/incomingMessagePump"
@@ -103,6 +103,10 @@ import {
   type VotingOpenPayload,
   type VotingMessageEntry,
 } from "../../../services/buckets/voting"
+import {
+  LAWYER_TERMS_VERDICT_TAGS,
+  isLawyerTermsVerdictTag,
+} from "../../../services/buckets/lawyerTerms"
 import {
   buildFinalizeSpvElectionTransaction,
   buildVoteOnSpvLawyerTransaction,
@@ -219,13 +223,19 @@ const lawyerTransactionSignatures = ref<string[]>([])
 async function submitLawyerVerdict(approve: boolean): Promise<void> {
   lawyerTransactionSignatures.value = []
   const result = await submitLawyerVerdictRequest(approve)
-  if (result) lawyerTransactionSignatures.value = [result.signature]
+  if (result) {
+    lawyerTransactionSignatures.value = [result.signature]
+    await refreshGovernanceAnnouncementLanes()
+  }
 }
 
 async function executeLawyerDeal(): Promise<void> {
   lawyerTransactionSignatures.value = []
   const results = await executeLawyerDealRequest()
-  if (results) lawyerTransactionSignatures.value = results.map(result => result.signature)
+  if (results) {
+    lawyerTransactionSignatures.value = results.map(result => result.signature)
+    await refreshGovernanceAnnouncementLanes()
+  }
 }
 
 async function refreshLawyerReview(): Promise<void> {
@@ -703,6 +713,7 @@ const realXmarketPurchasedTxUrl = computed(() => {
 const VOTING_SYSTEM_CONTRIBUTOR = "system:voting"
 
 const votingMessages = ref<ApiMessage[]>([])
+const lawyerVerdictMessages = ref<ApiMessage[]>([])
 const indexerSpvElection = ref<IndexerSpvElection | null>(null)
 const indexerProposal = ref<IndexerProposal | null>(null)
 const indexerChallenge = ref<IndexerChallenge | null>(null)
@@ -711,26 +722,31 @@ const indexerHoldingLoaded = ref(false)
 
 const votingEntries = computed<VotingMessageEntry[]>(() =>
   votingMessages.value.flatMap((m) => {
-    const payload = parseVotingPayload(m.ipfsContent)
+    const payload = parseVotingPayload(decryptedById.value[m.id] ?? payloadById.value[m.id] ?? m.ipfsContent)
     return payload ? [{ message: m, payload }] : []
   }),
 )
 const activeVotes = computed(() => deriveActiveVote(votingEntries.value))
 const lawyerTermsMetadata = computed(() => parseLawyerTermsBucketProperties(bucket.value?.properties))
 
-/** The listing this bucket's votes belong to (bucket metadata first, announcement fallback). */
+/** The listing this bucket's investor votes belong to; review has its own chain reader. */
 const votingListingId = computed(() => {
+  if (isLawyerReviewBucket.value) return undefined
   const newest = votingEntries.value[votingEntries.value.length - 1]
   return lawyerTermsMetadata.value?.listingId ?? newest?.payload.listingId
 })
 
 /** The open vote or due SPV finalization a connected investor can act on, by urgency. */
 const actionableVote = computed(() => {
-  for (const kind of ["terms", "challenge", "proposal"] as VotingKind[]) {
+  if (isLawyerReviewBucket.value) return undefined
+  for (const kind of ["terms", "challenge", "proposal"] as const) {
     const active = activeVotes.value[kind]
     if (!active || active.payload.status !== "open") continue
     const finalizationDue = kind === "terms" && indexerSpvElection.value?.finalization
-    if (Date.parse(active.payload.expiresAt) <= Date.now() && !finalizationDue) continue
+    // A round announced without a deadline has no countdown and never expires here.
+    const expired = active.payload.expiresAt !== undefined
+      && Date.parse(active.payload.expiresAt) <= Date.now()
+    if (expired && !finalizationDue) continue
     return active
   }
   return undefined
@@ -744,13 +760,22 @@ const spvElectionFinalization = computed(() =>
 const activeElection = computed(() => {
   const active = activeVotes.value.election
   if (!active || active.payload.status !== "open") return undefined
-  return Date.parse(active.payload.expiresAt) > Date.now() ? active : undefined
+  return active.payload.expiresAt === undefined || Date.parse(active.payload.expiresAt) > Date.now()
+    ? active
+    : undefined
 })
 
 /** Live tallies for an open vote, chain-truth first via the indexer. */
 function liveTalliesFor(payload: VotingOpenPayload): { yes?: number; no?: number; abstain?: number } {
   switch (payload.kind) {
     case "terms": {
+      if (isLawyerReviewBucket.value) {
+        return {
+          yes: lawyerState.value?.counts.approved,
+          no: lawyerState.value?.counts.rejected,
+          abstain: lawyerState.value?.counts.pending,
+        }
+      }
       // The SPV-lawyer election: turnout over the sold shares is the split bar.
       const election = indexerSpvElection.value
       if (!election || election.totalVotePower === undefined || election.soldShareAmount === undefined) {
@@ -1013,6 +1038,7 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
       : []),
     ...realxmarketMessages.value.filter((m) => !visibleMessages.some((x) => x.id === m.id)),
     ...votingMessages.value.filter((m) => !visibleMessages.some((x) => x.id === m.id)),
+    ...lawyerVerdictMessages.value.filter((m) => !visibleMessages.some((x) => x.id === m.id)),
   ]
 
   const sortedMessages = [...visibleMessages, ...taggedExtras].sort(
@@ -1052,47 +1078,66 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
       }
     }
 
-    // Voting payloads render as a vote card; tallies come from the indexer
-    // read-back for open votes, from the result announcement itself for finals.
+    // Voting payloads render as a vote card. Review announcements always use
+    // the two Indexer seats; chat never supplies lawyer verdict authority.
     let voting: ChatVotingInfo | undefined
     if (isVotingTag(m.tag)) {
       const votingPayload = parseVotingPayload(payload ?? m.ipfsContent)
       if (votingPayload) {
-        const tallies = votingPayload.status === "open"
-          ? liveTalliesFor(votingPayload)
-          : { yes: votingPayload.yes, no: votingPayload.no, abstain: votingPayload.abstain }
-        const pct = votingPercentages(tallies.yes, tallies.no)
+        const reviewAnnouncement = isLawyerReviewBucket.value && votingPayload.kind === "terms"
+        const tallies = reviewAnnouncement
+          ? {
+              yes: lawyerState.value?.counts.approved,
+              no: lawyerState.value?.counts.rejected,
+              abstain: lawyerState.value?.counts.pending,
+            }
+          : votingPayload.status === "open"
+            ? liveTalliesFor(votingPayload)
+            : { yes: votingPayload.yes, no: votingPayload.no, abstain: votingPayload.abstain }
+        const pct = reviewAnnouncement
+          ? {
+              yesPct: lawyerState.value?.percentages.approved,
+              noPct: lawyerState.value?.percentages.rejected,
+              pendingPct: lawyerState.value?.percentages.pending,
+            }
+          : { ...votingPercentages(tallies.yes, tallies.no), pendingPct: undefined }
         const sides = votingSideLabels(votingPayload.kind)
         voting = {
           kind: votingPayload.kind,
-          kindLabel: votingKindLabel(votingPayload.kind),
+          kindLabel: reviewAnnouncement ? "Lawyer document review" : votingKindLabel(votingPayload.kind),
           status: votingPayload.status,
           statusLabel: votingStatusLabel(votingPayload.status),
           round: votingPayload.round,
           id: votingPayload.id,
           documentsHash: votingPayload.documentsHash,
-          ...(votingPayload.kind === "terms" && lawyerTermsMetadata.value
+          review: reviewAnnouncement,
+          ...(!reviewAnnouncement && votingPayload.kind === "terms" && lawyerTermsMetadata.value
             ? { lawyer: lawyerTermsMetadata.value.lawyer }
             : {}),
           expiresAt: votingPayload.status === "open" ? votingPayload.expiresAt : undefined,
           yes: tallies.yes,
           no: tallies.no,
           abstain: tallies.abstain,
-          yesPct: pct?.yesPct,
-          noPct: pct?.noPct,
-          yesLabel: sides.yes,
-          noLabel: sides.no,
+          yesPct: pct.yesPct,
+          noPct: pct.noPct,
+          pendingPct: pct.pendingPct,
+          yesLabel: reviewAnnouncement ? "Approve" : sides.yes,
+          noLabel: reviewAnnouncement ? "Reject" : sides.no,
+          pendingLabel: reviewAnnouncement ? "Pending" : undefined,
         }
       }
     }
 
     // Key-sharing system notices always name the sender — by profile nickname
     // when there is one, otherwise the address — never "You", even for the
-    // connected user's own key rotations. The API's governance poster renders
-    // as "System".
+    // connected user's own key rotations. Governance announcements always render
+    // as "System": the API posts the terms bucket's under `system:voting`, and
+    // the review bucket's under the bucket admin address, which is the operator's
+    // signing key rather than a chat participant.
     const senderAddress = m.contributor ?? ""
     const profile = profilesByAddress.value[senderAddress]
-    const senderLabel = senderAddress === VOTING_SYSTEM_CONTRIBUTOR
+    const governanceAnnouncement = isLawyerReviewBucket.value && isVotingTag(m.tag)
+    const senderLabel = senderAddress === VOTING_SYSTEM_CONTRIBUTOR || governanceAnnouncement
       ? "System"
       : m.tag !== KEY_SHARING_MESSAGE_TAG && outgoing
         ? "You"
@@ -1153,6 +1198,23 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
 
   return entries
 })
+
+async function fetchGovernanceAnnouncementLanes(): Promise<void> {
+  const [votingLaneResults, lawyerVerdictLaneResults] = await Promise.all([
+    Promise.all(VOTING_TAGS.map((tag) => bucketsRepository.fetchMessagesByTag(bucketId.value, tag))),
+    Promise.all(LAWYER_TERMS_VERDICT_TAGS.map((tag) => bucketsRepository.fetchMessagesByTag(bucketId.value, tag))),
+  ])
+  votingMessages.value = votingLaneResults.flat()
+  lawyerVerdictMessages.value = lawyerVerdictLaneResults.flat()
+}
+
+async function refreshGovernanceAnnouncementLanes(): Promise<void> {
+  await fetchGovernanceAnnouncementLanes()
+  const tagged = [...votingMessages.value, ...lawyerVerdictMessages.value]
+  await hydratePayloads(tagged)
+  await decryptMessages(tagged)
+  await loadSenderProfiles(tagged)
+}
 
 // ── Load everything ────────────────────────────────────────────────
 async function loadAll() {
@@ -1216,14 +1278,15 @@ async function loadAll() {
     keySharingMessages.value = await bucketsRepository.fetchMessagesByTag(bucketId.value, KEY_SHARING_MESSAGE_TAG)
     viewersMissingKeyCount.value = null // data changed — the lazy viewer check must re-run
 
-    // 1b. Governance voting messages live under their own tags (property buckets)
-    const votingLaneResults = await Promise.all(
-      VOTING_TAGS.map((tag) => bucketsRepository.fetchMessagesByTag(bucketId.value, tag)),
-    )
-    votingMessages.value = votingLaneResults.flat()
+    // 1b. Governance and lawyer verdict messages live under their own tags.
+    await fetchGovernanceAnnouncementLanes()
 
     // 2. Hydrate their payloads so we can decrypt them
-    await hydratePayloads(keySharingMessages.value)
+    await hydratePayloads([
+      ...keySharingMessages.value,
+      ...votingMessages.value,
+      ...lawyerVerdictMessages.value,
+    ])
 
     // 3. Decrypt all key-sharing messages (latest first) to find the active key
     await decryptKeySharingFromMessages(keySharingMessages.value)
@@ -1231,9 +1294,10 @@ async function loadAll() {
     // 4. Now hydrate all remaining message payloads
     await hydratePayloads(detail.messages)
 
-    // 5. Decrypt normal messages using the active key (realXhub marketplace
-    // and role-status payloads ride the same bucket key)
+    // 5. Decrypt normal and tagged messages using the active key. Voting status
+    // JSON remains plaintext; lawyer approvals use the same compact JWE as chat.
     await decryptMessages(detail.messages)
+    await decryptMessages([...votingMessages.value, ...lawyerVerdictMessages.value])
     if (isRealXhubBucket.value) {
       await decryptMessages([...realxhubMarketMessages.value, ...realxhubStatusMessages.value])
     }
@@ -1255,6 +1319,8 @@ async function loadAll() {
       ...realxhubMarketMessages.value,
       ...realxhubStatusMessages.value,
       ...realxmarketMessages.value,
+      ...votingMessages.value,
+      ...lawyerVerdictMessages.value,
     ])
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Failed to load indexed data"
@@ -1386,7 +1452,7 @@ async function decryptKeySharingFromMessages(keySharingMessages: ApiMessage[]) {
     }
   }))
 
-  entries.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || Number(a.messageId) - Number(b.messageId))
+  entries.sort(compareKeySharingMessages)
   // Single assignment at the end — never clear-then-rebuild: readers like the
   // composer's key-access gate must not observe a half-built key set.
   bucketKeyEntries.value = entries
@@ -1406,9 +1472,7 @@ function keyEntryForMessage(m: ApiMessage): BucketKeyEntry | null {
   const entries = bucketKeyEntries.value
   let match: BucketKeyEntry | null = null
   for (const entry of entries) {
-    const sharedBefore = Date.parse(entry.createdAt) < Date.parse(m.createdAt)
-      || (entry.createdAt === m.createdAt && Number(entry.messageId) < Number(m.messageId))
-    if (sharedBefore) match = entry
+    if (compareKeySharingMessages(entry, m) < 0) match = entry
   }
   return match ?? entries[0] ?? null
 }
@@ -1568,6 +1632,7 @@ function isKnownMessageId(id: string): boolean {
     || realxhubStatusMessages.value.some(m => m.id === id)
     || realxmarketMessages.value.some(m => m.id === id)
     || votingMessages.value.some(m => m.id === id)
+    || lawyerVerdictMessages.value.some(m => m.id === id)
 }
 
 // Runs the per-message slice of loadAll's pipeline for one live message.
@@ -1589,7 +1654,11 @@ async function applyIncomingMessage(m: ApiMessage): Promise<void> {
     messages.value = [...messages.value, m]
     // The new key may unlock messages and attachments whose decrypt failed
     // under the previous key set.
-    await decryptMessages(messages.value)
+    await decryptMessages([
+      ...messages.value,
+      ...votingMessages.value,
+      ...lawyerVerdictMessages.value,
+    ])
     await hydrateAttachments(messages.value)
     await refreshLawyerReview()
     await loadSenderProfiles([m])
@@ -1598,11 +1667,23 @@ async function applyIncomingMessage(m: ApiMessage): Promise<void> {
     return
   }
 
-  // Governance voting announcements live under their own tags. Plaintext
-  // payloads arrive inline; the indexer read-back freshens the tallies.
+  // Tagged messages arrive inline or by reference and use the same hydration,
+  // decryption, and sender refresh path as the initial load.
   if (isVotingTag(m.tag)) {
     votingMessages.value = [...votingMessages.value, m]
+    await hydratePayloads([m])
+    await decryptMessages([m])
+    await loadSenderProfiles([m])
     void refreshIndexerVotingState()
+    return
+  }
+
+  if (isLawyerTermsVerdictTag(m.tag)) {
+    lawyerVerdictMessages.value = [...lawyerVerdictMessages.value, m]
+    await hydratePayloads([m])
+    await decryptMessages([m])
+    await loadSenderProfiles([m])
+    await refreshLawyerReview()
     return
   }
 
@@ -2395,7 +2476,11 @@ watch(() => settings.x25519SecretJwk, async () => {
     keySharingMessages.value = await bucketsRepository.fetchMessagesByTag(bucketId.value, KEY_SHARING_MESSAGE_TAG)
     await hydratePayloads(keySharingMessages.value)
     await decryptKeySharingFromMessages(keySharingMessages.value)
-    await decryptMessages(messages.value)
+    await decryptMessages([
+      ...messages.value,
+      ...votingMessages.value,
+      ...lawyerVerdictMessages.value,
+    ])
     if (isRealXhubBucket.value) {
       await decryptMessages([...realxhubMarketMessages.value, ...realxhubStatusMessages.value])
     }
@@ -2607,7 +2692,10 @@ onMounted(async () => {
           <div class="ib-offer-info">
             <p class="ib-offer-title">Letting-agent election in progress</p>
             <p class="ib-offer-amount">
-              Round {{ activeElection.payload.round }} — {{ votingTimeLeftLabel(activeElection.payload.expiresAt) }}
+              Round {{ activeElection.payload.round }}
+              <template v-if="activeElection.payload.expiresAt">
+                — {{ votingTimeLeftLabel(activeElection.payload.expiresAt) }}
+              </template>
             </p>
           </div>
         </div>
@@ -2625,9 +2713,9 @@ onMounted(async () => {
             <p class="ib-offer-title">{{ votingKindLabel(actionableVote.payload.kind) }}</p>
             <template v-if="actionableVote.payload.kind === 'terms' && lawyerTermsMetadata">
               <p class="ib-offer-amount ib-offer-lawyer" :title="lawyerTermsMetadata.lawyer">Lawyer: {{ lawyerTermsMetadata.lawyer }}</p>
-              <p class="ib-offer-amount">{{ votingTimeLeftLabel(actionableVote.payload.expiresAt) }}</p>
+              <p v-if="actionableVote.payload.expiresAt" class="ib-offer-amount">{{ votingTimeLeftLabel(actionableVote.payload.expiresAt) }}</p>
             </template>
-            <p v-else class="ib-offer-amount">{{ votingTimeLeftLabel(actionableVote.payload.expiresAt) }}</p>
+            <p v-else-if="actionableVote.payload.expiresAt" class="ib-offer-amount">{{ votingTimeLeftLabel(actionableVote.payload.expiresAt) }}</p>
           </div>
         </div>
         <!-- Open elections are approve-only: not voting is the on-chain "reject". -->
@@ -2676,38 +2764,36 @@ onMounted(async () => {
       <p v-if="createKeyError && viewersMissingKeyCount" class="ib-error">{{ createKeyError }}</p>
     </div>
 
-    <div v-if="isLawyerReviewBucket" class="ib-content-scroll">
-      <div class="ib-container">
-        <div v-if="!lawyerMetadata && !lawyerLoading" class="ib-error" role="alert">
-          <p>{{ lawyerPanelError || "Lawyer review metadata is unavailable." }}</p>
-          <button class="btn" type="button" @click="refreshLawyerReview">Retry review</button>
-        </div>
-        <LawyerReviewPanel
-          v-else-if="lawyerMetadata"
-          :metadata="lawyerMetadata"
-          :review="lawyerState"
-          :documents-hash="lawyerDocumentSetHash ?? ''"
-          :loading="lawyerLoading"
-          :error="lawyerPanelError"
-          :action-error="lawyerPanelActionError"
-          :notice="lawyerStatusMessage"
-          :transaction-signatures="lawyerTransactionSignatures"
-          :eligible-lawyer="Boolean(lawyerRole)"
-          :missing-documents="Boolean(lawyerDocumentError) || (!lawyerDocumentSetHash && !lawyerLoading)"
-          :can-upload="Boolean(lawyerRole && connectedAdminOrContributor && activeSecretJwk && keyAccessState === 'ok')"
-          :confirming="lawyerSubmitting"
-          :submission-allowed="lawyerCanSubmit"
-          :wallet-address="session.accountAddress"
-          :wallet-connected="Boolean(session.accountAddress && session.walletKind === 'solana')"
-          :execute-allowed="lawyerCanExecute || lawyerExecuting"
-          :executing="lawyerExecuting"
-          @confirm="submitLawyerVerdict"
-          @execute="executeLawyerDeal"
-          @upload="openFilePicker"
-          @retry="refreshLawyerReview"
-        />
+    <template v-if="isLawyerReviewBucket">
+      <div v-if="!lawyerMetadata && !lawyerLoading" class="ib-container ib-error" role="alert">
+        <p>{{ lawyerPanelError || "Lawyer review metadata is unavailable." }}</p>
+        <button class="btn" type="button" @click="refreshLawyerReview">Retry review</button>
       </div>
-    </div>
+      <LawyerReviewPanel
+        v-else-if="lawyerMetadata"
+        :metadata="lawyerMetadata"
+        :review="lawyerState"
+        :documents-hash="lawyerDocumentSetHash ?? ''"
+        :loading="lawyerLoading"
+        :error="lawyerPanelError"
+        :action-error="lawyerPanelActionError"
+        :notice="lawyerStatusMessage"
+        :transaction-signatures="lawyerTransactionSignatures"
+        :eligible-lawyer="Boolean(lawyerRole)"
+        :missing-documents="Boolean(lawyerDocumentError) || (!lawyerDocumentSetHash && !lawyerLoading)"
+        :can-upload="Boolean(lawyerRole && connectedAdminOrContributor && activeSecretJwk && keyAccessState === 'ok')"
+        :confirming="lawyerSubmitting"
+        :submission-allowed="lawyerCanSubmit"
+        :wallet-address="session.accountAddress"
+        :wallet-connected="Boolean(session.accountAddress && session.walletKind === 'solana')"
+        :execute-allowed="lawyerCanExecute || lawyerExecuting"
+        :executing="lawyerExecuting"
+        @confirm="submitLawyerVerdict"
+        @execute="executeLawyerDeal"
+        @upload="openFilePicker"
+        @retry="refreshLawyerReview"
+      />
+    </template>
 
     <!-- Chat viewport -->
     <div ref="chatViewportRef" class="ib-chat-viewport chat-viewport" role="log" aria-live="polite"
@@ -2917,7 +3003,7 @@ onMounted(async () => {
               <ChevronDown :size="16" class="ib-sheet-select-chevron" />
             </div>
           </div>
-          <p v-if="offerError" class="ib-tl-error">{{ offerError }}</p>
+          <p v-if="offerError" class="ib-sheet-error">{{ offerError }}</p>
           <div class="ib-sheet-actions">
             <button class="btn" type="button" @click="closeOfferSheet" :disabled="sending">Cancel</button>
             <button class="btn btn-primary" type="submit" :disabled="sending">
@@ -2949,7 +3035,7 @@ onMounted(async () => {
                 step="1" min="1" inputmode="numeric" placeholder="1" required :disabled="sending" />
             </div>
           </div>
-          <p v-if="counterError" class="ib-tl-error">{{ counterError }}</p>
+          <p v-if="counterError" class="ib-sheet-error">{{ counterError }}</p>
           <div class="ib-sheet-actions">
             <button class="btn" type="button" :disabled="sending" @click="closeCounterSheet">Cancel</button>
             <button class="btn btn-primary" type="submit" :disabled="sending">Send counter-offer</button>
@@ -2970,7 +3056,7 @@ onMounted(async () => {
           </template>
           <template v-else>Checking your voting power…</template>
         </p>
-        <p v-if="voteError" class="ib-tl-error">{{ voteError }}</p>
+        <p v-if="voteError" class="ib-sheet-error">{{ voteError }}</p>
         <div class="ib-sheet-actions">
           <button class="btn" type="button" :disabled="voteSubmitting" @click="closeVoteSheet">Cancel</button>
           <button class="btn btn-primary" type="button"
@@ -3088,15 +3174,6 @@ onMounted(async () => {
 .ib-error {
   color: var(--status-error);
   font-size: 14px;
-}
-
-/* Scrollable area for metadata panels */
-.ib-content-scroll {
-  flex-shrink: 0;
-  max-height: 40vh;
-  overflow-y: auto;
-  padding: 8px 0;
-  overscroll-behavior: contain;
 }
 
 /* Panels */
@@ -3679,101 +3756,15 @@ onMounted(async () => {
   width: min(560px, 92vw);
 }
 
-/* realXhub marketplace: offer / counter-offer bar — full-width band under the
-   page header, like PageHeader: bottom border only, no radius, inner content
-   constrained to the 1000px chat column */
-.ib-offer-bar {
-  flex-shrink: 0;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
-}
-
-.ib-offer-inner {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  max-width: 1000px;
-  margin: 0 auto;
-  padding: 16px 48px;
-}
-
-.ib-offer-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.ib-offer-icon {
-  flex-shrink: 0;
-  color: var(--color-primary);
-}
-
-.ib-offer-info {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.ib-offer-title {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ib-offer-amount {
-  margin: 0;
-  font-size: 14px;
-  color: var(--text-secondary);
-}
-
+/* The status banner (.ib-offer-*) and the bottom sheet (.ib-offer-sheet and its
+   .ib-sheet-* parts) are styled once in ~/assets/styles/ib-surfaces.css: the
+   lawyer review panel wears the same classes and a scoped block here cannot reach
+   into it, so a copy in this file is what let the two flows drift apart. Only
+   rules this page alone needs are left below. */
 .ib-offer-lawyer {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.ib-offer-amount strong {
-  color: var(--text-primary);
-}
-
-/* Buttons sit side by side at equal width with centered labels */
-.ib-offer-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.ib-offer-action {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  text-align: center;
-  white-space: nowrap;
-}
-
-.ib-offer-note {
-  font-size: 12px;
-  color: var(--text-secondary);
-  text-align: center;
-}
-
-.ib-vote-notice {
-  color: var(--primary, #3b4f74);
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.ib-vote-reject {
-  color: var(--status-error, #c62828);
-  border-color: var(--status-error, #c62828);
 }
 
 /* realXhub marketplace: composer offer button */
@@ -3798,55 +3789,16 @@ onMounted(async () => {
   color: var(--color-primary);
 }
 
-/* realXhub marketplace: offer / counter-offer bottom sheet. The sheet slides
-   up from the bottom edge (keyframe on mount) and slides back down when
-   `.is-closing` lands on it; while a pointer drags it (`.is-dragging`) the
-   inline transform tracks the finger and transitions are suspended. */
-.ib-sheet-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  z-index: 110;
-  animation: ib-sheet-backdrop-in 300ms ease-out;
-}
-
-@keyframes ib-sheet-backdrop-in {
-  from {
-    opacity: 0;
-  }
-
-  to {
-    opacity: 1;
-  }
-}
-
+/* realXhub marketplace: the page's offer / counter-offer / vote sheets are the div
+   flavour of the shared bottom sheet — ~/assets/styles/ib-surfaces.css holds its
+   geometry, entry animation and backdrop. Below are only the drag-to-dismiss
+   extras this flavour needs: while a pointer drags the sheet (`.is-dragging`) the
+   inline transform tracks the finger and transitions are suspended, and
+   `.is-closing` slides it back down. */
 .ib-offer-sheet {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  width: 100%;
-  padding: 10px 24px 28px;
-  border: none;
-  border-radius: 20px 20px 0 0;
-  box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.18);
   touch-action: none;
   will-change: transform;
   transition: transform 340ms cubic-bezier(0.32, 0.72, 0, 1);
-  animation: ib-sheet-in 340ms cubic-bezier(0.32, 0.72, 0, 1);
-}
-
-@keyframes ib-sheet-in {
-  from {
-    transform: translateY(100%);
-  }
-
-  to {
-    transform: translateY(0);
-  }
 }
 
 .ib-offer-sheet.is-closing {
@@ -3865,25 +3817,12 @@ onMounted(async () => {
   cursor: grabbing;
 }
 
-.ib-sheet-handle {
-  width: 44px;
-  height: 5px;
-  margin: 2px auto 0;
-  border-radius: 999px;
-  background: var(--color-gray-300);
-  flex-shrink: 0;
-}
-
-.ib-sheet-title {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.ib-sheet-desc {
-  margin: 0;
-  font-size: 14px;
+/* Shared reduced-motion handling suppresses the entry animation; the scoped
+   selectors above outrank it, so the drag transition is suspended here. */
+@media (prefers-reduced-motion: reduce) {
+  .ib-offer-sheet {
+    transition: none;
+  }
 }
 
 .ib-sheet-form {
@@ -3967,38 +3906,6 @@ onMounted(async () => {
   pointer-events: none;
 }
 
-.ib-sheet-actions {
-  display: flex;
-  gap: 12px;
-  margin-top: 2px;
-}
-
-.ib-sheet-actions .btn {
-  flex: 1;
-  padding: 13px 16px;
-  border-radius: 10px;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-/* Counter-offer / Place offer takes more width, per the mock. Both sheet
-   buttons stay white (the sheet card is white); the primary one only differs
-   in width, matching the plain .btn hover idiom. */
-.ib-sheet-actions .btn-primary {
-  flex: 1.8;
-  background: var(--color-white);
-  border: 1px solid var(--color-gray-300);
-  color: var(--text-primary);
-}
-
-.ib-sheet-actions .btn-primary:hover:not(:disabled),
-.ib-sheet-actions .btn-primary:focus-visible:not(:disabled) {
-  background: var(--color-white);
-  border-color: var(--color-primary);
-  color: var(--text-primary);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 24%, transparent);
-}
-
 @media (max-width: 640px) {
   .ib-sheet-price-row {
     flex-direction: column;
@@ -4007,14 +3914,6 @@ onMounted(async () => {
 
   .ib-sheet-select {
     flex: 1 1 auto;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ib-sheet-overlay,
-  .ib-offer-sheet {
-    animation: none;
-    transition: none;
   }
 }
 
@@ -4056,21 +3955,6 @@ onMounted(async () => {
   .ib-tl-btn {
     align-self: stretch;
     justify-content: center;
-    white-space: normal;
-  }
-
-  .ib-offer-inner {
-    padding-left: 16px;
-    padding-right: 16px;
-  }
-
-  /* Side-by-side buttons get cramped below the chat column width */
-  .ib-offer-actions {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .ib-offer-action {
     white-space: normal;
   }
 }

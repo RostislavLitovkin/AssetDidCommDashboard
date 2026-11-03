@@ -66,7 +66,7 @@ const proposalOpen: VotingOpenPayload = {
 };
 
 describe("voting tag constants", () => {
-  it("exposes the five voting tags", () => {
+  it("exposes the five canonical voting tags", () => {
     expect(VOTING_TERMS_TAG).toBe("voting/terms");
     expect(VOTING_ELECTION_TAG).toBe("voting/election");
     expect(VOTING_PROPOSAL_TAG).toBe("voting/proposal");
@@ -85,6 +85,7 @@ describe("isVotingTag", () => {
 
   it("rejects other tags and empty values", () => {
     expect(isVotingTag("realXhub/offer")).toBe(false);
+    expect(isVotingTag("lawyer/terms-approved")).toBe(false);
     expect(isVotingTag("voting/unknown")).toBe(false);
     expect(isVotingTag("")).toBe(false);
     expect(isVotingTag(null)).toBe(false);
@@ -126,6 +127,20 @@ describe("voting payload codec", () => {
     expect(parseVotingPayload(buildVotingPayload(result))).toEqual(result);
   });
 
+  it("round-trips every document-review outcome", () => {
+    for (const status of ["cancelled", "finalized", "expired", "refunded"] as const) {
+      const result: VotingResultPayload = { kind: "terms", listingId: "42", round: 1, status };
+      expect(parseVotingPayload(buildVotingPayload(result))).toEqual(result);
+    }
+  });
+
+  it("ignores informational keys a review announcement carries", () => {
+    expect(parseVotingPayload(JSON.stringify({ ...termsOpen, listingStatus: "LEGAL" }))).toEqual(termsOpen);
+    expect(
+      parseVotingPayload(JSON.stringify({ kind: "terms", listingId: "42", status: "finalized", listingStatus: "FINALIZED" })),
+    ).toEqual({ kind: "terms", listingId: "42", status: "finalized" });
+  });
+
   it("accepts numeric listingId and id, normalizing them to strings", () => {
     expect(parseVotingPayload(JSON.stringify({ ...termsOpen, listingId: 42 }))).toEqual(termsOpen);
     const parsed = parseVotingPayload(JSON.stringify({ ...proposalOpen, id: 7 }));
@@ -155,10 +170,24 @@ describe("voting payload codec", () => {
     expect(parseVotingPayload(JSON.stringify({ ...termsOpen, listingId: "  " }))).toBeUndefined();
   });
 
-  it("rejects open payloads with a missing or unparseable expiry", () => {
-    expect(parseVotingPayload(JSON.stringify({ kind: "terms", listingId: "42", status: "open" }))).toBeUndefined();
-    expect(parseVotingPayload(JSON.stringify({ ...termsOpen, expiresAt: "soon" }))).toBeUndefined();
-    expect(parseVotingPayload(JSON.stringify({ ...termsOpen, expiresAt: 123 }))).toBeUndefined();
+  it("keeps an open payload without a deadline, dropping an unusable one", () => {
+    // The API's listing mirror lags behind a verdict, so the announcement that
+    // opens the next round is posted without expiresAt. Dropping it here printed
+    // raw JSON into the chat instead of the card.
+    expect(parseVotingPayload(JSON.stringify({ kind: "terms", listingId: "42", status: "open" }))).toEqual({
+      kind: "terms",
+      listingId: "42",
+      status: "open",
+    });
+    expect(parseVotingPayload(JSON.stringify({ ...termsOpen, expiresAt: "soon" }))).toEqual({ ...termsOpen, expiresAt: undefined });
+    expect(parseVotingPayload(JSON.stringify({ ...termsOpen, expiresAt: 123 }))).toEqual({ ...termsOpen, expiresAt: undefined });
+    expect(parseVotingPayload(JSON.stringify({ ...termsOpen, expiresAt: "  " }))).toEqual({ ...termsOpen, expiresAt: undefined });
+  });
+
+  it("keeps rejecting payloads that are not a vote at all", () => {
+    expect(parseVotingPayload("{ not json")).toBeUndefined();
+    expect(parseVotingPayload(JSON.stringify({ kind: "payment", listingId: "42", status: "open" }))).toBeUndefined();
+    expect(parseVotingPayload(JSON.stringify({ kind: "terms", status: "open" }))).toBeUndefined();
   });
 
   it("rejects negative tallies on results", () => {
@@ -295,6 +324,10 @@ describe("labels and percentages", () => {
     expect(votingStatusLabel("rejected")).toBe("Rejected");
     expect(votingStatusLabel("passed")).toBe("Passed");
     expect(votingStatusLabel("failed")).toBe("Failed");
+    expect(votingStatusLabel("cancelled")).toBe("Cancelled");
+    expect(votingStatusLabel("finalized")).toBe("Finalized");
+    expect(votingStatusLabel("expired")).toBe("Expired");
+    expect(votingStatusLabel("refunded")).toBe("Refunded");
   });
 
   it("uses approve/reject wording for terms and yes/no elsewhere", () => {
@@ -323,6 +356,10 @@ describe("votingTimeLeftLabel", () => {
   it("shows Closed at the deadline and after it", () => {
     expect(votingTimeLeftLabel("2026-10-10T09:45:00.000Z", now)).toBe("Closed");
     expect(votingTimeLeftLabel("2026-10-10T09:44:59.000Z", now)).toBe("Closed");
+  });
+
+  it("shows Closed for an announcement that carried no deadline", () => {
+    expect(votingTimeLeftLabel(undefined, now)).toBe("Closed");
   });
 });
 

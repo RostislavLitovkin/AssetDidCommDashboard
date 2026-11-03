@@ -1,5 +1,5 @@
 import { Connection } from "@solana/web3.js";
-import { computed, ref, type ComputedRef, type Ref } from "vue";
+import { computed, getCurrentScope, onScopeDispose, ref, type ComputedRef, type Ref } from "vue";
 import type { ApiMessage } from "../services/buckets/types";
 import { addressesEqual } from "../services/wallet/addressUtils";
 import { getLegalClusterConfig } from "../services/lawyer/cluster";
@@ -107,6 +107,42 @@ export function useLawyerReview(options: UseLawyerReviewOptions): UseLawyerRevie
   const statusMessage = ref("");
   let currentInput: LawyerReviewInput | null = null;
   const now = options.now ?? Date.now;
+  const clock = ref(now());
+  if (getCurrentScope()) {
+    const timer = setInterval(() => {
+      clock.value = now();
+    }, 1000);
+    onScopeDispose(() => clearInterval(timer));
+  }
+  const confirmedSubmissions: Array<{
+    cluster: string;
+    listingId: string;
+    attempt: 1 | 2;
+    wallet: string;
+  }> = [];
+
+  function hasUnobservedSubmission(review: LawyerReviewState, wallet: string): boolean {
+    return confirmedSubmissions.some((submission) =>
+      submission.cluster === metadata.value?.cluster
+      && submission.listingId === review.listingId
+      && submission.attempt === review.attempt
+      && addressesEqual(submission.wallet, wallet)
+    );
+  }
+
+  function deadlineOpenAt(review: LawyerReviewState, timestamp: number): boolean {
+    return Math.floor(timestamp / 1000) <= review.legalDeadline;
+  }
+
+  function deadlineOpen(review: LawyerReviewState): boolean {
+    return deadlineOpenAt(review, now()) && deadlineOpenAt(review, clock.value);
+  }
+
+  function legalProcessExpired(): null {
+    error.value = "LEGAL_PROCESS_EXPIRED";
+    statusMessage.value = "LEGAL_PROCESS_EXPIRED";
+    return null;
+  }
 
   const lawyerRole = computed<LawyerSeatRole | null>(() => {
     const review = state.value;
@@ -120,12 +156,15 @@ export function useLawyerReview(options: UseLawyerReviewOptions): UseLawyerRevie
     const role = lawyerRole.value;
     const review = state.value;
     const hash = documentSetHash.value;
-    if (!role || !review || !hash) return false;
+    const wallet = currentInput?.walletAddress?.trim();
+    if (!role || !review || !hash || !wallet) return false;
     const other = role === "spv" ? review.developer : review.spv;
     return review[role].verdict === "pending"
       && (other.verdict === "pending" || hashesEqual(other.documentsHash, hash))
       && review.status === "SOLD_OUT"
       && !review.hashMismatch
+      && deadlineOpen(review)
+      && !hasUnobservedSubmission(review, wallet)
       && !loading.value
       && !submitting.value
       && !executing.value;
@@ -133,7 +172,7 @@ export function useLawyerReview(options: UseLawyerReviewOptions): UseLawyerRevie
   const canExecute = computed(() => Boolean(
     currentInput?.walletAddress?.trim()
     && state.value?.settlementReady
-    && Math.floor(now() / 1000) < state.value.legalDeadline
+    && deadlineOpen(state.value)
     && !loading.value
     && !submitting.value
     && !executing.value
@@ -169,6 +208,8 @@ export function useLawyerReview(options: UseLawyerReviewOptions): UseLawyerRevie
         review = await loadLawyerReviewState(parsed, options.indexer);
       } catch (cause) {
         if (generation !== refreshGeneration) return;
+        state.value = null;
+        documents.value = { spv: null, developer: null };
         documentSetHash.value = null;
         error.value = errorMessage(cause, "Failed to load lawyer review state.");
         statusMessage.value = error.value;
@@ -176,6 +217,8 @@ export function useLawyerReview(options: UseLawyerReviewOptions): UseLawyerRevie
       }
       if (generation !== refreshGeneration) return;
       if (!review) {
+        state.value = null;
+        documents.value = { spv: null, developer: null };
         documentSetHash.value = null;
         error.value = "No active listing was found for this review bucket.";
         statusMessage.value = error.value;
@@ -252,6 +295,7 @@ export function useLawyerReview(options: UseLawyerReviewOptions): UseLawyerRevie
   }
 
   async function submitVerdict(approve: boolean): Promise<LawyerSubmissionResult | null> {
+    if (state.value && !deadlineOpenAt(state.value, now())) return legalProcessExpired();
     if (!canSubmit.value || !currentInput || !metadata.value || !state.value || !documentSetHash.value) return null;
     const input = currentInput;
     const bucket = metadata.value;
@@ -272,6 +316,12 @@ export function useLawyerReview(options: UseLawyerReviewOptions): UseLawyerRevie
         approve,
         documentsHash: decodeDocumentsHash(hash),
       }, options.submission);
+      confirmedSubmissions.push({
+        cluster: bucket.cluster,
+        listingId: review.listingId,
+        attempt: review.attempt,
+        wallet: lawyer,
+      });
       statusMessage.value = "Lawyer decision submitted. Refreshing review…";
       await refresh(currentInput ?? input);
       statusMessage.value = error.value || documentError.value
@@ -288,6 +338,7 @@ export function useLawyerReview(options: UseLawyerReviewOptions): UseLawyerRevie
   }
 
   async function executeDeal(): Promise<LawyerSubmissionResult[] | null> {
+    if (state.value && !deadlineOpenAt(state.value, now())) return legalProcessExpired();
     if (!canExecute.value || !currentInput || !metadata.value || !state.value?.settlement) return null;
     const input = currentInput;
     const bucket = metadata.value;

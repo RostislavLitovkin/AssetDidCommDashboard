@@ -1,0 +1,278 @@
+/* Shared indexed-bucket surfaces: the full-width status banner that sits under the
+   page header (.ib-offer-*) and the bottom sheet that rises from the bottom edge
+   (.ib-offer-sheet plus its .ib-sheet-* parts). The indexed-bucket page and the
+   lawyer review panel both wear these classes, and a page-scoped style block
+   cannot reach into a child component, so the rule set lives here once instead of
+   being copied per component.
+
+   The sheet is mounted two ways on purpose and both are kept: the page renders a
+   div inside .ib-sheet-overlay (click-outside and drag-to-dismiss), the review
+   panel renders a native <dialog> (focus trap, Escape, closedby). Only the display
+   rules below differ per mount; every other declaration is shared. */
+
+:root {
+  --ib-sheet-backdrop: rgba(0, 0, 0, 0.5);
+}
+
+/* ── Status banner ─────────────────────────────────────────────────────────
+   A band with bottom border only, no radius, with the content constrained to the
+   1000px chat column. */
+.ib-offer-bar {
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.ib-offer-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 16px 48px;
+}
+
+.ib-offer-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ib-offer-icon {
+  flex-shrink: 0;
+  color: var(--color-primary);
+}
+
+.ib-offer-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ib-offer-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ib-offer-amount {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.ib-offer-amount strong {
+  color: var(--text-primary);
+}
+
+/* Buttons sit side by side at equal width with centered labels */
+.ib-offer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ib-offer-action {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.ib-offer-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+/* Banner status lines: a plain notice and the reject-side button tint. Both flows
+   report them under different names — the governance lane calls the notice
+   .ib-vote-notice, the review panel .review-notice — so the names are grouped
+   rather than forked into two rules that can drift apart. */
+.ib-vote-notice,
+.review-notice {
+  margin: 0;
+  color: var(--primary, #3b4f74);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ib-vote-reject {
+  color: var(--status-error, #c62828);
+  border-color: var(--status-error, #c62828);
+}
+
+/* ── Bottom sheet ────────────────────────────────────────────────────────── */
+.ib-sheet-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--ib-sheet-backdrop);
+  z-index: 110;
+  animation: ib-sheet-backdrop-in 300ms ease-out;
+}
+
+.ib-offer-sheet {
+  --ib-sheet-slide: ib-sheet-in 340ms cubic-bezier(0.32, 0.72, 0, 1);
+  position: fixed;
+  /* `top: auto` is load-bearing: the UA sheet for <dialog> pins all four edges
+     with margin: auto, and without it the sheet lands at the top edge. */
+  inset: auto 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: none;
+  max-height: 90dvh;
+  margin: 0;
+  padding: 10px 24px calc(28px + env(safe-area-inset-bottom, 0px));
+  overflow-y: auto;
+  border: none;
+  border-radius: 20px 20px 0 0;
+  box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.18);
+  color: var(--text-primary);
+  overscroll-behavior: contain;
+}
+
+/* The div sheet is mounted by its overlay, so it animates on mount. A closed
+   <dialog> is hidden by the UA and only slides in once showModal() opens it. */
+div.ib-offer-sheet {
+  animation: var(--ib-sheet-slide);
+}
+
+dialog.ib-offer-sheet {
+  display: none;
+}
+
+dialog.ib-offer-sheet[open] {
+  display: flex;
+  animation: var(--ib-sheet-slide);
+}
+
+dialog.ib-offer-sheet::backdrop {
+  background: var(--ib-sheet-backdrop);
+  overflow: hidden;
+  overscroll-behavior: contain;
+  animation: ib-sheet-backdrop-in 300ms ease-out;
+}
+
+@keyframes ib-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes ib-sheet-backdrop-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.ib-sheet-handle {
+  width: 44px;
+  height: 5px;
+  margin: 2px auto 0;
+  border-radius: 999px;
+  background: var(--color-gray-300);
+  flex-shrink: 0;
+}
+
+.ib-sheet-title,
+.ib-sheet-desc {
+  margin: 0;
+}
+
+.ib-sheet-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.ib-sheet-desc {
+  font-size: 14px;
+}
+
+/* Feedback shown inside the sheet: bare red text, not a filled pill. */
+.ib-sheet-error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--status-error);
+}
+
+.ib-sheet-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 2px;
+}
+
+.ib-sheet-actions .btn {
+  flex: 1;
+  padding: 13px 16px;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* Cancel / confirm takes more width, per the mock. Both sheet buttons stay
+   white (the sheet card is white); the primary one only differs in width,
+   matching the plain .btn hover idiom. */
+.ib-sheet-actions .btn-primary {
+  flex: 1.8;
+  background: var(--color-white);
+  border: 1px solid var(--color-gray-300);
+  color: var(--text-primary);
+}
+
+.ib-sheet-actions .btn-primary:hover:not(:disabled),
+.ib-sheet-actions .btn-primary:focus-visible:not(:disabled) {
+  background: var(--color-white);
+  border-color: var(--color-primary);
+  color: var(--text-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 24%, transparent);
+}
+
+/* ── Shared responsive + motion rules ──────────────────────────────────── */
+@media (max-width: 840px) {
+  .ib-offer-inner {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  /* Side-by-side buttons get cramped below the chat column width */
+  .ib-offer-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ib-offer-action {
+    white-space: normal;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+  .ib-sheet-overlay,
+  div.ib-offer-sheet,
+  dialog.ib-offer-sheet[open],
+  dialog.ib-offer-sheet::backdrop {
+    animation: none;
+    transition: none;
+  }
+}

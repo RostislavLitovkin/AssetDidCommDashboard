@@ -1,4 +1,5 @@
 import { PublicKey, type Connection } from "@solana/web3.js";
+import { effectScope } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiMessage } from "../../app/services/buckets/types";
 import type { LegalTransactionBridge } from "../../app/services/lawyer/solanaLegal";
@@ -151,6 +152,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.clearAllMocks();
   vi.unstubAllEnvs();
+  vi.useRealTimers();
 });
 
 function deferred<T>() {
@@ -526,5 +528,213 @@ describe("useLawyerReview settlement and cluster configuration", () => {
     expect(configured.error.value).toBe("");
     expect(fetcher).toHaveBeenCalledWith("https://indexer-mainnet.example/graphql", expect.anything());
     expect(review.state.value).toBeNull();
+  });
+});
+
+describe("useLawyerReview regression boundaries", () => {
+  it("clears stale documents and settlement when the latest listing lookup is empty", async () => {
+    const { review, fetcher, input } = setup(legalPayload());
+    await review.refresh(input());
+    expect(review.canExecute.value).toBe(true);
+    (fetcher as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(fetchResponse({
+      data: { listings: { nodes: [] }, pendingFinalizations: { executeDeal: null } },
+    }));
+
+    await review.refresh(input());
+
+    expect(review.state.value).toBeNull();
+    expect(review.documents.value).toEqual({ spv: null, developer: null });
+    expect(review.documentSetHash.value).toBeNull();
+    expect(review.canExecute.value).toBe(false);
+  });
+
+  it("clears stale documents and settlement when the latest listing lookup fails", async () => {
+    const { review, fetcher, input } = setup(legalPayload());
+    await review.refresh(input());
+    expect(review.canExecute.value).toBe(true);
+    (fetcher as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("Indexer offline"));
+
+    await review.refresh(input());
+
+    expect(review.error.value).toBe("Indexer offline");
+    expect(review.state.value).toBeNull();
+    expect(review.documents.value).toEqual({ spv: null, developer: null });
+    expect(review.documentSetHash.value).toBeNull();
+    expect(review.canExecute.value).toBe(false);
+  });
+
+  it("blocks a verdict one second after the legal deadline", async () => {
+    let now = 1_900_000_001_000;
+    const fixture = setup();
+    const review = useLawyerReview({
+      loadDocument: fixture.loadDocument,
+      indexer: { fetcher: fixture.fetcher },
+      submission: { connection: fixture.connection, bridge: fixture.bridge },
+      now: () => now,
+    });
+    await review.refresh(fixture.input());
+
+    expect(review.canSubmit.value).toBe(false);
+    await expect(review.submitVerdict(true)).resolves.toBeNull();
+    expect(solanaMocks.submitConfirmation).not.toHaveBeenCalled();
+  });
+
+  it("allows a verdict at the exact legal deadline", async () => {
+    const fixture = setup();
+    const review = useLawyerReview({
+      loadDocument: fixture.loadDocument,
+      indexer: { fetcher: fixture.fetcher },
+      submission: { connection: fixture.connection, bridge: fixture.bridge },
+      now: () => 1_900_000_000_000,
+    });
+    await review.refresh(fixture.input());
+
+    expect(review.canSubmit.value).toBe(true);
+  });
+
+  it("revalidates the verdict deadline after an earlier eligible read", async () => {
+    let now = 1_899_999_999_000;
+    const fixture = setup();
+    const review = useLawyerReview({
+      loadDocument: fixture.loadDocument,
+      indexer: { fetcher: fixture.fetcher },
+      submission: { connection: fixture.connection, bridge: fixture.bridge },
+      now: () => now,
+    });
+    await review.refresh(fixture.input());
+    expect(review.canSubmit.value).toBe(true);
+    now = 1_900_000_001_000;
+
+    await expect(review.submitVerdict(true)).resolves.toBeNull();
+    expect(review.error.value).toBe("LEGAL_PROCESS_EXPIRED");
+    expect(review.statusMessage.value).toBe("LEGAL_PROCESS_EXPIRED");
+    expect(solanaMocks.submitConfirmation).not.toHaveBeenCalled();
+  });
+
+  it("allows deal execution at the exact legal deadline", async () => {
+    const fixture = setup(legalPayload());
+    const review = useLawyerReview({
+      loadDocument: fixture.loadDocument,
+      indexer: { fetcher: fixture.fetcher },
+      submission: { connection: fixture.connection, bridge: fixture.bridge },
+      now: () => 1_900_000_000_000,
+    });
+    await review.refresh(fixture.input(OTHER));
+
+    expect(review.canExecute.value).toBe(true);
+    await expect(review.executeDeal()).resolves.toEqual([
+      { signature: "execute-signature", walletName: "Injected wallet" },
+    ]);
+  });
+
+  it("revalidates the deadline when executing after an earlier eligible read", async () => {
+    let now = 1_899_999_999_000;
+    const fixture = setup(legalPayload());
+    const review = useLawyerReview({
+      loadDocument: fixture.loadDocument,
+      indexer: { fetcher: fixture.fetcher },
+      submission: { connection: fixture.connection, bridge: fixture.bridge },
+      now: () => now,
+    });
+    await review.refresh(fixture.input(OTHER));
+    expect(review.canExecute.value).toBe(true);
+    now = 1_900_000_001_000;
+
+    await expect(review.executeDeal()).resolves.toBeNull();
+    expect(review.error.value).toBe("LEGAL_PROCESS_EXPIRED");
+    expect(review.statusMessage.value).toBe("LEGAL_PROCESS_EXPIRED");
+    expect(solanaMocks.prepareExecution).not.toHaveBeenCalled();
+  });
+
+  it("locks a confirmed seat across an Indexer-lagged pending refresh until a new attempt", async () => {
+    const { review, fetcher, input } = setup();
+    await review.refresh(input());
+    await review.submitVerdict(true);
+
+    expect(review.state.value?.spv.verdict).toBe("pending");
+    expect(review.canSubmit.value).toBe(false);
+    await expect(review.submitVerdict(true)).resolves.toBeNull();
+    expect(solanaMocks.submitConfirmation).toHaveBeenCalledTimes(1);
+
+    (fetcher as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      fetchResponse(indexerPayload({ secondAttempt: true })),
+    );
+    await review.refresh(input());
+    expect(review.state.value?.attempt).toBe(2);
+    expect(review.canSubmit.value).toBe(true);
+  });
+
+  it("remembers both confirmed seats when Indexer lags behind two submissions", async () => {
+    const { review, input } = setup();
+    await review.refresh(input(SPV));
+    await review.submitVerdict(true);
+
+    await review.refresh(input(DEVELOPER));
+    expect(review.canSubmit.value).toBe(true);
+    await review.submitVerdict(true);
+
+    await review.refresh(input(SPV));
+    expect(review.canSubmit.value).toBe(false);
+    await expect(review.submitVerdict(true)).resolves.toBeNull();
+    await review.refresh(input(DEVELOPER));
+    expect(review.canSubmit.value).toBe(false);
+    await expect(review.submitVerdict(true)).resolves.toBeNull();
+    expect(solanaMocks.submitConfirmation).toHaveBeenCalledTimes(2);
+  });
+
+  it("closes verdict eligibility when the reactive clock passes the deadline and rejects late action", async () => {
+    vi.useFakeTimers();
+    const scope = effectScope();
+    let now = 1_899_999_999_000;
+    const fixture = setup();
+    try {
+      const review = scope.run(() => useLawyerReview({
+        loadDocument: fixture.loadDocument,
+        indexer: { fetcher: fixture.fetcher },
+        submission: { connection: fixture.connection, bridge: fixture.bridge },
+        now: () => now,
+      }))!;
+      await review.refresh(fixture.input());
+      expect(review.canSubmit.value).toBe(true);
+      now = 1_900_000_001_000;
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(review.canSubmit.value).toBe(false);
+      await expect(review.submitVerdict(true)).resolves.toBeNull();
+      expect(review.error.value).toBe("LEGAL_PROCESS_EXPIRED");
+      expect(review.statusMessage.value).toBe("LEGAL_PROCESS_EXPIRED");
+      expect(solanaMocks.submitConfirmation).not.toHaveBeenCalled();
+      scope.stop();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      scope.stop();
+    }
+  });
+
+  it("closes execution eligibility when the reactive clock passes the deadline and rejects late action", async () => {
+    vi.useFakeTimers();
+    const scope = effectScope();
+    let now = 1_899_999_999_000;
+    const fixture = setup(legalPayload());
+    try {
+      const review = scope.run(() => useLawyerReview({
+        loadDocument: fixture.loadDocument,
+        indexer: { fetcher: fixture.fetcher },
+        submission: { connection: fixture.connection, bridge: fixture.bridge },
+        now: () => now,
+      }))!;
+      await review.refresh(fixture.input(OTHER));
+      expect(review.canExecute.value).toBe(true);
+      now = 1_900_000_001_000;
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(review.canExecute.value).toBe(false);
+      await expect(review.executeDeal()).resolves.toBeNull();
+      expect(review.error.value).toBe("LEGAL_PROCESS_EXPIRED");
+      expect(review.statusMessage.value).toBe("LEGAL_PROCESS_EXPIRED");
+      expect(solanaMocks.prepareExecution).not.toHaveBeenCalled();
+    } finally {
+      scope.stop();
+    }
   });
 });

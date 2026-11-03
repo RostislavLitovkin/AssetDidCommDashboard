@@ -22,11 +22,24 @@ export interface KeySharingRef {
   messageId: string
 }
 
-/** Unparseable values sort first rather than poisoning comparisons with NaN. */
-function orderOf(message: KeySharingRef): [number, number] {
-  const time = Date.parse(message.createdAt)
-  const sequence = Number(message.messageId)
-  return [Number.isNaN(time) ? 0 : time, Number.isNaN(sequence) ? 0 : sequence]
+function sequenceOf(message: KeySharingRef): bigint {
+  try {
+    return BigInt(message.messageId)
+  } catch {
+    return 0n
+  }
+}
+
+/** Chronological message order with exact 64-bit on-chain sequence comparison. */
+export function compareKeySharingMessages(left: KeySharingRef, right: KeySharingRef): number {
+  const leftTime = Date.parse(left.createdAt)
+  const rightTime = Date.parse(right.createdAt)
+  const timeDifference = (Number.isNaN(leftTime) ? 0 : leftTime) - (Number.isNaN(rightTime) ? 0 : rightTime)
+  if (timeDifference) return timeDifference
+
+  const leftSequence = sequenceOf(left)
+  const rightSequence = sequenceOf(right)
+  return leftSequence === rightSequence ? 0 : leftSequence < rightSequence ? -1 : 1
 }
 
 /**
@@ -36,14 +49,9 @@ function orderOf(message: KeySharingRef): [number, number] {
  */
 export function latestKeySharingMessage<T extends KeySharingRef>(messages: readonly T[]): T | null {
   let latest: T | null = null
-  let latestOrder: [number, number] = [-Infinity, -Infinity]
 
   for (const message of messages) {
-    const order = orderOf(message)
-    if (order[0] > latestOrder[0] || (order[0] === latestOrder[0] && order[1] > latestOrder[1])) {
-      latest = message
-      latestOrder = order
-    }
+    if (!latest || compareKeySharingMessages(message, latest) > 0) latest = message
   }
 
   return latest
