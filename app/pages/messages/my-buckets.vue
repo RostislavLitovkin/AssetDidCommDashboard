@@ -41,22 +41,22 @@ function resolveDisplayName(bucket: MyBucketSummary): string {
   return `Bucket ${bucket.bucketId}`
 }
 
-// Viewers are keyed on-chain by their X25519 public key, stored by the indexer as 0x-hex.
-function resolveViewerKeyHex(): string {
-  const x = settings.x25519SecretJwk?.x
-  if (typeof x !== "string" || !x.trim()) {
-    return ""
+// The indexer stores viewer keys as base64url in existing buckets and 0x-hex in newer ones.
+function resolveViewerKeys(): string[] {
+  const x = settings.x25519SecretJwk?.x?.trim()
+  if (!x) {
+    return []
   }
 
   try {
-    const bytes = base64url.decode(x.trim())
+    const bytes = base64url.decode(x)
     let hex = "0x"
     for (const value of bytes) {
       hex += value.toString(16).padStart(2, "0")
     }
-    return hex
+    return [x, hex]
   } catch {
-    return ""
+    return []
   }
 }
 
@@ -102,7 +102,7 @@ async function loadBuckets(reset = false): Promise<void> {
   try {
     const page = await bucketsRepository.fetchMyBuckets(
       normalizeApiAddress(session.accountAddress),
-      resolveViewerKeyHex(),
+      resolveViewerKeys(),
       { first: pageSize, after: reset ? null : endCursor.value }
     )
 

@@ -32,7 +32,7 @@ describe("fetchMyBuckets", () => {
       }
     ])
 
-    const page = await repo.fetchMyBuckets("5ME", "0xmykey", { first: 20 })
+    const page = await repo.fetchMyBuckets("5ME", ["0xmykey"], { first: 20 })
 
     expect(page.totalCount).toBe(41)
     expect(page.hasNextPage).toBe(true)
@@ -41,7 +41,7 @@ describe("fetchMyBuckets", () => {
       bucketId: "12", isAdmin: true, isContributor: false, isViewer: true
     })
     expect(requests[0]!.query).toContain("or: [")
-    expect(requests[0]!.variables).toMatchObject({ address: "5ME", viewerKey: "0xmykey", first: 20 })
+    expect(requests[0]!.variables).toMatchObject({ address: "5ME", viewerKeys: ["0xmykey"], first: 20 })
   })
 
   it("includes standalone buckets the caller created and flags them isCreator", async () => {
@@ -60,7 +60,7 @@ describe("fetchMyBuckets", () => {
       }
     ])
 
-    const page = await repo.fetchMyBuckets("5ME", "0xmykey")
+    const page = await repo.fetchMyBuckets("5ME", ["0xmykey"])
 
     expect(page.nodes[0]).toMatchObject({
       bucketId: "20", namespaceId: null,
@@ -69,5 +69,36 @@ describe("fetchMyBuckets", () => {
     // Creator-owned standalone buckets are matched by a dedicated or-branch.
     expect(requests[0]!.query).toContain("creator: { eq: $address }")
     expect(requests[0]!.query).toContain("namespaceId: { eq: null }")
+  })
+
+  it("matches viewer memberships stored as base64url or hex", async () => {
+    const base64Key = "wRBdNn0vOUKQL8gbAE_xYia1G2FbpeW8DgpQk94nTSE"
+    const hexKey = "0xc1105d367d2f3942902fc81b004ff16226b51b615ba5e5bc0e0a5093de274d21"
+    const { repo, requests } = makeRepo([
+      {
+        data: {
+          buckets: {
+            totalCount: 2,
+            nodes: [
+              {
+                id: "1", bucketId: "1", namespaceId: null, name: "legacy", creator: null,
+                admins: [], contributors: [], viewers: [{ viewerId: base64Key }]
+              },
+              {
+                id: "2", bucketId: "2", namespaceId: null, name: "current", creator: null,
+                admins: [], contributors: [], viewers: [{ viewerId: hexKey }]
+              }
+            ],
+            pageInfo: { hasNextPage: false, endCursor: null }
+          }
+        }
+      }
+    ])
+
+    const page = await repo.fetchMyBuckets("5ME", [base64Key, hexKey])
+
+    expect(page.nodes.map((node) => node.isViewer)).toEqual([true, true])
+    expect(requests[0]!.query).toContain("viewerId: { in: $viewerKeys }")
+    expect(requests[0]!.variables).toMatchObject({ viewerKeys: [base64Key, hexKey] })
   })
 })

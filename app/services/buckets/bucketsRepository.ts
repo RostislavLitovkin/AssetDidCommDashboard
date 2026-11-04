@@ -308,7 +308,7 @@ export class BucketsRepository {
 
   async fetchMyBuckets(
     address: string,
-    viewerKeyHex: string,
+    viewerKeys: string[],
     opts?: { first?: number; after?: string | null }
   ): Promise<{ nodes: MyBucketSummary[]; totalCount: number; hasNextPage: boolean; endCursor: string | null }> {
     type Node = {
@@ -319,13 +319,13 @@ export class BucketsRepository {
     }
     const vars: Record<string, unknown> = {
       address,
-      viewerKey: viewerKeyHex || " none",
+      viewerKeys: viewerKeys.length ? viewerKeys : [" none"],
       first: opts?.first ?? 20
     }
     if (opts?.after) vars.after = opts.after
 
     const data = await this.client.query<{ buckets: ConnectionPage<Node> & { totalCount: number } }>(
-      `query MyBuckets($address: String!, $viewerKey: String!, $first: Int!, $after: String) {
+      `query MyBuckets($address: String!, $viewerKeys: [String!]!, $first: Int!, $after: String) {
         buckets(
           first: $first
           after: $after
@@ -334,7 +334,7 @@ export class BucketsRepository {
             or: [
               { admins: { some: { subjectId: { eq: $address } } } }
               { contributors: { some: { subjectId: { eq: $address } } } }
-              { viewers: { some: { viewerId: { eq: $viewerKey } } } }
+              { viewers: { some: { viewerId: { in: $viewerKeys } } } }
               { and: [{ creator: { eq: $address } }, { namespaceId: { eq: null } }] }
             ]
           }
@@ -363,7 +363,7 @@ export class BucketsRepository {
         name: n.name,
         isAdmin: n.admins.some((a) => a.subjectId === address),
         isContributor: n.contributors.some((c) => c.subjectId === address),
-        isViewer: Boolean(viewerKeyHex) && n.viewers.some((v) => v.viewerId === viewerKeyHex),
+        isViewer: n.viewers.some((v) => viewerKeys.includes(v.viewerId)),
         isCreator: n.creator === address
       }))
     }
