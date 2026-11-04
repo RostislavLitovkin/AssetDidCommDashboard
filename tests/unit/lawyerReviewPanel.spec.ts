@@ -141,6 +141,10 @@ beforeAll(async () => {
     .replace(
       /from\s+["']\.\.\/\.\.\/services\/buckets\/voting["']/g,
       `from ${JSON.stringify(import.meta.resolve("../../app/services/buckets/voting.ts"))}`,
+    )
+    .replace(
+      /from\s+["']\.\.\/\.\.\/services\/wallet\/addressUtils["']/g,
+      `from ${JSON.stringify(import.meta.resolve("../../app/services/wallet/addressUtils.ts"))}`,
     );
   const module = await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
   Panel = module.default;
@@ -188,6 +192,11 @@ function findOne(root: HostNode, predicate: (node: HostNode) => boolean): HostNo
 
 function byType(root: HostNode, type: string): HostNode[] {
   return findAll(root, (node) => node.type === type);
+}
+
+/** Rendered element children, with the comment placeholders that v-if leaves behind dropped. */
+function elements(node: HostNode): HostNode[] {
+  return node.children.filter((child) => !child.type.startsWith("#"));
 }
 
 function text(root: HostNode): string {
@@ -260,25 +269,69 @@ describe("LawyerReviewPanel", () => {
     expect(content).toContain("0xdev-rejected");
   });
 
-  it("shows exact zero, half, and full two-seat counts and percentages without investor voting power", () => {
-    const zero = mountPanel();
-    expect(text(zero.root)).toContain("0 of 2 approved (0%) · 0 rejected (0%) · 2 pending (100%)");
-
-    const half = mountPanel({
+  it("shows exact zero, half, and full two-seat tallies in the banner without percentages", () => {
+    const bannerTally = (overrides: Record<string, unknown> = {}) => {
+      const { root } = mountPanel(overrides);
+      const info = findOne(root, (node) => node.props.class === "ib-offer-info");
+      // The percentages travel on the chat card, so the banner must not echo them.
+      expect(text(info)).not.toContain("%");
+      return text(findOne(info, (node) => String(node.props.class).includes("review-status-line")));
+    };
+    expect(bannerTally()).toBe("Sold out · 0 of 2 approved · 0 rejected");
+    expect(bannerTally({
       review: review({
         counts: { approved: 1, rejected: 0, pending: 1 },
         percentages: { approved: 50, rejected: 0, pending: 50 },
       }),
-    });
-    expect(text(half.root)).toContain("1 of 2 approved (50%) · 0 rejected (0%) · 1 pending (50%)");
-
-    const approved = mountPanel({
+    })).toBe("Sold out · 1 of 2 approved · 0 rejected");
+    expect(bannerTally({
       review: review({
-        counts: { approved: 2, rejected: 0, pending: 0 },
-        percentages: { approved: 100, rejected: 0, pending: 0 },
+        counts: { approved: 1, rejected: 1, pending: 0 },
+        percentages: { approved: 50, rejected: 50, pending: 0 },
       }),
+    })).toBe("Sold out · 1 of 2 approved · 1 rejected");
+  });
+
+  it("keeps the banner to the reference flow's head-plus-actions anatomy", () => {
+    const { root } = mountPanel({ eligibleLawyer: true });
+    const inner = findOne(root, (node) => node.props.class === "ib-offer-inner");
+    expect(elements(inner).map((child) => child.props.class)).toEqual(["ib-offer-head", "ib-offer-actions"]);
+
+    const head = findOne(root, (node) => node.props.class === "ib-offer-head");
+    const headParts = elements(head).map((child) => String(child.props.class).split(" "));
+    expect(headParts.map((classes) => [...new Set(classes.filter((name) => name.startsWith("ib-")))])).toEqual([
+      ["ib-offer-icon"],
+      ["ib-offer-info"],
+    ]);
+
+    const info = findOne(root, (node) => node.props.class === "ib-offer-info");
+    expect(elements(info).map((child) => `${child.type} ${child.props.class}`)).toEqual([
+      "p ib-offer-title",
+      "p ib-offer-amount review-status-line",
+      "p ib-offer-amount",
+    ]);
+    expect(text(findOne(info, (node) => node.props.class === "ib-offer-title"))).toBe("Lawyer document review");
+  });
+
+  it("keeps feedback, notices, links and details below the banner, in the follow-up column", () => {
+    const { root } = mountPanel({
+      eligibleLawyer: true,
+      error: "Indexer unavailable",
+      actionError: "Wallet rejected the request",
+      notice: "Review refreshed",
+      transactionSignatures: ["signature-one"],
     });
-    expect(text(approved.root)).toContain("2 of 2 approved (100%) · 0 rejected (0%) · 0 pending (0%)");
+    const bar = findOne(root, (node) => node.props.class === "ib-offer-bar");
+    expect(findAll(bar, (node) => node.type === "details" || node.props.role === "alert" || node.props.role === "status"))
+      .toEqual([]);
+
+    const followUp = findOne(root, (node) => node.props.class === "review-follow-up");
+    expect(text(followUp)).toContain("Indexer unavailable");
+    expect(text(followUp)).toContain("Wallet rejected the request");
+    expect(text(followUp)).toContain("Review refreshed");
+    expect(byType(followUp, "a").some((link) => text(link).includes("signature-one"))).toBe(true);
+    expect(byType(followUp, "details")).toHaveLength(1);
+    expect(text(findOne(followUp, (node) => node.props.class === "review-details"))).toContain("Property 42 · devnet");
   });
 
   it("announces loading without rendering review actions or details", () => {
@@ -301,6 +354,24 @@ describe("LawyerReviewPanel", () => {
     const { root } = mountPanel({ review: null });
     expect(text(root)).toContain("Lawyer review is unavailable");
     expect(byType(root, "dialog")).toHaveLength(0);
+  });
+
+  it("keeps the banner out of the paint until a review state arrives", async () => {
+    const { root, update } = mountPanel({ review: null });
+    expect(findAll(root, (node) => String(node.props.class).includes("ib-offer-bar"))).toHaveLength(0);
+    // Nothing has failed yet, so the first paint carries a polite status and no alert.
+    expect(findAll(root, (node) => node.props.role === "alert")).toHaveLength(0);
+    const status = findOne(root, (node) => node.props.role === "status");
+    expect(status.props["aria-live"]).toBe("polite");
+    expect(text(status)).toBe("Lawyer review is unavailable.");
+
+    await update({ loading: true });
+    expect(text(status)).toBe("Loading lawyer review…");
+    expect(findAll(root, (node) => node.props.role === "alert")).toHaveLength(0);
+
+    await update({ review: review() });
+    expect(findOne(root, (node) => node.props.class === "ib-offer-bar")).toBeDefined();
+    expect(findAll(root, (node) => node.props.role === "status" && text(node).includes("review is unavailable"))).toHaveLength(0);
   });
 
   it("fails closed for stale assignments even if other props look actionable", () => {
@@ -336,6 +407,18 @@ describe("LawyerReviewPanel", () => {
     const dialog = await openSheet(root, "Approve documents");
     expect(text(dialog)).toContain("approve this exact document set");
     expect(findOne(dialog, (node) => node.props.title === HASH)).toBeDefined();
+  });
+
+  it("wears the sheet's own description typography on the document-set line", async () => {
+    const { root } = mountPanel({ eligibleLawyer: true });
+    const dialog = await openSheet(root, "Approve documents");
+    const line = findOne(dialog, (node) => node.props.class === "muted ib-sheet-desc sheet-hash");
+    expect(text(line)).toContain("Document set:");
+    const code = findOne(line, (node) => node.type === "code");
+    expect(code.props.title).toBe(HASH);
+    expect(text(code)).toBe("0x01234567…89abcdef");
+    // The details disclosure keeps its own hash row styling.
+    expect(findOne(root, (node) => node.props.class === "document-hash")).toBeDefined();
   });
 
   it("exposes action errors assertively and notices politely", () => {
@@ -387,7 +470,7 @@ describe("LawyerReviewPanel", () => {
     expect(emitted.confirm).toEqual([[true]]);
   });
 
-  it("keeps confirmation locked when the Indexer reflects the submitted verdict", async () => {
+  it("shows approved instead of review actions when the Indexer reflects the submitted verdict", async () => {
     const { root, emitted, update } = mountPanel({ eligibleLawyer: true });
     const dialog = await openSheet(root, "Approve documents");
     click(dialog, "Submit review");
@@ -395,19 +478,23 @@ describe("LawyerReviewPanel", () => {
       review: review({ spv: { role: "spv", wallet: "SpvWallet", verdict: "approved", documentsHash: HASH } }),
       confirming: false,
     });
-    expect(findOne(root, (node) => node.type === "button" && text(node) === "Approve documents").props.disabled).toBe(true);
+    expect(text(findOne(root, (node) => node.props.class === "ib-offer-actions"))).toBe("approved");
+    expect(byType(root, "button").some((button) => text(button) === "Approve documents")).toBe(false);
     click(dialog, "Submit review");
     expect(emitted.confirm).toEqual([[true]]);
   });
 
-  it("keeps an already-decided lawyer disabled without showing a submitted state", () => {
-    const { root } = mountPanel({
+  it("shows approved only for the connected lawyer's own verdict", async () => {
+    const { root, update } = mountPanel({
       eligibleLawyer: true,
       submissionAllowed: false,
       review: review({ spv: { role: "spv", wallet: "SpvWallet", verdict: "approved", documentsHash: HASH } }),
     });
-    expect(findOne(root, (node) => node.type === "button" && text(node) === "Approve documents").props.disabled).toBe(true);
-    expect(text(root)).not.toContain("Submitted review");
+    expect(text(findOne(root, (node) => node.props.class === "ib-offer-actions"))).toBe("approved");
+    expect(byType(root, "button").some((button) => text(button) === "Approve documents")).toBe(false);
+
+    await update({ walletAddress: metadata.developerLawyer, submissionAllowed: true });
+    expect(findOne(root, (node) => node.type === "button" && text(node) === "Approve documents").props.disabled).toBe(false);
   });
 
   it("resets the confirmation lock when the acting wallet changes", async () => {
@@ -597,5 +684,8 @@ describe("LawyerReviewPanel", () => {
     const panelSource = readFileSync(panelPath, "utf8");
     expect(panelSource).toContain('class="review-notice"');
     expect(panelSource).toContain('class="ib-sheet-error"');
+    // The review details grid stacks on the banner's breakpoint, not its own.
+    expect(panelSource).toMatch(/@media \(max-width: 840px\) \{[\s\S]*?\.review-summary,[\s\S]*?\.seat-list \{/);
+    expect(panelSource).not.toContain("@media (max-width: 640px)");
   });
 });

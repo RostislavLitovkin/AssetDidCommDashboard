@@ -187,6 +187,7 @@ const namespaceManagers = ref<string[]>([])
 const messages = ref<ApiMessage[]>([])
 const avatarUrlByAddress = ref<Record<string, string>>({})
 const profilesByAddress = ref<Record<string, import("../../../types/profile").Profile>>({})
+const lawyerCompany = ref<import("../../../types/company").Company | null>(null)
 
 const payloadById = ref<Record<string, string>>({})
 const payloadErrorById = ref<Record<string, string>>({})
@@ -837,6 +838,12 @@ const votingPower = computed(() => {
   return indexerHolding.value ? availableVotingShares(indexerHolding.value) : 0
 })
 
+const spvTermsApproved = computed(() =>
+  actionableVote.value?.payload.kind === "terms"
+  && Boolean(session.accountAddress)
+  && (indexerHolding.value?.lockLawyerElection ?? 0) > 0
+)
+
 // The injected Wallet Standard bridge (MAUI host) or a Phantom-style wallet;
 // null on standalone web sessions with message-signing-only wallets.
 const voteBridge = shallowRef(findVoteBridge())
@@ -1063,7 +1070,12 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
       : realXmarketPayload
         ? realXmarketPayloadSummary(realXmarketPayload)
         : baseBody
-    const outgoing = Boolean(session.accountAddress && addressesEqual(m.contributor, session.accountAddress))
+    // Governance announcements are authored by the bucket admin's signing key, which
+    // is the operator's key rather than a chat participant, so they never belong on
+    // the outgoing side even when the connected wallet is that admin.
+    const governanceAnnouncement = isLawyerReviewBucket.value && isVotingTag(m.tag)
+    const outgoing = !governanceAnnouncement
+      && Boolean(session.accountAddress && addressesEqual(m.contributor, session.accountAddress))
 
     let market: ChatMarketInfo | undefined
     if (marketPayload && marketPayload.kind !== "refuse" && marketPayload.token) {
@@ -1113,7 +1125,11 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
           documentsHash: votingPayload.documentsHash,
           review: reviewAnnouncement,
           ...(!reviewAnnouncement && votingPayload.kind === "terms" && lawyerTermsMetadata.value
-            ? { lawyer: lawyerTermsMetadata.value.lawyer }
+            ? {
+                lawyer: lawyerTermsMetadata.value.lawyer,
+                lawyerNickname: profilesByAddress.value[lawyerTermsMetadata.value.lawyer]?.nickname ?? undefined,
+                lawyerCompany: lawyerCompany.value ?? undefined,
+              }
             : {}),
           expiresAt: votingPayload.status === "open" ? votingPayload.expiresAt : undefined,
           yes: tallies.yes,
@@ -1132,12 +1148,10 @@ const chatMessages = computed<ChatMessageProps[]>(() => {
     // Key-sharing system notices always name the sender — by profile nickname
     // when there is one, otherwise the address — never "You", even for the
     // connected user's own key rotations. Governance announcements always render
-    // as "System": the API posts the terms bucket's under `system:voting`, and
-    // the review bucket's under the bucket admin address, which is the operator's
-    // signing key rather than a chat participant.
+    // as "System", whether the API posted them under `system:voting` or under the
+    // review bucket's admin address.
     const senderAddress = m.contributor ?? ""
     const profile = profilesByAddress.value[senderAddress]
-    const governanceAnnouncement = isLawyerReviewBucket.value && isVotingTag(m.tag)
     const senderLabel = senderAddress === VOTING_SYSTEM_CONTRIBUTOR || governanceAnnouncement
       ? "System"
       : m.tag !== KEY_SHARING_MESSAGE_TAG && outgoing
@@ -1323,6 +1337,7 @@ async function loadAll() {
       ...votingMessages.value,
       ...lawyerVerdictMessages.value,
     ])
+    await loadLawyerDetails()
   } catch (e) {
     error.value = e instanceof Error ? e.message : "Failed to load indexed data"
   } finally {
@@ -1618,6 +1633,24 @@ async function loadSenderProfiles(msgs: ApiMessage[]) {
       // Non-fatal: unresolved senders fall back to the address and default avatar.
     }
   }))
+}
+
+async function loadLawyerDetails() {
+  const address = lawyerTermsMetadata.value?.lawyer
+  lawyerCompany.value = null
+  if (!address) return
+
+  const apiAddress = normalizeApiAddress(address)
+  const [profile, companies] = await Promise.all([
+    profileClient.getProfile(apiAddress).catch(() => null),
+    profileClient.getCompanies(apiAddress).catch(() => []),
+  ])
+  if (lawyerTermsMetadata.value?.lawyer !== address) return
+
+  if (profile) {
+    profilesByAddress.value[address] = profile
+  }
+  lawyerCompany.value = companies[0] ?? null
 }
 
 // ── Live updates over the profile API's Socket.IO endpoint ─────────
@@ -2723,6 +2756,7 @@ onMounted(async () => {
             @click="finalizeSpvElection">
             {{ voteSubmitting ? "Finalizing…" : "Finalize SPV election" }}
           </button>
+          <span v-else-if="spvTermsApproved" class="ib-offer-note">approved</span>
           <button v-else class="btn btn-primary ib-offer-action" :disabled="voteSubmitting" @click="openVoteSheet('yes')">
             Approve terms
           </button>

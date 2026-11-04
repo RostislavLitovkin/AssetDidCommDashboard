@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from "vue"
 import { Vote } from "lucide-vue-next"
 import { votingTimeLeftLabel } from "../../services/buckets/voting"
+import { addressesEqual } from "../../services/wallet/addressUtils"
 import type {
   LawyerListingStatus,
   LawyerReviewBucketMetadata,
@@ -76,6 +77,13 @@ const transactionLinks = computed(() => props.transactionSignatures.map((signatu
 })))
 
 const hasDocumentSet = computed(() => !props.missingDocuments && Boolean(props.documentsHash.trim()))
+const currentLawyerApproved = computed(() => {
+  const review = props.review
+  if (!props.eligibleLawyer || !review || !props.walletAddress) return false
+  return [review.spv, review.developer].some((seat) =>
+    addressesEqual(seat.wallet, props.walletAddress) && seat.verdict === "approved"
+  )
+})
 const invalidReview = computed(() => Boolean(props.review?.staleAssignment || props.review?.hashMismatch))
 const closedReview = computed(() => props.review !== null && [
   "LEGAL",
@@ -220,6 +228,26 @@ function onSheetCancel(event: Event): void {
   sheetGuidance.value = "Wait for the wallet transaction to finish before closing this sheet."
 }
 
+/**
+ * Light-dismiss fallback for engines without `closedby` (Safari). Where the
+ * attribute is honoured, the browser already closes the sheet on a backdrop
+ * click, so this must stay out of the way; elsewhere a click that lands on the
+ * dialog box itself rather than on its content closes it through the same
+ * guarded path the Cancel button uses.
+ */
+function onSheetBackdropClick(event: MouseEvent): void {
+  if (typeof HTMLDialogElement !== "undefined" && "closedBy" in HTMLDialogElement.prototype) return
+  const dialog = sheetRef.value
+  if (!dialog || event.target !== dialog) return
+  const rect = dialog.getBoundingClientRect()
+  const onContent = rect.top <= event.clientY
+    && event.clientY <= rect.top + rect.height
+    && rect.left <= event.clientX
+    && event.clientX <= rect.left + rect.width
+  if (onContent) return
+  closeSheet()
+}
+
 function submitSheet(): void {
   const action = sheetAction.value
   if (!action || sheetBusy.value) return
@@ -249,49 +277,22 @@ watch(() => [props.confirming, props.executing], (current, previous) => {
 
 <template>
   <section class="lawyer-review-shell" :aria-busy="props.loading">
-    <div class="ib-offer-bar" role="region" aria-label="Lawyer document review">
+    <!-- Anatomy and density match the SPV lawyer terms banner: one head line, one
+         tally line, one countdown line, and the actions. Like the reference banner,
+         it only exists once there is something to report — before the first review
+         state arrives, the follow-up column below carries the status instead. -->
+    <div v-if="review" class="ib-offer-bar" role="region" aria-label="Lawyer document review">
       <div class="ib-offer-inner">
         <div class="ib-offer-head">
           <Vote :size="18" class="ib-offer-icon" aria-hidden="true" />
           <div class="ib-offer-info">
-            <h2 :id="`${id}-title`" class="ib-offer-title">Lawyer document review</h2>
-            <p class="ib-offer-amount review-property">Property {{ metadata.propertyId }} · {{ metadata.cluster }}</p>
-            <p v-if="review" class="ib-offer-amount review-status-line">
+            <p class="ib-offer-title">Lawyer document review</p>
+            <p class="ib-offer-amount review-status-line">
               {{ formatStatus(review.status) }} ·
-              {{ review.counts.approved }} of 2 approved ({{ review.percentages.approved }}%) ·
-              {{ review.counts.rejected }} rejected ({{ review.percentages.rejected }}%) ·
-              {{ review.counts.pending }} pending ({{ review.percentages.pending }}%)
+              {{ review.counts.approved }} of 2 approved · {{ review.counts.rejected }} rejected
             </p>
-            <p v-else class="ib-offer-amount">Two assigned lawyers review the current documents.</p>
-            <p v-if="review && deadlineExpiry" class="ib-offer-amount">{{ timeLeftLabel }}</p>
+            <p v-if="deadlineExpiry" class="ib-offer-amount">{{ timeLeftLabel }}</p>
           </div>
-        </div>
-
-        <p v-if="props.loading && !review" class="review-loading" role="status" aria-live="polite">
-          Loading lawyer review…
-        </p>
-        <p v-else-if="!review" class="review-loading" role="status">
-          {{ error ? "Review details could not be loaded." : "Lawyer review is unavailable." }}
-        </p>
-
-        <div v-if="error" class="review-error" role="alert">
-          <span>{{ error }}</span>
-          <button class="btn ib-offer-action" type="button" @click="emit('retry')">Retry review</button>
-        </div>
-
-        <p v-if="review?.staleAssignment" class="review-error" role="alert">
-          Lawyer assignments changed on-chain. This review bucket is stale; transactions are disabled.
-        </p>
-        <p v-else-if="review?.hashMismatch" class="review-error" role="alert">
-          The decided lawyer seats reference different document hashes. Transactions are disabled.
-        </p>
-        <p v-if="deadlineExpired && !sheetAction" class="review-error" role="alert">{{ expiryMessage }}</p>
-
-        <div v-if="!hasDocumentSet && review" class="review-error" role="alert">
-          <span>One or both lawyer documents are missing. The current document-set hash is unavailable.</span>
-          <button v-if="canUpload" class="btn ib-offer-action" type="button" @click="emit('upload')">
-            Upload replacement document
-          </button>
         </div>
 
         <div v-if="executeEligible" class="ib-offer-actions">
@@ -300,57 +301,92 @@ watch(() => [props.confirming, props.executing], (current, previous) => {
             {{ props.executing ? "Finalizing…" : "Finalize deal" }}
           </button>
         </div>
-        <div v-else-if="eligibleLawyer && review" class="ib-offer-actions">
-          <button class="btn btn-primary ib-offer-action" type="button" :disabled="confirmDisabled" @click="openSheet('approve')">
-            Approve documents
-          </button>
-          <button class="btn ib-vote-reject ib-offer-action" type="button" :disabled="confirmDisabled" @click="openSheet('reject')">
-            Reject documents
-          </button>
+        <div v-else-if="eligibleLawyer" class="ib-offer-actions">
+          <span v-if="currentLawyerApproved" class="ib-offer-note">approved</span>
+          <template v-else>
+            <button class="btn btn-primary ib-offer-action" type="button" :disabled="confirmDisabled" @click="openSheet('approve')">
+              Approve documents
+            </button>
+            <button class="btn ib-vote-reject ib-offer-action" type="button" :disabled="confirmDisabled" @click="openSheet('reject')">
+              Reject documents
+            </button>
+          </template>
         </div>
-        <p v-else-if="review" class="ib-offer-note">
-          Read-only review. Only the currently assigned SPV and developer lawyers can confirm documents.
-        </p>
-        <p v-if="review?.settlementReady && !executeEligible" class="ib-offer-note execution-guidance" role="status" aria-live="polite">
-          {{ executionMessage }}
-        </p>
-
-        <p v-if="notice" class="review-notice" role="status" aria-live="polite">{{ notice }}</p>
-        <p v-if="actionError && !sheetAction" class="review-error" role="alert">{{ actionError }}</p>
-        <ul v-if="transactionLinks.length" class="transaction-links" aria-label="Submitted transactions">
-          <li v-for="link in transactionLinks" :key="link.signature">
-            <a :href="link.url" target="_blank" rel="noopener">View transaction {{ link.signature }}</a>
-          </li>
-        </ul>
-
-        <details v-if="review" class="review-details">
-          <summary>Review details</summary>
-          <div class="review-details-body">
-            <dl class="review-summary">
-              <div><dt>Attempt</dt><dd>Attempt {{ review.attempt }} of 2</dd></div>
-              <div><dt>Status</dt><dd>{{ formatStatus(review.status) }}</dd></div>
-              <div><dt>Legal deadline</dt><dd>{{ formatDeadline(review.legalDeadline) }}</dd></div>
-            </dl>
-            <p v-if="review.attempt === 2" class="attempt-notice" role="status">
-              Second review attempt. Both lawyers must review the current document set.
-            </p>
-            <div class="document-hash">
-              <span>Current document-set hash</span>
-              <code v-if="hasDocumentSet" :title="documentsHash">{{ shortHash(documentsHash) }}</code>
-              <span v-else>Unavailable</span>
-            </div>
-            <ul class="seat-list" aria-label="Lawyer verdicts">
-              <li v-for="seat in [review.spv, review.developer]" :key="seat.role" class="seat-card">
-                <h3>{{ seatLabel(seat) }}</h3>
-                <p class="seat-verdict" :class="`verdict-${seat.verdict}`">{{ seat.verdict }}</p>
-                <code class="seat-wallet">{{ seat.wallet }}</code>
-                <span class="seat-hash">Document hash: <code>{{ seat.documentsHash }}</code></span>
-              </li>
-            </ul>
-            <p v-if="!review.settlementReady" class="execution-message">{{ executionMessage }}</p>
-          </div>
-        </details>
       </div>
+    </div>
+
+    <!-- Secondary feedback lives below the banner, in the column the page's
+         .ib-container uses, so it never reshapes the banner above it. -->
+    <div class="review-follow-up">
+      <p v-if="!review && !error" class="review-guidance" role="status" aria-live="polite">
+        {{ loading ? "Loading lawyer review…" : "Lawyer review is unavailable." }}
+      </p>
+      <p v-if="review?.staleAssignment" class="review-error" role="alert">
+        Lawyer assignments changed on-chain. This review bucket is stale; transactions are disabled.
+      </p>
+      <p v-else-if="review?.hashMismatch" class="review-error" role="alert">
+        The decided lawyer seats reference different document hashes. Transactions are disabled.
+      </p>
+      <p v-if="deadlineExpired && !sheetAction" class="review-error" role="alert">{{ expiryMessage }}</p>
+
+      <div v-if="!hasDocumentSet && review" class="review-error" role="alert">
+        <span>One or both lawyer documents are missing. The current document-set hash is unavailable.</span>
+        <button v-if="canUpload" class="btn" type="button" @click="emit('upload')">
+          Upload replacement document
+        </button>
+      </div>
+      <div v-if="error" class="review-error" role="alert">
+        <span>{{ error }}</span>
+        <button class="btn" type="button" @click="emit('retry')">Retry review</button>
+      </div>
+
+      <p v-if="review && !executeEligible && !eligibleLawyer" class="review-guidance">
+        Read-only review. Only the currently assigned SPV and developer lawyers can confirm documents.
+      </p>
+      <p v-if="review?.settlementReady && !executeEligible" class="review-guidance" role="status" aria-live="polite">
+        {{ executionMessage }}
+      </p>
+
+      <p v-if="notice" class="review-notice" role="status" aria-live="polite">{{ notice }}</p>
+      <p v-if="actionError && !sheetAction" class="review-error" role="alert">{{ actionError }}</p>
+      <ul v-if="transactionLinks.length" class="transaction-links" aria-label="Submitted transactions">
+        <li v-for="link in transactionLinks" :key="link.signature">
+          <a :href="link.url" target="_blank" rel="noopener">View transaction {{ link.signature }}</a>
+        </li>
+      </ul>
+
+      <!-- With no review state there is no details disclosure to fold the property
+           line into, so it keeps its context here instead. -->
+      <p v-if="!review" class="review-property">Property {{ metadata.propertyId }} · {{ metadata.cluster }}</p>
+
+      <details v-if="review" class="review-details">
+        <summary>Review details</summary>
+        <div class="review-details-body">
+          <p class="review-property">Property {{ metadata.propertyId }} · {{ metadata.cluster }}</p>
+          <dl class="review-summary">
+            <div><dt>Attempt</dt><dd>Attempt {{ review.attempt }} of 2</dd></div>
+            <div><dt>Status</dt><dd>{{ formatStatus(review.status) }}</dd></div>
+            <div><dt>Legal deadline</dt><dd>{{ formatDeadline(review.legalDeadline) }}</dd></div>
+          </dl>
+          <p v-if="review.attempt === 2" class="attempt-notice" role="status">
+            Second review attempt. Both lawyers must review the current document set.
+          </p>
+          <div class="document-hash">
+            <span>Current document-set hash</span>
+            <code v-if="hasDocumentSet" :title="documentsHash">{{ shortHash(documentsHash) }}</code>
+            <span v-else>Unavailable</span>
+          </div>
+          <ul class="seat-list" aria-label="Lawyer verdicts">
+            <li v-for="seat in [review.spv, review.developer]" :key="seat.role" class="seat-card">
+              <h3>{{ seatLabel(seat) }}</h3>
+              <p class="seat-verdict" :class="`verdict-${seat.verdict}`">{{ seat.verdict }}</p>
+              <code class="seat-wallet">{{ seat.wallet }}</code>
+              <span class="seat-hash">Document hash: <code>{{ seat.documentsHash }}</code></span>
+            </li>
+          </ul>
+          <p v-if="!review.settlementReady" class="execution-message">{{ executionMessage }}</p>
+        </div>
+      </details>
     </div>
 
     <dialog
@@ -362,11 +398,12 @@ watch(() => [props.confirming, props.executing], (current, previous) => {
       :aria-describedby="`${id}-sheet-description`"
       @cancel="onSheetCancel"
       @close="finishSheet"
+      @click="onSheetBackdropClick"
     >
       <div class="ib-sheet-handle" aria-hidden="true"></div>
       <h3 :id="`${id}-sheet-title`" class="ib-sheet-title">{{ sheetTitle }}</h3>
       <p :id="`${id}-sheet-description`" class="muted ib-sheet-desc">{{ sheetDescription }}</p>
-      <p v-if="sheetAction !== 'execute' && hasDocumentSet" class="document-hash sheet-hash">
+      <p v-if="sheetAction !== 'execute' && hasDocumentSet" class="muted ib-sheet-desc sheet-hash">
         Document set: <code :title="documentsHash">{{ shortHash(documentsHash) }}</code>
       </p>
       <p v-if="deadlineExpired" class="ib-sheet-error" role="alert">{{ expiryMessage }}</p>
@@ -395,28 +432,37 @@ watch(() => [props.confirming, props.executing], (current, previous) => {
    ~/assets/styles/ib-surfaces.css — the same rule set the SPV lawyer terms flow
    wears. Only what the review flow's own content needs is left here. */
 
-/* The two-seat tally is one long line, so it has to break inside words. */
+/* The tally stays one line at the chat column's narrowest width, so it may break
+   inside a word rather than push the banner wider. */
 .review-status-line {
   overflow-wrap: anywhere;
 }
 
-/* Review errors surface inside the banner, where the reference flow shows none,
-   and several carry an inline action button — hence a boxed alert rather than the
-   sheet's bare .ib-sheet-error text. */
+/* The secondary column below the banner, laid out on the same 1000px/48px grid as
+   the page's .ib-container — a child component cannot wear that scoped class. */
+.review-follow-up {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 0 48px 12px;
+}
+
+/* Review errors are the page's plain error line — red text, no filled box — with
+   room for the inline retry/upload button some of them carry. */
 .review-error {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
   margin: 0;
-  border-radius: 8px;
-  padding: 8px 10px;
-  font-size: 13px;
-  background: color-mix(in srgb, var(--status-error) 8%, transparent);
+  font-size: 14px;
   color: var(--status-error);
 }
 
-.review-loading,
+.review-guidance,
+.review-property,
 .attempt-notice,
 .execution-message {
   margin: 0;
@@ -539,12 +585,22 @@ code {
   font-size: 14px;
 }
 
-/* The review details grid, not part of the shared banner/sheet rule set. */
-@media (max-width: 640px) {
+/* The review details grid, not part of the shared banner/sheet rule set. Stacks
+   on the same breakpoint the banner and the follow-up column use. */
+@media (max-width: 840px) {
 
   .review-summary,
   .seat-list {
     grid-template-columns: 1fr;
+  }
+}
+
+/* The secondary column follows the banner's own breakpoint to stay aligned with
+   it, exactly as the page's .ib-container does. */
+@media (max-width: 840px) {
+  .review-follow-up {
+    padding-left: 16px;
+    padding-right: 16px;
   }
 }
 </style>

@@ -8,6 +8,7 @@ import { useAddress } from "../../../composables/useAddress"
 import { computed, onMounted, ref } from "vue"
 import { useRoute } from "nuxt/app"
 import { useSessionStore } from "../../../stores/session"
+import { timeAgo } from "../../../services/format/relativeTime"
 
 const route = useRoute()
 const session = useSessionStore()
@@ -26,6 +27,7 @@ const namespaceId = computed(() => {
 })
 
 const buckets = ref<ApiBucketWithMembers[]>([])
+const lastMessageAtByBucket = ref<Record<string, string>>({})
 const bucketsLoading = ref(true)
 const bucketsError = ref("")
 const namespaceName = ref("")
@@ -46,12 +48,25 @@ function resolveDisplayName(bucket: ApiBucketWithMembers): string {
   return `Bucket ${bucket.bucketId}`
 }
 
+function formatLastMessage(bucket: ApiBucketWithMembers): string {
+  const iso = lastMessageAtByBucket.value[bucket.bucketId]
+  if (!iso) {
+    return "No messages yet"
+  }
+
+  const timestamp = Date.parse(iso)
+  return Number.isNaN(timestamp) ? "No messages yet" : timeAgo(timestamp)
+}
+
 async function loadBuckets() {
   bucketsError.value = ""
   bucketsLoading.value = true
 
   try {
     buckets.value = await bucketsRepository.fetchBucketsByNamespace(namespaceId.value)
+    lastMessageAtByBucket.value = await bucketsRepository.fetchLatestMessageTimes(
+      buckets.value.map((bucket) => bucket.bucketId)
+    )
   } catch (error) {
     bucketsError.value = error instanceof Error ? error.message : "Unable to load buckets"
   } finally {
@@ -136,7 +151,7 @@ onMounted(async () => {
               style="justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap">
               <div class="stack" style="gap: 6px">
                 <strong style="font-size: 16px">{{ resolveDisplayName(bucket) }}</strong>
-                <p class="muted" style="margin: 0">Bucket ID: {{ bucket.id }}</p>
+                <p class="muted" style="margin: 0">Last message: {{ formatLastMessage(bucket) }}</p>
               </div>
             </div>
           </NuxtLink>

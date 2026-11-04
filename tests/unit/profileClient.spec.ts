@@ -20,6 +20,34 @@ describe("ProfileClient", () => {
     })
   })
 
+  it("loads a user's companies from the same profile API as the mobile app", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify([{
+      companyId: "company-1",
+      userId: "Lawyer/Wallet",
+      companyWalletAddress: "Lawyer/Wallet",
+      name: "Legal & Co",
+      email: "hello@legal.test",
+      website: "https://legal.test",
+      summary: "Property legal services",
+      address: "1 Example Street",
+      logo: "https://cdn.test/legal-logo.png"
+    }]), { status: 200 }))
+    const client = new ProfileClient("https://profiles.test", fetcher)
+
+    await expect(client.getCompanies("Lawyer/Wallet")).resolves.toEqual([{
+      companyId: "company-1",
+      userId: "Lawyer/Wallet",
+      companyWalletAddress: "Lawyer/Wallet",
+      name: "Legal & Co",
+      email: "hello@legal.test",
+      website: "https://legal.test",
+      summary: "Property legal services",
+      address: "1 Example Street",
+      logo: "https://cdn.test/legal-logo.png"
+    }])
+    expect(fetcher).toHaveBeenCalledWith("https://profiles.test/api/companies/user/Lawyer%2FWallet")
+  })
+
   it("upserts the profile via PUT with the C#-canonical request body", async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       ss58Address: "5Example",

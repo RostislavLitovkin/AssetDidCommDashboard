@@ -1,3 +1,4 @@
+import type { Company } from "../../types/company"
 import type { Profile, ProfileInput } from "../../types/profile"
 import { canonicalProfileJson, type ProfilePayloadBody } from "./profileSigning"
 
@@ -37,6 +38,31 @@ export function normalizeProfile(value: unknown): Profile {
   }
 }
 
+export function normalizeCompany(value: unknown): Company {
+  if (!value || typeof value !== "object") {
+    throw new Error("Profile API returned an invalid company")
+  }
+
+  const company = value as Record<string, unknown>
+  const name = asOptionalString(company.name)
+  const email = asOptionalString(company.email)
+  if (!name || !email) {
+    throw new Error("Profile API returned a company without a name or email")
+  }
+
+  return {
+    companyId: asOptionalString(company.companyId),
+    userId: asOptionalString(company.userId),
+    companyWalletAddress: asOptionalString(company.companyWalletAddress),
+    name,
+    email,
+    website: asOptionalString(company.website),
+    summary: asOptionalString(company.summary),
+    address: asOptionalString(company.address),
+    logo: asOptionalString(company.logo)
+  }
+}
+
 export class ProfileClient {
   constructor(
     private readonly baseUrl = PROFILE_API_URL,
@@ -65,6 +91,22 @@ export class ProfileClient {
     }
 
     return normalizeProfile(await response.json())
+  }
+
+  async getCompanies(address: string): Promise<Company[]> {
+    const response = await this.fetcher(`${this.baseUrl}/api/companies/user/${encodeURIComponent(address)}`)
+    if (response.status === 404) {
+      return []
+    }
+    if (!response.ok) {
+      throw new Error(`Unable to load companies (${response.status})`)
+    }
+
+    const companies: unknown = await response.json()
+    if (!Array.isArray(companies)) {
+      throw new Error("Profile API returned an invalid company list")
+    }
+    return companies.map(normalizeCompany)
   }
 
   async saveProfile(

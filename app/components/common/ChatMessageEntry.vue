@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { VotingResultStatus } from "../../services/buckets/voting"
+import type { Company } from "../../types/company"
 
 export interface ChatMessageProps {
   id: string
@@ -41,6 +42,8 @@ export interface ChatVotingInfo {
   documentsHash?: string
   review?: boolean
   lawyer?: string
+  lawyerNickname?: string
+  lawyerCompany?: Company
   yes?: number
   no?: number
   abstain?: number
@@ -323,8 +326,19 @@ function formatFileSize(base64: string): string {
             <p v-if="voting.id !== undefined" class="chat-vote-sub">#{{ voting.id }}</p>
             <p v-if="voting.lawyer" class="chat-vote-sub chat-vote-lawyer">
               <span>Lawyer:</span>
-              <span class="chat-vote-lawyer-name" :title="voting.lawyer">{{ voting.lawyer }}</span>
+              <span class="chat-vote-lawyer-name" :title="voting.lawyer">{{ voting.lawyerNickname || voting.lawyer }}</span>
             </p>
+            <div v-if="voting.lawyerCompany" class="chat-vote-company">
+              <img v-if="voting.lawyerCompany.logo" class="chat-vote-company-logo"
+                :src="voting.lawyerCompany.logo" :alt="`${voting.lawyerCompany.name} logo`" loading="lazy" />
+              <div class="chat-vote-company-details">
+                <p><strong>Company:</strong> {{ voting.lawyerCompany.name }}</p>
+                <p><strong>Email:</strong> {{ voting.lawyerCompany.email }}</p>
+                <p v-if="voting.lawyerCompany.website"><strong>Website:</strong> {{ voting.lawyerCompany.website }}</p>
+                <p v-if="voting.lawyerCompany.address"><strong>Address:</strong> {{ voting.lawyerCompany.address }}</p>
+                <p v-if="voting.lawyerCompany.summary"><strong>Summary:</strong> {{ voting.lawyerCompany.summary }}</p>
+              </div>
+            </div>
             <template v-if="voting.yes !== undefined && voting.no !== undefined">
               <progress class="chat-vote-bar" max="100" :value="voting.yesPct ?? 0"
                 :aria-label="`${voting.yesLabel}: ${voting.yes}, ${voting.noLabel}: ${voting.no}${voting.abstain !== undefined ? `, ${voting.pendingLabel ?? 'Pending'}: ${voting.abstain}` : ''}`"></progress>
@@ -687,6 +701,38 @@ function formatFileSize(base64: string): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-vote-company {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.chat-vote-company-logo {
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  object-fit: contain;
+  border-radius: 6px;
+  background: var(--surface-bg);
+}
+
+.chat-vote-company-details {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.chat-vote-company-details p {
+  margin: 0 0 4px;
+}
+
+.chat-vote-company-details p:last-child {
+  margin-bottom: 0;
 }
 
 .chat-vote-bar {

@@ -24,7 +24,9 @@ interface ReviewFixture {
   messages?: ApiMessage[]
   taggedMessages?: ApiMessage[]
   outgoingMessages?: string[]
+  admins?: Record<string, unknown>[]
   listing?: Record<string, unknown>
+  shareHolding?: Record<string, unknown>
   lawyerCandidacies?: Record<string, unknown>[]
   spvFinalization?: Record<string, unknown> | null
   settlement?: Record<string, unknown> | null
@@ -129,7 +131,7 @@ async function mockBackend(page: Page, fixture: ReviewFixture): Promise<{
   }
   const messages = fixture.messages ?? []
   const taggedMessages = fixture.taggedMessages ?? []
-  const admins = [{ subjectId: "Admin" }]
+  const admins = fixture.admins ?? [{ subjectId: "Admin" }]
   const contributors = [{ subjectId: SPV }, { subjectId: DEVELOPER }]
 
   await page.route("https://profile-api.xcavate.io/**", async (route) => {
@@ -181,6 +183,7 @@ async function mockBackend(page: Page, fixture: ReviewFixture): Promise<{
       body: JSON.stringify({
         data: {
           listings: { nodes: [fixture.listing ?? listing()] },
+          shareHoldings: { nodes: fixture.shareHolding ? [fixture.shareHolding] : [] },
           lawyerCandidacies: { nodes: fixture.lawyerCandidacies ?? [] },
           pendingFinalizations: {
             executeDeal: fixture.settlement ?? null,
@@ -356,12 +359,110 @@ test("renders legacy review buckets as explicit devnet with read-only missing-do
   const { indexerRequests } = await mockBackend(page, { properties: reviewProperties() })
   await page.goto("/indexed-bucket/39")
 
-  await expect(page.getByRole("heading", { name: "Lawyer document review" })).toBeVisible()
+  await expect(page.locator(".ib-offer-title")).toHaveText("Lawyer document review")
   await expect(page.locator(".review-property")).toHaveText("Property 42 · devnet")
   await expect(page.getByText("Read-only review.", { exact: false })).toBeVisible()
   await expect(page.getByText("One or both lawyer documents are missing", { exact: false })).toBeVisible()
   await expect(page.getByRole("button", { name: "Submit document verdict" })).toHaveCount(0)
   expect(indexerRequests).toHaveLength(1)
+})
+
+test("wears the terms banner's head-plus-actions anatomy with a two-line hierarchy", async ({ page }) => {
+  await installWallet(page, SPV)
+  await mockBackend(page, {
+    messages: [
+      message({ id: "spv", messageId: "1", ipfsContent: base64(SPV_PDF) }),
+      message({ id: "developer", messageId: "2", ipfsContent: base64(DEVELOPER_PDF), createdAt: "2026-10-01T12:00:02.000Z" }),
+    ],
+  })
+  await page.goto("/indexed-bucket/39")
+  await expect(page.getByRole("button", { name: "Approve documents", exact: true })).toBeEnabled()
+
+  const anatomy = await page.locator(".ib-offer-bar").evaluate((bar) => {
+    const inner = bar.querySelector(":scope > .ib-offer-inner")!
+    return {
+      children: Array.from(inner.children, (child) => child.className),
+      info: Array.from(inner.querySelectorAll(".ib-offer-info > *"), (line) => ({
+        tag: line.tagName.toLowerCase(),
+        className: line.className,
+        text: (line.textContent ?? "").replace(/\s+/g, " ").trim(),
+      })),
+      headChildren: Array.from(inner.querySelector(".ib-offer-head")!.children, (child) => [...new Set(
+        (child.getAttribute("class") ?? "").split(" ").filter((name) => name.startsWith("ib-")),
+      )]),
+    }
+  })
+  // The reference banner (.ib-offer-inner) holds nothing but its head and its actions.
+  expect(anatomy.children).toEqual(["ib-offer-head", "ib-offer-actions"])
+  expect(anatomy.headChildren).toEqual([["ib-offer-icon"], ["ib-offer-info"]])
+  expect(anatomy.info.map((line) => line.tag)).toEqual(["p", "p", "p"])
+  expect(anatomy.info.map((line) => line.className)).toEqual([
+    "ib-offer-title",
+    "ib-offer-amount review-status-line",
+    "ib-offer-amount",
+  ])
+  expect(anatomy.info[0]!.text).toBe("Lawyer document review")
+  expect(anatomy.info[1]!.text).toBe("Sold out · 0 of 2 approved · 0 rejected")
+  expect(anatomy.info[2]!.text).toMatch(/^(\d+m left|\d+h \d+m left|\d+d left|Closed)$/)
+
+  const banner = page.getByRole("region", { name: "Lawyer document review" })
+  await expect(banner).not.toContainText("%")
+  await expect(banner).not.toContainText("Property 42")
+
+  // Everything denser than the reference sits below the banner, collapsed by default.
+  await expect(banner.locator(".review-error, .review-loading, .review-notice, .transaction-links, details")).toHaveCount(0)
+  const followUp = page.locator(".review-follow-up")
+  expect(await page.evaluate(() => {
+    const bar = document.querySelector(".ib-offer-bar")!
+    const follow = document.querySelector(".review-follow-up")!
+    return (bar.compareDocumentPosition(follow) & Node.DOCUMENT_POSITION_FOLLOWING) > 0
+  })).toBe(true)
+  await expect(followUp.locator(".review-details")).toBeVisible()
+  await expect(followUp.locator(".review-details")).toHaveJSProperty("open", false)
+  await expect(followUp.locator(".review-details .review-property")).toHaveText("Property 42 · devnet")
+
+  // And the banner keeps the reference's compactness at both widths.
+  for (const [index, width] of [1280, 390].entries()) {
+    await page.setViewportSize({ width, height: 900 })
+    const layout = await banner.evaluate((element) => ({
+      height: Math.round(element.getBoundingClientRect().height),
+      barOverflow: element.scrollWidth - element.clientWidth,
+      documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    }))
+    expect(layout.barOverflow).toBeLessThanOrEqual(1)
+    expect(layout.documentOverflow).toBeLessThanOrEqual(1)
+    // 142px is the terms banner; stacked buttons are the review flow's only extra.
+    expect(layout.height).toBeLessThanOrEqual(index === 0 ? 150 : 200)
+  }
+})
+
+test("keeps review guidance, errors and notices below the banner", async ({ page }) => {
+  await mockBackend(page, {})
+  await page.goto("/indexed-bucket/39")
+
+  const banner = page.getByRole("region", { name: "Lawyer document review" })
+  await expect(banner.locator(".ib-offer-actions")).toHaveCount(0)
+  await expect(banner.locator(".ib-offer-note, .review-error, .review-notice")).toHaveCount(0)
+
+  const followUp = page.locator(".review-follow-up")
+  const missing = followUp.locator(".review-error").filter({ hasText: "One or both lawyer documents are missing" })
+  await expect(missing).toBeVisible()
+  await expect(missing).toHaveCSS("background-color", "rgba(0, 0, 0, 0)")
+  await expect(followUp.locator(".review-guidance")).toContainText("Read-only review.")
+  await expect(followUp.locator(".review-notice")).toBeVisible()
+
+  // The alert is the page's plain error line: red text on the page's own background.
+  const alertStyle = await missing.evaluate((element) => {
+    const probe = document.createElement("span")
+    probe.style.color = "var(--status-error)"
+    element.append(probe)
+    const expected = getComputedStyle(probe).color
+    probe.remove()
+    const style = getComputedStyle(element)
+    return { color: style.color, background: style.backgroundColor, expected }
+  })
+  expect(alertStyle.color).toBe(alertStyle.expected)
+  expect(alertStyle.background).toBe("rgba(0, 0, 0, 0)")
 })
 
 test("announces malformed review metadata instead of hiding the review-category error", async ({ page }) => {
@@ -372,6 +473,10 @@ test("announces malformed review metadata instead of hiding the review-category 
 
   await expect(page.getByRole("alert").filter({ hasText: "This is not a valid lawyer review bucket." })).toBeVisible()
   await expect(page.getByRole("button", { name: "Retry review" })).toBeVisible()
+  // With no review state there is nothing for the banner to report, so it stays out
+  // of the paint entirely instead of showing an empty band or a placeholder alert.
+  await expect(page.locator(".ib-offer-bar")).toHaveCount(0)
+  await expect(page.getByRole("region", { name: "Lawyer document review" })).toHaveCount(0)
 })
 
 test("loads inline base64 PDF bytes and derives the document-set hash", async ({ page }) => {
@@ -738,6 +843,104 @@ test("shows a compact SPV lawyer election banner and chat card with a live count
   await expect(status).toHaveText("Closed", { timeout: 20_000 })
 })
 
+test("shows the SPV lawyer's nickname and company details on the election message", async ({ page }) => {
+  const vote = message({
+    id: "vote-spv-profile",
+    messageId: "2",
+    contributor: "system:voting",
+    tag: "voting/terms",
+    description: null,
+    contentType: "application/json",
+    ipfsContent: JSON.stringify({ kind: "terms", listingId: "42", round: 1, status: "open" }),
+  })
+  await mockBackend(page, {
+    category: "spv-lawyer-terms",
+    properties: { listing_id: "42", cluster: "devnet", lawyer: SPV, candidacy: "CandidacyPDA111" },
+    messages: [vote],
+  })
+  await page.route(`https://profile-api.xcavate.io/api/profiles/${SPV}`, async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        ss58Address: SPV,
+        nickname: "Alice Lawyer",
+        bio: null,
+        profilePicture: null,
+        x25519Key: null,
+      }),
+    })
+  })
+  await page.route(`https://profile-api.xcavate.io/api/companies/user/${SPV}`, async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify([{
+        companyId: "company-1",
+        userId: SPV,
+        companyWalletAddress: SPV,
+        name: "Legal & Co",
+        email: "hello@legal.test",
+        website: "https://legal.test",
+        summary: "Property legal services",
+        address: "1 Example Street",
+        logo: "https://cdn.test/legal-logo.png",
+      }]),
+    })
+  })
+  await page.goto("/indexed-bucket/39")
+
+  const card = page.locator(".chat-vote-card")
+  await expect(card.locator(".chat-vote-lawyer-name")).toHaveText("Alice Lawyer")
+  await expect(card.locator(".chat-vote-lawyer-name")).toHaveAttribute("title", SPV)
+  await expect(card).not.toContainText(`Lawyer: ${SPV}`)
+
+  const company = card.locator(".chat-vote-company")
+  await expect(company.locator(".chat-vote-company-logo")).toHaveAttribute("src", "https://cdn.test/legal-logo.png")
+  await expect(company).toContainText("Company: Legal & Co")
+  await expect(company).toContainText("Email: hello@legal.test")
+  await expect(company).toContainText("Website: https://legal.test")
+  await expect(company).toContainText("Address: 1 Example Street")
+  await expect(company).toContainText("Summary: Property legal services")
+})
+
+test("shows approved instead of Approve terms after the connected investor has voted", async ({ page }) => {
+  await installWallet(page, OTHER)
+  const vote = message({
+    id: "vote-spv-approved",
+    messageId: "2",
+    contributor: "system:voting",
+    tag: "voting/terms",
+    description: null,
+    contentType: "application/json",
+    ipfsContent: JSON.stringify({
+      kind: "terms",
+      listingId: "42",
+      round: 1,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      status: "open",
+    }),
+  })
+  await mockBackend(page, {
+    category: "spv-lawyer-terms",
+    properties: { listing_id: "42", cluster: "devnet", lawyer: SPV, candidacy: "CandidacyPDA111" },
+    listing: listing({ spvElectionRound: 1, soldShareAmount: 100 }),
+    shareHolding: {
+      amount: "100",
+      lockLawyerElection: "100",
+      lockAgentElection: "0",
+      lockProposal: "0",
+      lockChallenge: "0",
+      listed: "0",
+    },
+    lawyerCandidacies: [{ round: 1, lawyer: SPV, costs: 1, votePower: 100 }],
+    messages: [vote],
+  })
+  await page.goto("/indexed-bucket/39")
+
+  const banner = page.getByRole("region", { name: "Governance vote" })
+  await expect(banner.getByText("approved", { exact: true })).toBeVisible()
+  await expect(banner.getByRole("button", { name: "Approve terms", exact: true })).toHaveCount(0)
+})
+
 async function mockFinalizableSpvElection(page: Page, winner: string | null, finalizationDue = true): Promise<void> {
   const expiry = Math.floor(Date.now() / 1000) - 1
   const vote = message({
@@ -880,7 +1083,7 @@ test("keeps investor voting visible on non-review buckets without the lawyer pan
   await page.goto("/indexed-bucket/39")
 
   await expect(page.getByRole("region", { name: "Governance vote" })).toBeVisible()
-  await expect(page.getByRole("heading", { name: "Lawyer document review" })).toHaveCount(0)
+  await expect(page.getByRole("region", { name: "Lawyer document review" })).toHaveCount(0)
 })
 
 test("never falls back to devnet when mainnet Indexer configuration is absent", async ({ page }) => {
@@ -956,7 +1159,7 @@ test("disables lawyer actions and shows feedback when the legal deadline passes 
   await expect(page.getByRole("alert").filter({ hasText: "Offline" })).toHaveCount(0)
 })
 
-test("keeps an already-decided lawyer disabled without a false submitted state", async ({ page }) => {
+test("shows approved instead of actions for an already-approved lawyer", async ({ page }) => {
   await installWallet(page, SPV)
   await mockBackend(page, {
     listing: listing({
@@ -970,8 +1173,10 @@ test("keeps an already-decided lawyer disabled without a false submitted state",
   })
   await page.goto("/indexed-bucket/39")
 
-  await expect(page.getByRole("button", { name: "Approve documents", exact: true })).toBeDisabled()
-  await expect(page.getByRole("button", { name: "Reject documents", exact: true })).toBeDisabled()
+  const banner = page.getByRole("region", { name: "Lawyer document review" })
+  await expect(banner.locator(".ib-offer-actions")).toHaveText("approved")
+  await expect(banner.getByRole("button", { name: "Approve documents", exact: true })).toHaveCount(0)
+  await expect(banner.getByRole("button", { name: "Reject documents", exact: true })).toHaveCount(0)
   await expect(page.getByRole("button", { name: "Submitted review" })).toHaveCount(0)
 })
 
@@ -1149,6 +1354,103 @@ test("renders a review round opened without a deadline as a card instead of raw 
   await expect(card).not.toContainText("left")
   await expect(card).not.toContainText("expiresAt")
   await expect(page.locator(".chat-text")).toHaveCount(0)
+})
+
+test("keeps an admin-authored governance announcement on the incoming side", async ({ page }) => {
+  // The API posts the review bucket's announcements under the bucket admin's
+  // address — the operator's signing key, not a chat participant. When the
+  // connected wallet happens to be that admin, the announcement still has to read
+  // as System on the incoming side, while ordinary admin chat stays outgoing.
+  const admin = new PublicKey(new Uint8Array(32).fill(9)).toBase58()
+  await installWallet(page, admin)
+  const announcement = message({
+    id: "admin-announcement",
+    messageId: "2",
+    contributor: admin,
+    tag: "voting/terms",
+    description: null,
+    contentType: "application/json",
+    ipfsContent: JSON.stringify({ kind: "terms", listingId: "42", round: 2, status: "open" }),
+    createdAt: "2026-10-01T12:00:02.000Z",
+  })
+  const noteBody = "Both documents are with the SPV lawyer"
+  const note = message({
+    id: "admin-note",
+    messageId: "4",
+    contributor: admin,
+    tag: null,
+    description: noteBody,
+    contentType: "text/plain",
+    // The API stores message bodies base64-encoded, and the page decodes
+    // ipfsContent before it reaches the bubble.
+    ipfsContent: base64(new TextEncoder().encode(noteBody)),
+    createdAt: "2026-10-01T12:00:04.000Z",
+  })
+  await mockBackend(page, { admins: [{ subjectId: admin }], messages: [announcement, note] })
+  await page.goto("/indexed-bucket/39")
+
+  await expect(page.locator(".chat-vote-card")).toHaveCount(1)
+  const row = page.locator(".chat-row").filter({ has: page.locator(".chat-vote-card") })
+  await expect(row).toHaveCount(1)
+  await expect(row).toHaveClass(/chat-row-incoming/)
+  await expect(row).not.toHaveClass(/chat-row-outgoing/)
+  await expect(row.locator(".chat-sender")).toHaveText("System")
+  await expect(row.locator(".chat-avatar-unit")).toHaveCount(1)
+  await expect(row.locator(".chat-bubble")).toHaveClass(/chat-bubble-incoming/)
+  // The outgoing fill is the primary yellow; the announcement must not wear it.
+  const paint = await row.locator(".chat-bubble").evaluate((bubble) => {
+    const probe = document.createElement("span")
+    probe.style.backgroundColor = "var(--color-primary)"
+    bubble.append(probe)
+    const primary = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return { primary, bubble: getComputedStyle(bubble).backgroundColor }
+  })
+  expect(paint.primary).toBe("rgb(247, 203, 77)")
+  expect(paint.bubble).not.toBe(paint.primary)
+
+  const noteRow = page.locator(".chat-row").filter({ hasText: "Both documents are with the SPV lawyer" })
+  await expect(noteRow).toHaveCount(1)
+  await expect(noteRow).toHaveClass(/chat-row-outgoing/)
+  await expect(noteRow).not.toHaveClass(/chat-row-incoming/)
+  await expect(noteRow.locator(".chat-sender")).toHaveCount(0)
+  await expect(noteRow.locator(".chat-avatar-unit")).toHaveCount(0)
+})
+
+test("dismisses the review sheet on a backdrop click without closedby support", async ({ page }) => {
+  await installWallet(page, SPV)
+  await mockBackend(page, {
+    messages: [
+      message({ id: "spv", messageId: "1", ipfsContent: base64(SPV_PDF) }),
+      message({ id: "developer", messageId: "2", ipfsContent: base64(DEVELOPER_PDF), createdAt: "2026-10-01T12:00:02.000Z" }),
+    ],
+  })
+  await page.goto("/indexed-bucket/39")
+  await page.getByRole("button", { name: "Approve documents", exact: true }).click()
+
+  const sheet = page.locator("dialog.ib-offer-sheet")
+  await expect(sheet).toBeVisible()
+  await page.evaluate(async () => {
+    // Let the entry slide finish, otherwise the box is still mid-animation.
+    const element = document.querySelector("dialog.ib-offer-sheet")!
+    await Promise.allSettled(element.getAnimations().map((animation) => animation.finished))
+    // Safari ships neither the `closedby` attribute nor its IDL attribute, so only
+    // the panel's own click handler can light-dismiss the sheet there.
+    element.removeAttribute("closedby")
+    delete (HTMLDialogElement.prototype as unknown as Record<string, unknown>).closedBy
+  })
+  expect(await page.evaluate(() => "closedBy" in HTMLDialogElement.prototype)).toBe(false)
+
+  const box = await sheet.boundingBox()
+  expect(box).not.toBeNull()
+  // The sheet's own padding sits inside its box and is not the backdrop.
+  await page.mouse.click(box!.x + 8, box!.y + box!.height - 10)
+  await expect(sheet).toBeVisible()
+  await expect(page.getByRole("button", { name: "Submit review" })).toBeEnabled()
+
+  await page.mouse.click(box!.x + box!.width / 2, 40)
+  await expect(sheet).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Approve documents", exact: true })).toBeEnabled()
 })
 
 test("greys a three-label review card exactly like the terms card without overflowing it", async ({ page }) => {
