@@ -289,6 +289,10 @@ async function installWallet(
   }, { walletAddress: address, walletKind: kind, signature: mockedSignature })
 }
 
+async function showReviewDebugDetails(page: Page): Promise<void> {
+  await page.addInitScript(() => localStorage.setItem("asset-didcomm.message-debug", "true"))
+}
+
 async function installPlaintextKey(page: Page): Promise<ApiMessage> {
   const pair = await generateKeyPair("ECDH-ES+A256KW", { crv: "X25519", extractable: true })
   const privateJwk = await exportJWK(pair.privateKey)
@@ -356,6 +360,7 @@ async function encryptedDocumentFixture(
 }
 
 test("renders legacy review buckets as explicit devnet with read-only missing-document state", async ({ page }) => {
+  await showReviewDebugDetails(page)
   const { indexerRequests } = await mockBackend(page, { properties: reviewProperties() })
   await page.goto("/indexed-bucket/39")
 
@@ -369,6 +374,7 @@ test("renders legacy review buckets as explicit devnet with read-only missing-do
 
 test("wears the terms banner's head-plus-actions anatomy with a two-line hierarchy", async ({ page }) => {
   await installWallet(page, SPV)
+  await showReviewDebugDetails(page)
   await mockBackend(page, {
     messages: [
       message({ id: "spv", messageId: "1", ipfsContent: base64(SPV_PDF) }),
@@ -395,15 +401,13 @@ test("wears the terms banner's head-plus-actions anatomy with a two-line hierarc
   // The reference banner (.ib-offer-inner) holds nothing but its head and its actions.
   expect(anatomy.children).toEqual(["ib-offer-head", "ib-offer-actions"])
   expect(anatomy.headChildren).toEqual([["ib-offer-icon"], ["ib-offer-info"]])
-  expect(anatomy.info.map((line) => line.tag)).toEqual(["p", "p", "p"])
+  expect(anatomy.info.map((line) => line.tag)).toEqual(["p", "p"])
   expect(anatomy.info.map((line) => line.className)).toEqual([
     "ib-offer-title",
-    "ib-offer-amount review-status-line",
     "ib-offer-amount",
   ])
   expect(anatomy.info[0]!.text).toBe("Lawyer document review")
-  expect(anatomy.info[1]!.text).toBe("Sold out · 0 of 2 approved · 0 rejected")
-  expect(anatomy.info[2]!.text).toMatch(/^(\d+m left|\d+h \d+m left|\d+d left|Closed)$/)
+  expect(anatomy.info[1]!.text).toMatch(/^(\d+m left|\d+h \d+m left|\d+d left|Closed)$/)
 
   const banner = page.getByRole("region", { name: "Lawyer document review" })
   await expect(banner).not.toContainText("%")
@@ -436,7 +440,7 @@ test("wears the terms banner's head-plus-actions anatomy with a two-line hierarc
   }
 })
 
-test("keeps review guidance, errors and notices below the banner", async ({ page }) => {
+test("keeps review guidance and errors below the banner without transient notices", async ({ page }) => {
   await mockBackend(page, {})
   await page.goto("/indexed-bucket/39")
 
@@ -449,7 +453,7 @@ test("keeps review guidance, errors and notices below the banner", async ({ page
   await expect(missing).toBeVisible()
   await expect(missing).toHaveCSS("background-color", "rgba(0, 0, 0, 0)")
   await expect(followUp.locator(".review-guidance")).toContainText("Read-only review.")
-  await expect(followUp.locator(".review-notice")).toBeVisible()
+  await expect(followUp.locator(".review-notice")).toHaveCount(0)
 
   // The alert is the page's plain error line: red text on the page's own background.
   const alertStyle = await missing.evaluate((element) => {
@@ -480,6 +484,7 @@ test("announces malformed review metadata instead of hiding the review-category 
 })
 
 test("loads inline base64 PDF bytes and derives the document-set hash", async ({ page }) => {
+  await showReviewDebugDetails(page)
   await mockBackend(page, {
     messages: [
       message({ id: "spv", messageId: "1", ipfsContent: base64(SPV_PDF) }),
@@ -493,6 +498,7 @@ test("loads inline base64 PDF bytes and derives the document-set hash", async ({
 })
 
 test("loads public URL and CID PDF references when no hydrated attachment exists", async ({ page }) => {
+  await showReviewDebugDetails(page)
   const documentRequests: string[] = []
   await mockBackend(page, {
     messages: [
@@ -520,6 +526,7 @@ test("loads public URL and CID PDF references when no hydrated attachment exists
 })
 
 test("prefers existing hydrated attachments over downloading public references again", async ({ page }) => {
+  await showReviewDebugDetails(page)
   const fixture = await encryptedDocumentFixture()
   await mockBackend(page, { messages: fixture.messages })
   await page.addInitScript((jwk) => {
@@ -618,6 +625,7 @@ test("hydrates legacy S3 terms-document references through ProfileApi", async ({
 })
 
 test("hydrates object-storage review snapshots through ProfileApi without the .pdf suffix", async ({ page }) => {
+  await showReviewDebugDetails(page)
   const fixture = await encryptedDocumentFixture()
   const hash = "f7adfcd9aa4fc5aa1973fbca008e119ab9452184e9a34a2d9bf622bebc153c36"
   const spvReference = `https://xcavate-profile.fsn1.your-objectstorage.com/terms-documents/by-listing/22/spv-lawyer-${hash}.pdf`
@@ -902,8 +910,8 @@ test("shows the SPV lawyer's nickname and company details on the election messag
   await expect(company).toContainText("Summary: Property legal services")
 })
 
-test("shows approved instead of Approve terms after the connected investor has voted", async ({ page }) => {
-  await installWallet(page, OTHER)
+test("shows approved only while the connected investor has voted", async ({ page }) => {
+  await installWallet(page, OTHER, "solana", "1".repeat(64))
   const vote = message({
     id: "vote-spv-approved",
     messageId: "2",
@@ -919,26 +927,48 @@ test("shows approved instead of Approve terms after the connected investor has v
       status: "open",
     }),
   })
+  const shareHolding = {
+    amount: "100",
+    lockLawyerElection: "100",
+    lockAgentElection: "0",
+    lockProposal: "0",
+    lockChallenge: "0",
+    listed: "0",
+  }
   await mockBackend(page, {
     category: "spv-lawyer-terms",
-    properties: { listing_id: "42", cluster: "devnet", lawyer: SPV, candidacy: "CandidacyPDA111" },
+    properties: { listing_id: "42", cluster: "devnet", lawyer: SPV, candidacy: DEVELOPER },
     listing: listing({ spvElectionRound: 1, soldShareAmount: 100 }),
-    shareHolding: {
-      amount: "100",
-      lockLawyerElection: "100",
-      lockAgentElection: "0",
-      lockProposal: "0",
-      lockChallenge: "0",
-      listed: "0",
-    },
+    shareHolding,
     lawyerCandidacies: [{ round: 1, lawyer: SPV, costs: 1, votePower: 100 }],
     messages: [vote],
   })
+  await mockSuccessfulRpc(page)
   await page.goto("/indexed-bucket/39")
 
   const banner = page.getByRole("region", { name: "Governance vote" })
   await expect(banner.getByText("approved", { exact: true })).toBeVisible()
   await expect(banner.getByRole("button", { name: "Approve terms", exact: true })).toHaveCount(0)
+
+  shareHolding.lockLawyerElection = "0"
+  await page.evaluate((nextAddress) => {
+    const provider = (window as unknown as {
+      phantom: { solana: { publicKey: { toBase58: () => string } } }
+    }).phantom.solana
+    provider.publicKey.toBase58 = () => nextAddress
+  }, SPV)
+  await page.getByRole("button", { name: "Switch", exact: true }).click()
+
+  const approve = banner.getByRole("button", { name: "Approve terms", exact: true })
+  await expect(approve).toBeEnabled()
+  await expect(banner.getByText("approved", { exact: true })).toHaveCount(0)
+  await approve.click()
+  const submit = page.getByRole("button", { name: "Submit vote", exact: true })
+  await expect(submit).toBeEnabled()
+  await submit.click()
+  await expect(page.getByRole("dialog", { name: "Approve terms", exact: true })).toHaveCount(0)
+  await expect(page.locator(".ib-vote-notice")).toHaveCount(0)
+  await expect(page.getByText("tallies refresh in a few seconds", { exact: false })).toHaveCount(0)
 })
 
 async function mockFinalizableSpvElection(page: Page, winner: string | null, finalizationDue = true): Promise<void> {
@@ -1001,7 +1031,9 @@ test("finalizes an ended SPV election once from the banner", async ({ page }) =>
   await expect(finalizing).toBeVisible()
   await expect(finalizing).toBeDisabled()
   releaseBlockhash()
-  await expect(page.locator(".ib-vote-notice")).toContainText("SPV election finalized (11111111…)")
+  await expect(page.getByRole("region", { name: "Governance vote" })).toHaveCount(0)
+  await expect(page.locator(".ib-vote-notice")).toHaveCount(0)
+  await expect(page.getByText("SPV election finalized", { exact: false })).toHaveCount(0)
   const instructions = await page.evaluate(() => (
     (window as unknown as { capturedInstructions: CapturedInstruction[] }).capturedInstructions
   ))
@@ -1017,7 +1049,9 @@ test("finalizes an ended SPV election with no winner on a tie", async ({ page })
   await page.goto("/indexed-bucket/39")
 
   await page.getByRole("button", { name: "Finalize SPV election", exact: true }).click()
-  await expect(page.locator(".ib-vote-notice")).toContainText("SPV election finalized")
+  await expect(page.getByRole("region", { name: "Governance vote" })).toHaveCount(0)
+  await expect(page.locator(".ib-vote-notice")).toHaveCount(0)
+  await expect(page.getByText("SPV election finalized", { exact: false })).toHaveCount(0)
   const instructions = await page.evaluate(() => (
     (window as unknown as { capturedInstructions: CapturedInstruction[] }).capturedInstructions
   ))
@@ -1354,6 +1388,56 @@ test("renders a review round opened without a deadline as a card instead of raw 
   await expect(card).not.toContainText("left")
   await expect(card).not.toContainText("expiresAt")
   await expect(page.locator(".chat-text")).toHaveCount(0)
+})
+
+test("shows the admin-authored review prompt after both PDFs without a System sender", async ({ page }) => {
+  const fixture = await encryptedDocumentFixture()
+  const admin = new PublicKey(new Uint8Array(32).fill(9)).toBase58()
+  const promptText = "The SPV Lawyer and Developer Lawyer must now review each other's documents and finalize the terms. Please feel free to discuss any questions here."
+  const publicKey = await importJWK({
+    kty: "OKP",
+    crv: "X25519",
+    x: fixture.secretJwk.x,
+  }, "ECDH-ES+A256KW")
+  const promptPayload = await new CompactEncrypt(new TextEncoder().encode(promptText))
+    .setProtectedHeader({
+      alg: "ECDH-ES+A256KW",
+      enc: "A256GCM",
+      typ: "didcomm/encrypted-message-v1",
+      kid: fixture.secretJwk.kid,
+      cty: "text/plain;charset=utf-8",
+    })
+    .encrypt(publicKey)
+  const prompt = message({
+    id: "initial-review-prompt",
+    messageId: "4",
+    contributor: admin,
+    tag: "lawyer/document-review",
+    description: "Review both lawyers' terms documents",
+    contentType: "text/plain;charset=utf-8",
+    ipfsContent: promptPayload,
+    createdAt: "2026-10-01T12:00:04.000Z",
+  })
+  await installWallet(page, OTHER)
+  await page.addInitScript((jwk) => {
+    localStorage.setItem("asset-didcomm.x25519-secret-jwk", JSON.stringify(jwk))
+  }, fixture.secretJwk)
+  await mockBackend(page, {
+    admins: [{ subjectId: admin }],
+    messages: [
+      ...fixture.messages.map((entry) => ({ ...entry, contributor: admin })),
+      prompt,
+    ],
+  })
+  await page.goto("/indexed-bucket/39")
+
+  const rows = page.locator(".chat-row")
+  await expect(rows).toHaveCount(3)
+  await expect(rows.nth(0).locator(".chat-attachment-file-name")).toHaveText("spv.pdf")
+  await expect(rows.nth(1).locator(".chat-attachment-file-name")).toHaveText("developer.pdf")
+  await expect(rows.nth(2)).toContainText(promptText)
+  await expect(rows.nth(2).locator(".chat-sender")).not.toHaveText("System")
+  await expect(rows.nth(2)).toHaveClass(/chat-row-incoming/)
 })
 
 test("keeps an admin-authored governance announcement on the incoming side", async ({ page }) => {
@@ -1846,11 +1930,12 @@ test("refreshes lawyer state when Terms approval and rejection messages arrive o
       }
     })
   })
+  await showReviewDebugDetails(page)
   const currentListing = listing()
   const { indexerRequests } = await mockBackend(page, { listing: currentListing })
   await page.goto("/indexed-bucket/39")
   await expect.poll(() => subscribed).toBe(true)
-  await expect(page.locator(".review-status-line")).toContainText("0 of 2 approved")
+  await expect(page.locator(".seat-verdict")).toHaveText(["pending", "pending"])
 
   Object.assign(currentListing, {
     spvLawyerDocStatus: "APPROVED",
@@ -1866,7 +1951,7 @@ test("refreshes lawyer state when Terms approval and rejection messages arrive o
     ipfsContent: "Approved documents",
   }))}]`)
   await expect(page.locator(".chat-bubble-terms-approved")).toContainText("Approved documents")
-  await expect(page.locator(".review-status-line")).toContainText("1 of 2 approved")
+  await expect(page.locator(".seat-verdict")).toHaveText(["approved", "pending"])
 
   Object.assign(currentListing, {
     spvLawyerDocStatus: "REJECTED",
@@ -1883,12 +1968,13 @@ test("refreshes lawyer state when Terms approval and rejection messages arrive o
     createdAt: "2026-10-01T12:00:07.000Z",
   }))}]`)
   await expect(page.locator(".chat-bubble-terms-rejected")).toContainText("Rejected documents")
-  await expect(page.locator(".review-status-line")).toContainText("1 rejected")
+  await expect(page.locator(".seat-verdict")).toHaveText(["rejected", "pending"])
   expect(indexerRequests).toHaveLength(3)
 })
 
 test("hides execute deal for a connected Polkadot session", async ({ page }) => {
   await installWallet(page, OTHER, "polkadot")
+  await showReviewDebugDetails(page)
   await mockBackend(page, {
     listing: listing({
       spvLawyerDocStatus: "APPROVED",

@@ -95,18 +95,6 @@
   text-align: center;
 }
 
-/* Banner status lines: a plain notice and the reject-side button tint. Both flows
-   report them under different names — the governance lane calls the notice
-   .ib-vote-notice, the review panel .review-notice — so the names are grouped
-   rather than forked into two rules that can drift apart. */
-.ib-vote-notice,
-.review-notice {
-  margin: 0;
-  color: var(--primary, #3b4f74);
-  font-size: 14px;
-  font-weight: 600;
-}
-
 .ib-vote-reject {
   color: var(--status-error, #c62828);
   border-color: var(--status-error, #c62828);

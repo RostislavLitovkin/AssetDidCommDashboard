@@ -25,8 +25,6 @@ const SHARED_SURFACE_SELECTORS = [
   ".ib-offer-actions",
   ".ib-offer-action",
   ".ib-offer-note",
-  ".ib-vote-notice",
-  ".review-notice",
   ".ib-vote-reject",
   ".ib-sheet-overlay",
   ".ib-sheet-handle",
@@ -210,6 +208,7 @@ function mountPanel(overrides: Record<string, unknown> = {}) {
     documentsHash: HASH,
     submissionAllowed: true,
     walletAddress: metadata.spvLawyer,
+    debug: true,
     ...overrides,
   });
   const emitted: { confirm: unknown[][]; execute: unknown[][]; upload: unknown[][]; retry: unknown[][] } = {
@@ -250,15 +249,21 @@ async function openSheet(root: HostNode, label: "Approve documents" | "Reject do
 }
 
 describe("LawyerReviewPanel", () => {
-  it("renders property, cluster, attempt, status, deadline, and both seat hashes in compact details", () => {
-    const { root } = mountPanel({
+  it("renders review details only while debug mode is enabled", async () => {
+    const { root, update } = mountPanel({
+      debug: false,
       review: review({
         attempt: 2,
         spv: { role: "spv", wallet: "SpvWallet", verdict: "approved", documentsHash: "0xspv-approved" },
         developer: { role: "developer", wallet: "DeveloperWallet", verdict: "rejected", documentsHash: "0xdev-rejected" },
       }),
     });
+    expect(byType(root, "details")).toHaveLength(0);
+    expect(text(root)).not.toContain("Property 42 · devnet");
+
+    await update({ debug: true });
     const content = text(root);
+    expect(byType(root, "details")).toHaveLength(1);
     expect(content).toContain("Property 42 · devnet");
     expect(content).toContain("Attempt 2 of 2");
     expect(content).toContain("Sold out");
@@ -269,27 +274,19 @@ describe("LawyerReviewPanel", () => {
     expect(content).toContain("0xdev-rejected");
   });
 
-  it("shows exact zero, half, and full two-seat tallies in the banner without percentages", () => {
-    const bannerTally = (overrides: Record<string, unknown> = {}) => {
-      const { root } = mountPanel(overrides);
-      const info = findOne(root, (node) => node.props.class === "ib-offer-info");
-      // The percentages travel on the chat card, so the banner must not echo them.
-      expect(text(info)).not.toContain("%");
-      return text(findOne(info, (node) => String(node.props.class).includes("review-status-line")));
-    };
-    expect(bannerTally()).toBe("Sold out · 0 of 2 approved · 0 rejected");
-    expect(bannerTally({
-      review: review({
-        counts: { approved: 1, rejected: 0, pending: 1 },
-        percentages: { approved: 50, rejected: 0, pending: 50 },
-      }),
-    })).toBe("Sold out · 1 of 2 approved · 0 rejected");
-    expect(bannerTally({
-      review: review({
-        counts: { approved: 1, rejected: 1, pending: 0 },
-        percentages: { approved: 50, rejected: 50, pending: 0 },
-      }),
-    })).toBe("Sold out · 1 of 2 approved · 1 rejected");
+  it("shows only the title and time remaining in the banner", () => {
+    const { root } = mountPanel();
+    const info = findOne(root, (node) => node.props.class === "ib-offer-info");
+    expect(elements(info).map((child) => `${child.type} ${child.props.class}`)).toEqual([
+      "p ib-offer-title",
+      "p ib-offer-amount",
+    ]);
+    expect(text(findOne(info, (node) => node.props.class === "ib-offer-title"))).toBe("Lawyer document review");
+    expect(text(info)).toContain("left");
+    expect(text(info)).not.toContain("Sold out");
+    expect(text(info)).not.toContain("approved");
+    expect(text(info)).not.toContain("Property 42");
+    expect(text(info)).not.toContain("devnet");
   });
 
   it("keeps the banner to the reference flow's head-plus-actions anatomy", () => {
@@ -303,22 +300,14 @@ describe("LawyerReviewPanel", () => {
       ["ib-offer-icon"],
       ["ib-offer-info"],
     ]);
-
-    const info = findOne(root, (node) => node.props.class === "ib-offer-info");
-    expect(elements(info).map((child) => `${child.type} ${child.props.class}`)).toEqual([
-      "p ib-offer-title",
-      "p ib-offer-amount review-status-line",
-      "p ib-offer-amount",
-    ]);
-    expect(text(findOne(info, (node) => node.props.class === "ib-offer-title"))).toBe("Lawyer document review");
   });
 
-  it("keeps feedback, notices, links and details below the banner, in the follow-up column", () => {
+  it("keeps feedback, links and debug details below the banner, in the follow-up column", () => {
     const { root } = mountPanel({
+      debug: true,
       eligibleLawyer: true,
       error: "Indexer unavailable",
       actionError: "Wallet rejected the request",
-      notice: "Review refreshed",
       transactionSignatures: ["signature-one"],
     });
     const bar = findOne(root, (node) => node.props.class === "ib-offer-bar");
@@ -328,17 +317,16 @@ describe("LawyerReviewPanel", () => {
     const followUp = findOne(root, (node) => node.props.class === "review-follow-up");
     expect(text(followUp)).toContain("Indexer unavailable");
     expect(text(followUp)).toContain("Wallet rejected the request");
-    expect(text(followUp)).toContain("Review refreshed");
     expect(byType(followUp, "a").some((link) => text(link).includes("signature-one"))).toBe(true);
     expect(byType(followUp, "details")).toHaveLength(1);
     expect(text(findOne(followUp, (node) => node.props.class === "review-details"))).toContain("Property 42 · devnet");
   });
 
-  it("announces loading without rendering review actions or details", () => {
+  it("stays silent while loading without rendering review actions or details", () => {
     const { root } = mountPanel({ review: null, loading: true });
     expect(byType(root, "section")[0]!.props["aria-busy"]).toBe(true);
-    expect(findOne(root, (node) => node.props.role === "status").children.length).toBeGreaterThan(0);
-    expect(text(root)).toContain("Loading lawyer review");
+    expect(findAll(root, (node) => node.props.role === "status")).toHaveLength(0);
+    expect(text(root)).not.toContain("Loading lawyer review");
     expect(byType(root, "dialog")).toHaveLength(0);
     expect(byType(root, "details")).toHaveLength(0);
   });
@@ -366,7 +354,8 @@ describe("LawyerReviewPanel", () => {
     expect(text(status)).toBe("Lawyer review is unavailable.");
 
     await update({ loading: true });
-    expect(text(status)).toBe("Loading lawyer review…");
+    expect(text(root)).not.toContain("Loading lawyer review");
+    expect(findAll(root, (node) => node.props.role === "status")).toHaveLength(0);
     expect(findAll(root, (node) => node.props.role === "alert")).toHaveLength(0);
 
     await update({ review: review() });
@@ -421,11 +410,10 @@ describe("LawyerReviewPanel", () => {
     expect(findOne(root, (node) => node.props.class === "document-hash")).toBeDefined();
   });
 
-  it("exposes action errors assertively and notices politely", () => {
+  it("exposes action errors assertively without transient notices", () => {
     const { root } = mountPanel({ actionError: "Wallet rejected the request", notice: "Review refreshed" });
     expect(text(findOne(root, (node) => node.props.role === "alert"))).toContain("Wallet rejected the request");
-    const status = findOne(root, (node) => node.props.role === "status" && text(node).includes("Review refreshed"));
-    expect(status.props["aria-live"]).toBe("polite");
+    expect(text(root)).not.toContain("Review refreshed");
   });
 
   it("keeps non-lawyers read-only without deriving eligibility from bucket metadata", () => {
@@ -565,6 +553,7 @@ describe("LawyerReviewPanel", () => {
     const { root, update } = mountPanel({ eligibleLawyer: true });
     const dialog = await openSheet(root, "Approve documents");
     await update({ confirming: true });
+    expect(text(dialog)).not.toContain("Confirm the transaction in your wallet");
     let prevented = false;
     (dialog.props.onCancel as (event: { preventDefault: () => void }) => void)({ preventDefault: () => { prevented = true } });
     await nextTick();
@@ -670,9 +659,6 @@ describe("LawyerReviewPanel", () => {
     expect(shared.get(".ib-offer-action")).toContain("white-space: nowrap");
     expect(shared.get(".ib-offer-action")).not.toContain("min-height");
     expect(shared.get(".ib-sheet-actions .btn")).not.toContain("min-height");
-    expect(shared.get(".review-notice")).toBe(shared.get(".ib-vote-notice"));
-    expect(shared.get(".ib-vote-notice")).toContain("font-size: 14px");
-    expect(shared.get(".ib-vote-notice")).not.toContain("background");
     expect(shared.get(".ib-sheet-error")).toContain("font-size: 13px");
     expect(shared.get(".ib-sheet-error")).not.toContain("background");
 
@@ -682,7 +668,6 @@ describe("LawyerReviewPanel", () => {
     );
 
     const panelSource = readFileSync(panelPath, "utf8");
-    expect(panelSource).toContain('class="review-notice"');
     expect(panelSource).toContain('class="ib-sheet-error"');
     // The review details grid stacks on the banner's breakpoint, not its own.
     expect(panelSource).toMatch(/@media \(max-width: 840px\) \{[\s\S]*?\.review-summary,[\s\S]*?\.seat-list \{/);

@@ -205,7 +205,6 @@ const {
   executing: lawyerExecuting,
   error: lawyerError,
   documentError: lawyerDocumentError,
-  statusMessage: lawyerStatusMessage,
   lawyerRole,
   canSubmit: lawyerCanSubmit,
   canExecute: lawyerCanExecute,
@@ -251,7 +250,12 @@ async function refreshLawyerReview(): Promise<void> {
 }
 
 watch(() => session.accountAddress, (address, previous) => {
-  if (address !== previous && isLawyerReviewBucket.value && !loading.value) void refreshLawyerReview()
+  if (address === previous) return
+  indexerHolding.value = null
+  indexerHoldingLoaded.value = false
+  if (loading.value) return
+  if (isLawyerReviewBucket.value) void refreshLawyerReview()
+  if (actionableVote.value) void refreshIndexerVotingState()
 })
 
 // realXhub marketplace state — market + status messages are fetched by tag on
@@ -852,7 +856,6 @@ const voteSheetOpen = ref(false)
 const voteSheetSide = ref<"yes" | "no">("yes")
 const voteSubmitting = ref(false)
 const voteError = ref("")
-const voteNotice = ref("")
 
 const voteSheetKind = computed<VotingKind>(() => actionableVote.value?.payload.kind ?? "terms")
 
@@ -948,10 +951,8 @@ async function submitVote(): Promise<void> {
       throw new Error("Letting-agent elections are cast in the realXmarket app.")
     }
 
-    const { signature } = await castVoteOnChain(tx, voter, { bridge })
+    await castVoteOnChain(tx, voter, { bridge })
     voteSheetOpen.value = false
-    voteNotice.value = `Vote submitted (${signature.slice(0, 8)}…) — tallies refresh in a few seconds.`
-    window.setTimeout(() => { voteNotice.value = "" }, 15000)
     // The indexer needs a beat to mirror the vote; the webhook announcement follows.
     window.setTimeout(() => void refreshIndexerVotingState(), 4000)
   } catch (e) {
@@ -975,7 +976,6 @@ async function finalizeSpvElection(): Promise<void> {
 
   voteSubmitting.value = true
   voteError.value = ""
-  voteNotice.value = ""
   try {
     const tx = buildFinalizeSpvElectionTransaction({
       listingId: active.payload.listingId,
@@ -984,12 +984,10 @@ async function finalizeSpvElection(): Promise<void> {
       candidates: finalization.candidates,
       cranker: voter,
     })
-    const { signature } = await castVoteOnChain(tx, voter, { bridge })
+    await castVoteOnChain(tx, voter, { bridge })
     if (indexerSpvElection.value) {
       indexerSpvElection.value = { ...indexerSpvElection.value, finalization: undefined }
     }
-    voteNotice.value = `SPV election finalized (${signature.slice(0, 8)}…).`
-    window.setTimeout(() => { voteNotice.value = "" }, 15000)
     window.setTimeout(() => void refreshIndexerVotingState(), 4000)
   } catch (e) {
     voteError.value = e instanceof Error ? e.message : "SPV election finalization failed"
@@ -2775,7 +2773,6 @@ onMounted(async () => {
     <div class="ib-container">
       <p v-if="error" class="ib-error">{{ error }}</p>
       <p v-if="voteError && !voteSheetOpen" class="ib-error" role="alert">{{ voteError }}</p>
-      <p v-if="voteNotice" class="ib-vote-notice">{{ voteNotice }}</p>
 
       <!-- Admin-only: some viewers are missing from the latest key-sharing message -->
       <div v-if="!loading && connectedAdmin && viewersMissingKeyCount" class="ib-key-status ib-key-warning"
@@ -2810,7 +2807,6 @@ onMounted(async () => {
         :loading="lawyerLoading"
         :error="lawyerPanelError"
         :action-error="lawyerPanelActionError"
-        :notice="lawyerStatusMessage"
         :transaction-signatures="lawyerTransactionSignatures"
         :eligible-lawyer="Boolean(lawyerRole)"
         :missing-documents="Boolean(lawyerDocumentError) || (!lawyerDocumentSetHash && !lawyerLoading)"
@@ -2820,6 +2816,7 @@ onMounted(async () => {
         :wallet-address="session.accountAddress"
         :wallet-connected="Boolean(session.accountAddress && session.walletKind === 'solana')"
         :execute-allowed="lawyerCanExecute || lawyerExecuting"
+        :debug="settings.showMessageDebug"
         :executing="lawyerExecuting"
         @confirm="submitLawyerVerdict"
         @execute="executeLawyerDeal"

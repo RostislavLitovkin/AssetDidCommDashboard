@@ -282,7 +282,7 @@ export function useLawyerReview(options: UseLawyerReviewOptions): UseLawyerRevie
         if (generation !== refreshGeneration) return;
         documents.value = selected;
         documentSetHash.value = hash;
-        statusMessage.value = "Lawyer review loaded.";
+        statusMessage.value = "";
       } catch (cause) {
         if (generation !== refreshGeneration) return;
         documentSetHash.value = null;

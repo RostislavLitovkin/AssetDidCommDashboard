@@ -38,6 +38,11 @@ const removingManagerAddress = ref("")
 
 const namespaceDisplayName = computed(() => namespaceName.value || `Namespace id: ${namespaceId.value}`)
 const isWalletConnected = computed(() => session.walletStatus === "connected" && Boolean(session.accountAddress))
+const canRemoveManager = computed(() => {
+  const accountAddress = session.accountAddress
+  if (!isWalletConnected.value || !accountAddress) return false
+  return managers.value.some((manager) => addressesEqual(manager, accountAddress))
+})
 
 function resolveDisplayName(bucket: ApiBucketWithMembers): string {
   const name = typeof bucket.name === "string" ? bucket.name.trim() : ""
@@ -181,7 +186,7 @@ onMounted(async () => {
             :style="{ padding: '4px 8px', borderRadius: '999px', fontSize: '11px', color: 'white', fontWeight: '600', textTransform: 'capitalize', background: 'var(--color-primary)', flexShrink: 0, whiteSpace: 'nowrap' }">
             Manager
           </span>
-          <button class="btn member-remove-btn" type="button" title="Remove"
+          <button v-if="canRemoveManager" class="btn member-remove-btn" type="button" title="Remove"
             :disabled="Boolean(removingManagerAddress) || !session.accountAddress"
             @click="removeManager(address)"
             :style="{ background: 'var(--color-white)', flexShrink: 0, padding: '4px 6px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '3px', whiteSpace: 'nowrap', minWidth: 'auto', maxWidth: '120px', overflow: 'hidden' }">

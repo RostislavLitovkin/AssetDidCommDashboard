@@ -17,7 +17,6 @@ const props = withDefaults(defineProps<{
   loading?: boolean
   error?: string
   actionError?: string
-  notice?: string
   transactionSignatures?: string[]
   eligibleLawyer?: boolean
   missingDocuments?: boolean
@@ -28,12 +27,12 @@ const props = withDefaults(defineProps<{
   walletConnected?: boolean
   executeAllowed?: boolean
   executing?: boolean
+  debug?: boolean
 }>(), {
   documentsHash: "",
   loading: false,
   error: "",
   actionError: "",
-  notice: "",
   transactionSignatures: () => [],
   eligibleLawyer: false,
   missingDocuments: false,
@@ -277,20 +276,16 @@ watch(() => [props.confirming, props.executing], (current, previous) => {
 
 <template>
   <section class="lawyer-review-shell" :aria-busy="props.loading">
-    <!-- Anatomy and density match the SPV lawyer terms banner: one head line, one
-         tally line, one countdown line, and the actions. Like the reference banner,
-         it only exists once there is something to report — before the first review
-         state arrives, the follow-up column below carries the status instead. -->
+    <!-- Anatomy and density match the SPV lawyer terms banner: one title line,
+         one countdown line, and the actions. Like the reference banner, it only
+         exists once there is something to report — before the first review state
+         arrives, the follow-up column below carries the status instead. -->
     <div v-if="review" class="ib-offer-bar" role="region" aria-label="Lawyer document review">
       <div class="ib-offer-inner">
         <div class="ib-offer-head">
           <Vote :size="18" class="ib-offer-icon" aria-hidden="true" />
           <div class="ib-offer-info">
             <p class="ib-offer-title">Lawyer document review</p>
-            <p class="ib-offer-amount review-status-line">
-              {{ formatStatus(review.status) }} ·
-              {{ review.counts.approved }} of 2 approved · {{ review.counts.rejected }} rejected
-            </p>
             <p v-if="deadlineExpiry" class="ib-offer-amount">{{ timeLeftLabel }}</p>
           </div>
         </div>
@@ -318,8 +313,8 @@ watch(() => [props.confirming, props.executing], (current, previous) => {
     <!-- Secondary feedback lives below the banner, in the column the page's
          .ib-container uses, so it never reshapes the banner above it. -->
     <div class="review-follow-up">
-      <p v-if="!review && !error" class="review-guidance" role="status" aria-live="polite">
-        {{ loading ? "Loading lawyer review…" : "Lawyer review is unavailable." }}
+      <p v-if="!review && !error && !loading" class="review-guidance" role="status" aria-live="polite">
+        Lawyer review is unavailable.
       </p>
       <p v-if="review?.staleAssignment" class="review-error" role="alert">
         Lawyer assignments changed on-chain. This review bucket is stale; transactions are disabled.
@@ -347,7 +342,6 @@ watch(() => [props.confirming, props.executing], (current, previous) => {
         {{ executionMessage }}
       </p>
 
-      <p v-if="notice" class="review-notice" role="status" aria-live="polite">{{ notice }}</p>
       <p v-if="actionError && !sheetAction" class="review-error" role="alert">{{ actionError }}</p>
       <ul v-if="transactionLinks.length" class="transaction-links" aria-label="Submitted transactions">
         <li v-for="link in transactionLinks" :key="link.signature">
@@ -359,7 +353,7 @@ watch(() => [props.confirming, props.executing], (current, previous) => {
            line into, so it keeps its context here instead. -->
       <p v-if="!review" class="review-property">Property {{ metadata.propertyId }} · {{ metadata.cluster }}</p>
 
-      <details v-if="review" class="review-details">
+      <details v-if="review && props.debug" class="review-details">
         <summary>Review details</summary>
         <div class="review-details-body">
           <p class="review-property">Property {{ metadata.propertyId }} · {{ metadata.cluster }}</p>
@@ -408,8 +402,8 @@ watch(() => [props.confirming, props.executing], (current, previous) => {
       </p>
       <p v-if="deadlineExpired" class="ib-sheet-error" role="alert">{{ expiryMessage }}</p>
       <p v-if="actionError" class="ib-sheet-error" role="alert">{{ actionError }}</p>
-      <p v-if="sheetGuidance || sheetBusy" class="sheet-guidance" role="status" aria-live="polite">
-        {{ sheetGuidance || "Confirm the transaction in your wallet. This sheet stays open until submission finishes." }}
+      <p v-if="sheetGuidance" class="sheet-guidance" role="status" aria-live="polite">
+        {{ sheetGuidance }}
       </p>
       <div class="ib-sheet-actions">
         <button class="btn" type="button" autofocus :disabled="sheetBusy" @click="closeSheet">Cancel</button>
@@ -427,16 +421,9 @@ watch(() => [props.confirming, props.executing], (current, previous) => {
   color: var(--text-primary);
 }
 
-/* The banner (.ib-offer-*), the sheet (.ib-offer-sheet and its .ib-sheet-* parts)
-   and the plain success notice (shared with .ib-vote-notice) all live in
-   ~/assets/styles/ib-surfaces.css — the same rule set the SPV lawyer terms flow
-   wears. Only what the review flow's own content needs is left here. */
-
-/* The tally stays one line at the chat column's narrowest width, so it may break
-   inside a word rather than push the banner wider. */
-.review-status-line {
-  overflow-wrap: anywhere;
-}
+/* The banner (.ib-offer-*) and sheet (.ib-offer-sheet and its .ib-sheet-* parts)
+   live in ~/assets/styles/ib-surfaces.css — the same rule set the SPV lawyer
+   terms flow wears. Only what the review flow's own content needs is left here. */
 
 /* The secondary column below the banner, laid out on the same 1000px/48px grid as
    the page's .ib-container — a child component cannot wear that scoped class. */
