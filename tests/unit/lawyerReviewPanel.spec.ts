@@ -211,16 +211,14 @@ function mountPanel(overrides: Record<string, unknown> = {}) {
     debug: true,
     ...overrides,
   });
-  const emitted: { confirm: unknown[][]; execute: unknown[][]; upload: unknown[][]; retry: unknown[][] } = {
+  const emitted: { confirm: unknown[][]; execute: unknown[][]; retry: unknown[][] } = {
     confirm: [],
     execute: [],
-    upload: [],
     retry: [],
   };
   const listeners = {
     onConfirm: (approve: boolean) => emitted.confirm.push([approve]),
     onExecute: () => emitted.execute.push([]),
-    onUpload: () => emitted.upload.push([]),
     onRetry: () => emitted.retry.push([]),
   };
   const root = hostNode("root");
@@ -380,13 +378,12 @@ describe("LawyerReviewPanel", () => {
     expect(text(root)).not.toContain("The approved seats reference different document hashes");
   });
 
-  it("disables confirmation for missing documents and emits the optional upload action", () => {
-    const { root, emitted } = mountPanel({ eligibleLawyer: true, missingDocuments: true, canUpload: true });
-    expect(text(root)).toContain("One or both lawyer documents are missing");
-    expect(text(root)).toContain("hash is unavailable");
+  it("disables confirmation for missing documents without warning text or a replacement upload action", () => {
+    const { root } = mountPanel({ eligibleLawyer: true, missingDocuments: true });
+    expect(text(root)).not.toContain("One or both lawyer documents are missing");
+    expect(text(root)).not.toContain("hash is unavailable");
     expect(findOne(root, (node) => node.type === "button" && text(node) === "Approve documents").props.disabled).toBe(true);
-    click(root, "Upload replacement document");
-    expect(emitted.upload).toEqual([[]]);
+    expect(byType(root, "button").some((button) => text(button) === "Upload replacement document")).toBe(false);
   });
 
   it("keeps the full document-set hash available in details and on the approval sheet", async () => {

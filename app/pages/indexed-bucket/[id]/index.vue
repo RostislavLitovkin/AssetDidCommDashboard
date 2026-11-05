@@ -1867,9 +1867,11 @@ function base64ToBytes(b64: string): Uint8Array {
   return bytes
 }
 
+class UndecryptedLawyerDocumentError extends Error {}
+
 function requireDecryptedLawyerDocument(bytes: Uint8Array): Uint8Array {
   const content = new TextDecoder().decode(bytes).trim()
-  if (looksLikeCompactJwe(content)) throw new Error("Lawyer document attachment could not be decrypted.")
+  if (looksLikeCompactJwe(content)) throw new UndecryptedLawyerDocumentError()
   return bytes
 }
 
@@ -1881,11 +1883,11 @@ async function loadLawyerDocument(source: LawyerDocumentSource): Promise<Uint8Ar
     const encoded = inline.startsWith("data:") && inline.includes(",")
       ? inline.slice(inline.indexOf(",") + 1)
       : inline
-    if (looksLikeCompactJwe(encoded)) throw new Error("Lawyer document attachment could not be decrypted.")
+    if (looksLikeCompactJwe(encoded)) throw new UndecryptedLawyerDocumentError()
     try {
       return requireDecryptedLawyerDocument(base64ToBytes(encoded))
     } catch (cause) {
-      if (cause instanceof Error && cause.message === "Lawyer document attachment could not be decrypted.") throw cause
+      if (cause instanceof UndecryptedLawyerDocumentError) throw cause
       throw new Error("Inline lawyer document is not valid base64.")
     }
   }
@@ -2810,7 +2812,6 @@ onMounted(async () => {
         :transaction-signatures="lawyerTransactionSignatures"
         :eligible-lawyer="Boolean(lawyerRole)"
         :missing-documents="Boolean(lawyerDocumentError) || (!lawyerDocumentSetHash && !lawyerLoading)"
-        :can-upload="Boolean(lawyerRole && connectedAdminOrContributor && activeSecretJwk && keyAccessState === 'ok')"
         :confirming="lawyerSubmitting"
         :submission-allowed="lawyerCanSubmit"
         :wallet-address="session.accountAddress"
@@ -2820,7 +2821,6 @@ onMounted(async () => {
         :executing="lawyerExecuting"
         @confirm="submitLawyerVerdict"
         @execute="executeLawyerDeal"
-        @upload="openFilePicker"
         @retry="refreshLawyerReview"
       />
     </template>

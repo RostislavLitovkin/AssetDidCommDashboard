@@ -35,12 +35,6 @@
   pointer-events: none;
 }
 
-#rx-splash canvas {
-  position: absolute;
-  inset: 0;
-  display: block;
-}
-
 .rx-splash__center {
   position: relative;
   z-index: 1;
@@ -56,8 +50,8 @@
   display: block;
   width: clamp(220px, 46vw, 460px);
   height: auto;
-  /* Matches realXmessenger.svg viewBox (1080 x 287) so the element has a stable
-     size for the particle keep-out box before the image decodes. */
+  /* Matches realXmessenger.svg viewBox (1080 x 287) to keep the layout stable
+     before the image decodes. */
   aspect-ratio: 1080 / 287;
 }
 

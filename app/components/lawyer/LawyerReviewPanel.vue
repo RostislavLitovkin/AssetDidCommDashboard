@@ -20,7 +20,6 @@ const props = withDefaults(defineProps<{
   transactionSignatures?: string[]
   eligibleLawyer?: boolean
   missingDocuments?: boolean
-  canUpload?: boolean
   confirming?: boolean
   submissionAllowed?: boolean
   walletAddress?: string
@@ -36,7 +35,6 @@ const props = withDefaults(defineProps<{
   transactionSignatures: () => [],
   eligibleLawyer: false,
   missingDocuments: false,
-  canUpload: false,
   confirming: false,
   submissionAllowed: false,
   walletAddress: "",
@@ -48,7 +46,6 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   confirm: [approve: boolean]
   execute: []
-  upload: []
   retry: []
 }>()
 
@@ -324,12 +321,6 @@ watch(() => [props.confirming, props.executing], (current, previous) => {
       </p>
       <p v-if="deadlineExpired && !sheetAction" class="review-error" role="alert">{{ expiryMessage }}</p>
 
-      <div v-if="!hasDocumentSet && review" class="review-error" role="alert">
-        <span>One or both lawyer documents are missing. The current document-set hash is unavailable.</span>
-        <button v-if="canUpload" class="btn" type="button" @click="emit('upload')">
-          Upload replacement document
-        </button>
-      </div>
       <div v-if="error" class="review-error" role="alert">
         <span>{{ error }}</span>
         <button class="btn" type="button" @click="emit('retry')">Retry review</button>

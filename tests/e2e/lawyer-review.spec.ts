@@ -367,7 +367,7 @@ test("renders legacy review buckets as explicit devnet with read-only missing-do
   await expect(page.locator(".ib-offer-title")).toHaveText("Lawyer document review")
   await expect(page.locator(".review-property")).toHaveText("Property 42 · devnet")
   await expect(page.getByText("Read-only review.", { exact: false })).toBeVisible()
-  await expect(page.getByText("One or both lawyer documents are missing", { exact: false })).toBeVisible()
+  await expect(page.getByText("One or both lawyer documents are missing", { exact: false })).toHaveCount(0)
   await expect(page.getByRole("button", { name: "Submit document verdict" })).toHaveCount(0)
   expect(indexerRequests).toHaveLength(1)
 })
@@ -449,8 +449,9 @@ test("keeps review guidance and errors below the banner without transient notice
   await expect(banner.locator(".ib-offer-note, .review-error, .review-notice")).toHaveCount(0)
 
   const followUp = page.locator(".review-follow-up")
-  const missing = followUp.locator(".review-error").filter({ hasText: "One or both lawyer documents are missing" })
+  const missing = followUp.locator(".review-error").filter({ hasText: "Both current lawyer PDF documents are required." })
   await expect(missing).toBeVisible()
+  await expect(followUp.getByText("One or both lawyer documents are missing", { exact: false })).toHaveCount(0)
   await expect(missing).toHaveCSS("background-color", "rgba(0, 0, 0, 0)")
   await expect(followUp.locator(".review-guidance")).toContainText("Read-only review.")
   await expect(followUp.locator(".review-notice")).toHaveCount(0)
@@ -1075,7 +1076,7 @@ test("surfaces SPV election finalization errors without a success notice", async
   await expect(page.locator(".ib-vote-notice")).toHaveCount(0)
 })
 
-test("rejects large encrypted public documents instead of hashing ciphertext", async ({ page }) => {
+test("rejects large encrypted public documents without hashing ciphertext or showing decryption error text", async ({ page }) => {
   const largePdf = new Uint8Array(4096).fill(65)
   largePdf.set(SPV_PDF)
   const fixture = await encryptedDocumentFixture(largePdf, largePdf)
@@ -1093,7 +1094,8 @@ test("rejects large encrypted public documents instead of hashing ciphertext", a
   })
   await page.goto("/indexed-bucket/39")
 
-  await expect(page.getByRole("alert").filter({ hasText: "Lawyer document attachment could not be decrypted" })).toBeVisible()
+  await expect(page.locator(".lawyer-review-shell")).toHaveAttribute("aria-busy", "false")
+  await expect(page.getByRole("alert").filter({ hasText: "Lawyer document attachment could not be decrypted" })).toHaveCount(0)
   await expect(page.locator(".document-hash code")).toHaveCount(0)
 })
 
@@ -1252,15 +1254,14 @@ test("lets the other pending lawyer submit after a wallet switch without reloadi
   await expect(approve).toBeDisabled()
 })
 
-test("opens the existing attachment composer for an eligible lawyer replacement upload", async ({ page }) => {
+test("does not offer a replacement upload to an eligible lawyer", async ({ page }) => {
   await installWallet(page, SPV)
   const keyMessage = await installPlaintextKey(page)
   await mockBackend(page, { messages: [keyMessage] })
   await page.goto("/indexed-bucket/39")
 
-  const chooser = page.waitForEvent("filechooser")
-  await page.getByRole("button", { name: "Upload replacement document" }).click()
-  await expect(await chooser).toBeDefined()
+  await expect(page.locator(".lawyer-review-shell")).toHaveAttribute("aria-busy", "false")
+  await expect(page.getByRole("button", { name: "Upload replacement document" })).toHaveCount(0)
 })
 
 test("wires execute deal to the composable and surfaces preparation errors without a chat vote", async ({ page }) => {
