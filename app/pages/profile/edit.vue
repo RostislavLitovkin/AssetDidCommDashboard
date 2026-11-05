@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, Camera, Lock, UserRound, WandSparkles } from "lucide-vue-next"
+import { Camera, Lock, UserRound, WandSparkles } from "lucide-vue-next"
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useRouter } from "vue-router"
 import { useProfileStatus } from "../../composables/useProfileStatus"
@@ -208,12 +208,6 @@ onBeforeUnmount(() => {
   <main class="profile-edit-page">
     <header class="profile-edit-hero">
       <img class="profile-edit-cover" src="@/assets/Images/xcavatelandscape.png" alt="" />
-      <nav class="profile-edit-navigation" aria-label="Profile navigation">
-        <NuxtLink class="profile-back-action" to="/profile" aria-label="Back to profile">
-          <ArrowLeft :size="24" aria-hidden="true" />
-        </NuxtLink>
-        <h1>{{ profileExists ? "Edit profile" : "Create profile" }}</h1>
-      </nav>
 
       <div v-if="hasConnectedWallet && !loading" class="profile-avatar-container">
         <img class="profile-edit-avatar" :src="displayedProfilePicture" alt="Profile picture" />
@@ -358,46 +352,14 @@ onBeforeUnmount(() => {
 }
 .profile-edit-hero {
   position: relative;
-  height: 200px;
+  padding-bottom: 40px;
 }
 .profile-edit-cover {
   display: block;
   width: 100%;
-  height: 160px;
+  aspect-ratio: 3 / 1;
   object-fit: cover;
   background: #aaaaaa;
-}
-.profile-edit-navigation {
-  position: absolute;
-  inset: 0 0 auto;
-  height: 45px;
-  display: flex;
-  align-items: center;
-  background: rgba(59, 79, 116, 0.65);
-  color: var(--color-white);
-}
-.profile-edit-navigation h1 {
-  position: absolute;
-  left: 50%;
-  margin: 0;
-  transform: translateX(-50%);
-  font-size: 16px;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-.profile-back-action {
-  z-index: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 45px;
-  height: 45px;
-  color: var(--color-white);
-}
-.profile-back-action:hover,
-.profile-back-action:focus-visible {
-  color: var(--color-white);
-  background: rgba(255, 255, 255, 0.12);
 }
 .profile-avatar-container {
   position: absolute;

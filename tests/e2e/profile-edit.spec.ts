@@ -47,15 +47,14 @@ test("renders the mobile profile editor with a local avatar preview", async ({ p
   await page.goto("/profile/edit")
 
   const cover = page.locator(".profile-edit-cover")
-  const title = page.getByRole("heading", { name: "Edit profile" })
   await expect(cover).toBeVisible()
-  await expect(title).toBeVisible()
+  await expect(page.getByRole("heading", { name: /edit profile|create profile/i })).toHaveCount(0)
 
+  // The cover mirrors the /profile page banner: full viewport width at a 3:1 ratio.
   const coverBox = await cover.boundingBox()
-  const titleBox = await title.boundingBox()
   expect(coverBox).not.toBeNull()
-  expect(titleBox).not.toBeNull()
-  expect(Math.abs((titleBox!.x + titleBox!.width / 2) - (coverBox!.x + coverBox!.width / 2))).toBeLessThanOrEqual(2)
+  expect(coverBox!.width).toBeGreaterThanOrEqual(389)
+  expect(Math.abs(coverBox!.width / 3 - coverBox!.height)).toBeLessThanOrEqual(2)
 
   await expect(page.getByLabel("Nickname", { exact: true })).toHaveValue("Mobile person")
   await expect(page.getByLabel("Bio", { exact: true })).toHaveValue("A biography loaded from the existing profile.")
